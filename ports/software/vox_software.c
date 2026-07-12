@@ -61,7 +61,7 @@ static vox_u32 vox_lava_glow(const vox_world *world, vox_u32 center_x,
             }
         }
     }
-    return glow;
+    return glow > 128U ? 128U : glow;
 }
 
 static const vox_cell *vox_surface_cell(const vox_world *world, vox_u32 x,

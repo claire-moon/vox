@@ -20,10 +20,12 @@ under the GNU General Public License version 3 or later. See `LICENSE` and
 The first implementation slice is a strict C89 headless kernel with:
 
 - fixed-width integer state and deterministic stepping;
-- a shallow voxel slab with activity/sleep flags;
+- a bounded `128 x 80 x 4` shallow slab split into `16 x 16 x 4` chunks;
+- activity/sleep flags, dirty chunk revisions, and incremental chunk signatures;
 - the 14-material catalog with phase and activity flags;
 - deterministic cellular motion for sand, liquids, and gases;
-- canonical state hashing and a repeatable scenario test.
+- deterministic Coal Ridge, Deepworks, and Furnace Yard terrain generation;
+- canonical state hashing and repeatable kernel and DIGS scenarios.
 
 Run it with:
 
@@ -40,8 +42,8 @@ the Rust workspace tests, and prints the VOX and DIGS headless proofs.
 The renderer, Rust host, physics layer, Foundry Lab, and DIGS vertical slice
 are added behind the same versioned C ABI.
 
-The current game slice also exposes `vox_game_v1`-style Classic FFA timing,
-bot-count validation, kill attribution, deterministic lava timing, and a
+The current game slice also exposes Classic FFA timing, bot-count validation,
+kill attribution, deterministic lava timing, map-style/seed generation, and a
 headless DIGS scenario. It is not yet the graphical demo.
 
 The portable software renderer now writes a real shallow-voxel PPM frame:

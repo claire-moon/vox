@@ -10,7 +10,7 @@ static vox_u8 pixels_b[TEST_WIDTH * TEST_HEIGHT * VOX_SOFTWARE_RGB_BYTES];
 
 static int render_scene(vox_u8 *pixels, vox_u32 *hash_out)
 {
-    vox_world world;
+    static vox_world world;
     vox_software_target target;
     vox_u32 x;
     vox_world_init(&world);

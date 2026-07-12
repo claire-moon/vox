@@ -6,8 +6,17 @@ headless loop. It is not the final world size or material catalogue.
 
 The production profile will use a `2048 x 1024 x 4` shallow slab, chunked
 activity queues, fixed-point body/particle pools, and a renderer-neutral C
-ABI. The small `32 x 24 x 4` world in this slice keeps the first build easy to
-run on every compiler while the interfaces stabilize.
+ABI. The current bounded development profile is `128 x 80 x 4`, split into
+forty `16 x 16 x 4` chunks. It is deliberately small enough for strict C89
+tests while exercising map-sized storage, cross-chunk motion, sleeping, and
+dirty-region rendering contracts.
+
+Cells remain in one canonical, stable `z/y/x` array. Parallel chunk metadata
+tracks occupied and awake cells, an active bit, a noncanonical dirty/revision
+pair for render uploads, and an incremental cell signature. Simulation skips
+cold chunks. Canonical hashes include cell signatures and scheduler metadata,
+but deliberately exclude dirty flags and revisions: clearing a render dirty
+bit must not change the authoritative replay state.
 
 The material IDs are stable across profiles: air, bedrock, stone, soil, coal,
 biomass, sand, water, lava, metal, flesh, blood, smoke, and firedamp. A cell
@@ -19,6 +28,13 @@ blood fall one cell per tick; smoke, firedamp, and gaseous water rise one cell
 per tick. Diagonal fallback is selected from the match tick and cell position,
 not a mutable random stream. A moved voxel remains awake for the next tick;
 settled voxels sleep.
+
+DIGS creates its initial world with integer-only coordinate hashes. Coal
+Ridge, Deepworks, and Furnace Yard are deterministic map styles selected by a
+visible seed. The generator initially emits static terrain only, then sleeps
+the world without clearing dirty revisions; dynamic water, lava, fire, and
+collapse enter through subsequent simulation events rather than a hidden
+initial settling pass.
 
 ## Determinism rule
 

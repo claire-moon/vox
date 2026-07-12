@@ -60,7 +60,7 @@ if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 add_executable(vox_render_demo tools/vox_render_demo.c)
-target_link_libraries(vox_render_demo PRIVATE vox_software)
+target_link_libraries(vox_render_demo PRIVATE digs_game vox_software)
 target_include_directories(vox_render_demo PRIVATE engine/include)
 if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vox_render_demo PRIVATE -Wall -Wextra -Wpedantic -Werror)

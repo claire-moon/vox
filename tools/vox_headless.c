@@ -4,7 +4,7 @@
 
 int main(void)
 {
-    vox_world world;
+    static vox_world world;
     vox_step_command command;
     vox_u32 i;
     vox_world_init(&world);

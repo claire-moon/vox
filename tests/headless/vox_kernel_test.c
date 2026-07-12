@@ -2,9 +2,114 @@
 #include <stdio.h>
 #include "vox/vox_kernel.h"
 
+#define TEST_AMBIENT_Q16 (20L << 16)
+
+static vox_u32 test_hash_mix(vox_u32 hash, vox_u32 value)
+{
+    hash ^= value;
+    hash *= 16777619U;
+    return hash;
+}
+
+static vox_u32 test_cell_signature(vox_u32 index, const vox_cell *cell)
+{
+    vox_u32 hash;
+    if (cell->material == VOX_MAT_AIR && cell->flags == 0U &&
+        cell->temperature_q16 == TEST_AMBIENT_Q16 && cell->damage_q16 == 0L) {
+        return 0U;
+    }
+    hash = 2166136261U;
+    hash = test_hash_mix(hash, index);
+    hash = test_hash_mix(hash, (vox_u32)cell->material);
+    hash = test_hash_mix(hash, (vox_u32)cell->flags);
+    hash = test_hash_mix(hash, (vox_u32)cell->temperature_q16);
+    hash = test_hash_mix(hash, (vox_u32)cell->damage_q16);
+    return hash;
+}
+
+static int test_validate_world(const vox_world *world)
+{
+    vox_u32 occupied[VOX_WORLD_CHUNK_COUNT];
+    vox_u32 awake[VOX_WORLD_CHUNK_COUNT];
+    vox_u32 cell_hash[VOX_WORLD_CHUNK_COUNT];
+    vox_u32 total_occupied = 0U;
+    vox_u32 total_awake = 0U;
+    vox_u32 hash = 2166136261U;
+    vox_u32 x;
+    vox_u32 y;
+    vox_u32 z;
+    vox_u32 i;
+    if (world == 0) {
+        return 1;
+    }
+    for (i = 0U; i < VOX_WORLD_CHUNK_COUNT; ++i) {
+        occupied[i] = 0U;
+        awake[i] = 0U;
+        cell_hash[i] = 0U;
+    }
+    for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+        for (y = 0U; y < VOX_WORLD_HEIGHT; ++y) {
+            for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+                const vox_cell *cell = vox_world_cell(world, x, y, z);
+                vox_u32 index = z * VOX_WORLD_HEIGHT * VOX_WORLD_WIDTH +
+                                y * VOX_WORLD_WIDTH + x;
+                vox_u32 chunk_index = (y / VOX_CHUNK_HEIGHT) *
+                                      VOX_WORLD_CHUNKS_X +
+                                      (x / VOX_CHUNK_WIDTH);
+                if (cell == 0) {
+                    return 2;
+                }
+                if (cell->material == VOX_MAT_AIR) {
+                    if (cell->flags != 0U ||
+                        cell->temperature_q16 != TEST_AMBIENT_Q16 ||
+                        cell->damage_q16 != 0L) {
+                        return 3;
+                    }
+                } else {
+                    if (!(cell->flags & VOX_CELL_OCCUPIED)) {
+                        return 4;
+                    }
+                    occupied[chunk_index]++;
+                    total_occupied++;
+                }
+                if (cell->flags & VOX_CELL_AWAKE) {
+                    if (cell->material == VOX_MAT_AIR) {
+                        return 5;
+                    }
+                    awake[chunk_index]++;
+                    total_awake++;
+                }
+                cell_hash[chunk_index] ^= test_cell_signature(index, cell);
+            }
+        }
+    }
+    if (world->occupied_cells != total_occupied ||
+        world->awake_cells != total_awake) {
+        return 6;
+    }
+    hash = test_hash_mix(hash, world->tick);
+    hash = test_hash_mix(hash, world->occupied_cells);
+    hash = test_hash_mix(hash, world->awake_cells);
+    for (i = 0U; i < VOX_WORLD_CHUNK_COUNT; ++i) {
+        const vox_chunk *chunk = vox_world_chunk(world,
+                                                  i % VOX_WORLD_CHUNKS_X,
+                                                  i / VOX_WORLD_CHUNKS_X);
+        if (chunk == 0 || chunk->occupied_cells != occupied[i] ||
+            chunk->awake_cells != awake[i] || chunk->cell_hash != cell_hash[i] ||
+            (((chunk->flags & VOX_CHUNK_ACTIVE) != 0U) != (awake[i] != 0U))) {
+            return 7;
+        }
+        hash = test_hash_mix(hash, chunk->cell_hash);
+        hash = test_hash_mix(hash, chunk->occupied_cells);
+        hash = test_hash_mix(hash, chunk->awake_cells);
+        hash = test_hash_mix(hash, (vox_u32)(chunk->flags & VOX_CHUNK_ACTIVE));
+    }
+    return hash == vox_world_hash(world) ? 0 : 8;
+}
+
 static int run_scenario(vox_u32 *hash_out)
 {
-    vox_world world;
+    static vox_world world;
     vox_step_command command;
     vox_u32 i;
     vox_world_init(&world);
@@ -25,13 +130,16 @@ static int run_scenario(vox_u32 *hash_out)
         command.material = (i % 2U) == 0U ? VOX_MAT_WATER : VOX_MAT_LAVA;
         command.temperature_delta_q8 = (vox_i16)(i * 4U);
     }
+    if (test_validate_world(&world) != 0) {
+        return 2;
+    }
     *hash_out = vox_world_hash(&world);
     return 0;
 }
 
 static int test_materials_and_sleep(void)
 {
-    vox_world world;
+    static vox_world world;
     const vox_material_properties *lava;
     const vox_material_properties *bedrock;
     const vox_cell *water;
@@ -66,12 +174,68 @@ static int test_materials_and_sleep(void)
     if (water == 0 || !(water->flags & VOX_CELL_PHASE_GAS)) {
         return 8;
     }
+    if (test_validate_world(&world) != 0) {
+        return 9;
+    }
+    return 0;
+}
+
+static int test_chunk_metadata(void)
+{
+    static vox_world world;
+    const vox_chunk *first_chunk;
+    const vox_chunk *second_chunk;
+    vox_u32 hash_before;
+    vox_u32 first_generation;
+    vox_u32 second_generation;
+    vox_world_init(&world);
+    if (vox_world_set(&world, VOX_CHUNK_WIDTH - 1U, VOX_CHUNK_HEIGHT - 1U,
+                      0U, VOX_MAT_STONE, TEST_AMBIENT_Q16) != VOX_OK ||
+        vox_world_set(&world, VOX_CHUNK_WIDTH, VOX_CHUNK_HEIGHT,
+                      VOX_WORLD_DEPTH - 1U, VOX_MAT_COAL,
+                      TEST_AMBIENT_Q16) != VOX_OK) {
+        return 1;
+    }
+    first_chunk = vox_world_chunk(&world, 0U, 0U);
+    second_chunk = vox_world_chunk(&world, 1U, 1U);
+    if (first_chunk == 0 || second_chunk == 0 ||
+        first_chunk->occupied_cells != 1U || first_chunk->awake_cells != 1U ||
+        second_chunk->occupied_cells != 1U || second_chunk->awake_cells != 1U ||
+        !(first_chunk->flags & VOX_CHUNK_DIRTY) ||
+        !(second_chunk->flags & VOX_CHUNK_DIRTY)) {
+        return 2;
+    }
+    if (test_validate_world(&world) != 0) {
+        return 3;
+    }
+    hash_before = vox_world_hash(&world);
+    first_generation = first_chunk->generation;
+    second_generation = second_chunk->generation;
+    if (vox_world_clear_dirty(&world) != VOX_OK ||
+        vox_world_hash(&world) != hash_before) {
+        return 4;
+    }
+    first_chunk = vox_world_chunk(&world, 0U, 0U);
+    second_chunk = vox_world_chunk(&world, 1U, 1U);
+    if (first_chunk == 0 || second_chunk == 0 ||
+        (first_chunk->flags & VOX_CHUNK_DIRTY) ||
+        (second_chunk->flags & VOX_CHUNK_DIRTY) ||
+        first_chunk->generation != first_generation ||
+        second_chunk->generation != second_generation) {
+        return 5;
+    }
+    if (vox_world_step(&world, 0) != VOX_OK ||
+        vox_world_sleep_all(&world) != VOX_OK ||
+        vox_world_sleep_all(&world) != VOX_OK ||
+        test_validate_world(&world) != 0) {
+        return 6;
+    }
     return 0;
 }
 
 static int test_cellular_motion(void)
 {
-    vox_world world;
+    static vox_world world;
     const vox_cell *sand;
     const vox_cell *smoke;
     vox_u32 x;
@@ -111,6 +275,9 @@ static int test_cellular_motion(void)
     if (smoke == 0 || smoke->material != VOX_MAT_SMOKE) {
         return 7;
     }
+    if (test_validate_world(&world) != 0) {
+        return 8;
+    }
     return 0;
 }
 
@@ -125,6 +292,10 @@ int main(void)
     if (test_cellular_motion() != 0) {
         fprintf(stderr, "cellular motion scenario failed\n");
         return 4;
+    }
+    if (test_chunk_metadata() != 0) {
+        fprintf(stderr, "chunk metadata scenario failed\n");
+        return 5;
     }
     if (run_scenario(&first) != 0 || run_scenario(&second) != 0) {
         return 1;

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include <stdio.h>
+#include "vox/vox_game.h"
 #include "vox/vox_render.h"
 
 #define VOX_DEMO_WIDTH 320U
@@ -12,42 +13,33 @@ static void vox_demo_world(vox_world *world)
 {
     vox_u32 x;
     vox_u32 y;
-    vox_u32 z;
-    vox_world_init(world);
-    for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-        for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
-            for (y = VOX_WORLD_HEIGHT - 5U; y < VOX_WORLD_HEIGHT; ++y) {
-                vox_u16 material = y == VOX_WORLD_HEIGHT - 1U ?
-                    VOX_MAT_BEDROCK : VOX_MAT_STONE;
-                (void)vox_world_set(world, x, y, z, material, 20L << 16);
-            }
+    if (vox_digs_generate_map(world, VOX_DIGS_MAP_FURNACE_YARD,
+                              0xD1655EEDU) != VOX_OK) {
+        vox_world_init(world);
+        return;
+    }
+    for (x = 18U; x < 43U; ++x) {
+        for (y = 51U; y < 54U; ++y) {
+            (void)vox_world_set(world, x, y, VOX_WORLD_DEPTH - 1U,
+                                VOX_MAT_WATER, 20L << 16);
         }
     }
-    for (x = 2U; x < VOX_WORLD_WIDTH - 2U; ++x) {
-        vox_u32 hill = VOX_WORLD_HEIGHT - 6U - ((x * 5U) % 7U);
-        for (y = hill; y < VOX_WORLD_HEIGHT - 4U; ++y) {
-            vox_u16 material = y == hill ? VOX_MAT_BIOMASS : VOX_MAT_SOIL;
-            (void)vox_world_set(world, x, y, 2U, material, 20L << 16);
+    for (x = 78U; x < 106U; ++x) {
+        for (y = 54U; y < 59U; ++y) {
+            (void)vox_world_set(world, x, y, VOX_WORLD_DEPTH - 1U,
+                                VOX_MAT_LAVA, 700L << 16);
         }
     }
-    for (x = 5U; x < 12U; ++x) {
-        (void)vox_world_set(world, x, VOX_WORLD_HEIGHT - 6U, 3U,
-                            VOX_MAT_WATER, 20L << 16);
-    }
-    for (x = 20U; x < 27U; ++x) {
-        (void)vox_world_set(world, x, VOX_WORLD_HEIGHT - 6U, 3U,
-                            VOX_MAT_LAVA, 700L << 16);
-    }
-    for (x = 14U; x < 19U; ++x) {
-        (void)vox_world_set(world, x, VOX_WORLD_HEIGHT - 8U, 1U,
-                            VOX_MAT_COAL, 20L << 16);
+    for (x = 82U; x < 102U; ++x) {
+        (void)vox_world_set(world, x, 50U, VOX_WORLD_DEPTH - 1U,
+                            VOX_MAT_SMOKE, 40L << 16);
     }
 }
 
 int main(int argc, char **argv)
 {
     const char *path = argc > 1 ? argv[1] : "/tmp/vox-demo.ppm";
-    vox_world world;
+    static vox_world world;
     vox_software_target target;
     FILE *file;
     vox_demo_world(&world);

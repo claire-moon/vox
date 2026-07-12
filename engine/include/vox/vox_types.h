@@ -9,7 +9,7 @@ typedef unsigned short vox_u16;
 typedef signed int vox_i32;
 typedef unsigned int vox_u32;
 
-#define VOX_ABI_VERSION 1U
+#define VOX_ABI_VERSION 2U
 
 typedef vox_u32 vox_result;
 

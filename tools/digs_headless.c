@@ -5,7 +5,7 @@
 int main(void)
 {
     vox_digs_rules rules;
-    vox_digs_match match;
+    static vox_digs_match match;
     vox_u32 i;
     vox_digs_rules_classic(&rules);
     if (vox_digs_match_init(&match, &rules) != VOX_OK) {
