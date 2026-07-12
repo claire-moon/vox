@@ -34,3 +34,7 @@ ctest --test-dir build --output-on-failure
 
 The renderer, Rust host, physics layer, Foundry Lab, and DIGS vertical slice
 are added behind the same versioned C ABI.
+
+The current game slice also exposes `vox_game_v1`-style Classic FFA timing,
+bot-count validation, kill attribution, deterministic lava timing, and a
+headless DIGS scenario. It is not yet the graphical demo.
