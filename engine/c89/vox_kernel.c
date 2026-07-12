@@ -2,6 +2,8 @@
 #include "vox/vox_kernel.h"
 
 #define VOX_AMBIENT_Q16 (20L << 16)
+#define VOX_STEAM_Q16 (140L << 16)
+#define VOX_REACTION_HOT_Q16 (320L << 16)
 
 static const vox_material_properties vox_materials[VOX_MAT_COUNT] = {
     {0U, 0U, 0U, 0U, 0L, 0L},
@@ -123,6 +125,178 @@ static void vox_sleep_cell(vox_world *world, vox_chunk *chunk,
             chunk->flags = (vox_u16)(chunk->flags & (vox_u16)~VOX_CHUNK_ACTIVE);
         }
         vox_toggle_cell_signature(chunk, cell_index, cell);
+    }
+}
+
+static void vox_set_cell_state(vox_world *world, vox_u32 x, vox_u32 y,
+                               vox_u32 z, vox_i32 temperature_q16,
+                               vox_i32 damage_q16)
+{
+    vox_u32 cell_index = vox_index(x, y, z);
+    vox_cell *cell = &world->cells[cell_index];
+    vox_chunk *chunk = &world->chunks[vox_chunk_index(x, y)];
+    vox_toggle_cell_signature(chunk, cell_index, cell);
+    cell->temperature_q16 = temperature_q16;
+    cell->damage_q16 = damage_q16;
+    vox_toggle_cell_signature(chunk, cell_index, cell);
+    vox_wake_cell(world, chunk, cell_index, cell);
+    vox_mark_dirty(chunk);
+}
+
+static int vox_neighbor_is_hot(const vox_world *world, vox_u32 x,
+                               vox_u32 y, vox_u32 z)
+{
+    static const int delta_x[4] = {-1, 1, 0, 0};
+    static const int delta_y[4] = {0, 0, -1, 1};
+    vox_u32 neighbor;
+    for (neighbor = 0U; neighbor < 4U; ++neighbor) {
+        long sample_x = (long)x + (long)delta_x[neighbor];
+        long sample_y = (long)y + (long)delta_y[neighbor];
+        const vox_cell *cell;
+        if (sample_x < 0L || sample_y < 0L ||
+            sample_x >= (long)VOX_WORLD_WIDTH ||
+            sample_y >= (long)VOX_WORLD_HEIGHT) {
+            continue;
+        }
+        cell = &world->cells[vox_index((vox_u32)sample_x,
+                                       (vox_u32)sample_y, z)];
+        if (cell->material == VOX_MAT_LAVA ||
+            cell->temperature_q16 >= VOX_REACTION_HOT_Q16) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int vox_react_water_lava(vox_world *world, vox_u32 x, vox_u32 y,
+                                vox_u32 z)
+{
+    static const int delta_x[4] = {-1, 1, 0, 0};
+    static const int delta_y[4] = {0, 0, -1, 1};
+    vox_u32 neighbor;
+    for (neighbor = 0U; neighbor < 4U; ++neighbor) {
+        long sample_x = (long)x + (long)delta_x[neighbor];
+        long sample_y = (long)y + (long)delta_y[neighbor];
+        vox_cell *cell;
+        if (sample_x < 0L || sample_y < 0L ||
+            sample_x >= (long)VOX_WORLD_WIDTH ||
+            sample_y >= (long)VOX_WORLD_HEIGHT) {
+            continue;
+        }
+        cell = &world->cells[vox_index((vox_u32)sample_x,
+                                       (vox_u32)sample_y, z)];
+        if (cell->material == VOX_MAT_LAVA) {
+            (void)vox_world_set(world, (vox_u32)sample_x,
+                                (vox_u32)sample_y, z, VOX_MAT_STONE,
+                                300L << 16);
+            (void)vox_world_set(world, x, y, z, VOX_MAT_SMOKE,
+                                VOX_STEAM_Q16);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void vox_wake_reaction_neighbors(vox_world *world, vox_u32 x,
+                                        vox_u32 y, vox_u32 z)
+{
+    static const int delta_x[4] = {-1, 1, 0, 0};
+    static const int delta_y[4] = {0, 0, -1, 1};
+    vox_u32 neighbor;
+    for (neighbor = 0U; neighbor < 4U; ++neighbor) {
+        long sample_x = (long)x + (long)delta_x[neighbor];
+        long sample_y = (long)y + (long)delta_y[neighbor];
+        if (sample_x >= 0L && sample_y >= 0L &&
+            sample_x < (long)VOX_WORLD_WIDTH &&
+            sample_y < (long)VOX_WORLD_HEIGHT) {
+            (void)vox_world_wake(world, (vox_u32)sample_x,
+                                 (vox_u32)sample_y, z);
+        }
+    }
+}
+
+static void vox_step_reactions(vox_world *world)
+{
+    vox_u32 chunk_y;
+    vox_u32 chunk_x;
+    vox_u32 depth;
+    vox_u32 local_y;
+    vox_u32 local_x;
+    int firedamp_ignited = 0;
+    vox_u32 blast_x = 0U;
+    vox_u32 blast_y = 0U;
+    vox_u32 blast_z = 0U;
+    for (chunk_y = 0U; chunk_y < VOX_WORLD_CHUNKS_Y; ++chunk_y) {
+        for (chunk_x = 0U; chunk_x < VOX_WORLD_CHUNKS_X; ++chunk_x) {
+            vox_chunk *chunk = &world->chunks[chunk_y * VOX_WORLD_CHUNKS_X +
+                                               chunk_x];
+            if (!(chunk->flags & VOX_CHUNK_ACTIVE)) {
+                continue;
+            }
+            for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+                for (local_y = 0U; local_y < VOX_CHUNK_HEIGHT; ++local_y) {
+                    vox_u32 y = chunk_y * VOX_CHUNK_HEIGHT + local_y;
+                    for (local_x = 0U; local_x < VOX_CHUNK_WIDTH; ++local_x) {
+                        vox_u32 x = chunk_x * VOX_CHUNK_WIDTH + local_x;
+                        vox_cell *cell = &world->cells[vox_index(x, y, depth)];
+                        const vox_material_properties *properties;
+                        int hot;
+                        if (cell->material == VOX_MAT_AIR) {
+                            continue;
+                        }
+                        if (cell->material == VOX_MAT_WATER &&
+                            vox_react_water_lava(world, x, y, depth)) {
+                            continue;
+                        }
+                        properties = vox_material_get(cell->material);
+                        if (properties == 0 ||
+                            !(properties->flags & VOX_MATERIAL_FLAMMABLE)) {
+                            if (cell->material == VOX_MAT_LAVA ||
+                                cell->temperature_q16 >= VOX_REACTION_HOT_Q16) {
+                                vox_wake_reaction_neighbors(world, x, y, depth);
+                            }
+                            continue;
+                        }
+                        hot = cell->temperature_q16 >= properties->ignition_q16 ||
+                              vox_neighbor_is_hot(world, x, y, depth);
+                        if (!hot) {
+                            continue;
+                        }
+                        if (cell->material == VOX_MAT_FIREDAMP) {
+                            if (!firedamp_ignited) {
+                                firedamp_ignited = 1;
+                                blast_x = x;
+                                blast_y = y;
+                                blast_z = depth;
+                            }
+                            continue;
+                        }
+                        if (cell->damage_q16 >=
+                            ((vox_i32)properties->strength << 16)) {
+                            (void)vox_world_set(world, x, y, depth,
+                                                VOX_MAT_SMOKE,
+                                                VOX_STEAM_Q16);
+                            continue;
+                        }
+                        vox_set_cell_state(world, x, y, depth,
+                                           VOX_REACTION_HOT_Q16,
+                                           cell->damage_q16 + (1L << 16));
+                        if (y > 0U &&
+                            world->cells[vox_index(x, y - 1U, depth)].material ==
+                                VOX_MAT_AIR) {
+                            (void)vox_world_set(world, x, y - 1U, depth,
+                                                VOX_MAT_SMOKE,
+                                                VOX_STEAM_Q16);
+                        }
+                        vox_wake_reaction_neighbors(world, x, y, depth);
+                    }
+                }
+            }
+        }
+    }
+    if (firedamp_ignited) {
+        (void)vox_world_blast(world, blast_x, blast_y, blast_z, 3U,
+                              700L << 16);
     }
 }
 
@@ -600,6 +774,7 @@ vox_result vox_world_step(vox_world *world, const vox_step_command *command)
         }
     }
     if (world->awake_cells != 0U) {
+        vox_step_reactions(world);
         vox_step_falling(world);
         vox_step_gases(world);
         vox_step_materials(world);

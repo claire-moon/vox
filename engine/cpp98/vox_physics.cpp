@@ -30,6 +30,26 @@ static vox_i32 vox_physics_clamp(vox_i32 value, vox_i32 limit)
     return value;
 }
 
+static vox_i32 vox_physics_div_trunc_positive(vox_i32 value,
+                                              vox_u32 divisor)
+{
+    vox_u32 magnitude;
+    vox_u32 quotient;
+    if (divisor == 0U) {
+        return 0;
+    }
+    magnitude = value < 0 ? (vox_u32)(-(value + 1)) + 1U :
+                (vox_u32)value;
+    quotient = magnitude / divisor;
+    if (value >= 0) {
+        return (vox_i32)quotient;
+    }
+    if (quotient == 0x80000000U) {
+        return (vox_i32)(-2147483647L - 1L);
+    }
+    return -(vox_i32)quotient;
+}
+
 static vox_i32 vox_physics_q16_floor(vox_i32 value)
 {
     if (value >= 0) {
@@ -133,7 +153,7 @@ static void vox_physics_move_axis(vox_physics_body *body,
     if (steps > (vox_u32)max_substeps) {
         steps = (vox_u32)max_substeps;
     }
-    base_step = delta / (vox_i32)steps;
+    base_step = vox_physics_div_trunc_positive(delta, steps);
     remainder = delta - base_step * (vox_i32)steps;
     position = horizontal ? &body->position_x.value_q16 :
                             &body->position_y.value_q16;

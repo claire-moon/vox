@@ -7,6 +7,12 @@ typedef struct vox_rgb {
     vox_u8 blue;
 } vox_rgb;
 
+typedef struct vox_light_rgb {
+    vox_u16 red;
+    vox_u16 green;
+    vox_u16 blue;
+} vox_light_rgb;
+
 static const vox_rgb vox_palette[VOX_MAT_COUNT] = {
     {20U, 28U, 48U},
     {36U, 30U, 35U},
@@ -24,6 +30,9 @@ static const vox_rgb vox_palette[VOX_MAT_COUNT] = {
     {150U, 125U, 71U}
 };
 
+static vox_light_rgb vox_light_a[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
+static vox_light_rgb vox_light_b[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
+
 static vox_u8 vox_clamp_u8(vox_u32 value)
 {
     if (value > 255U) {
@@ -32,36 +41,14 @@ static vox_u8 vox_clamp_u8(vox_u32 value)
     return (vox_u8)value;
 }
 
-static vox_u32 vox_lava_glow(const vox_world *world, vox_u32 center_x,
-                              vox_u32 center_y)
+static vox_u16 vox_light_max(vox_u16 left, vox_u16 right)
 {
-    int delta_x;
-    int delta_y;
-    vox_u32 depth;
-    vox_u32 glow = 0U;
-    for (delta_y = -3; delta_y <= 3; ++delta_y) {
-        long sample_y = (long)center_y + (long)delta_y;
-        if (sample_y < 0L || sample_y >= (long)VOX_WORLD_HEIGHT) {
-            continue;
-        }
-        for (delta_x = -3; delta_x <= 3; ++delta_x) {
-            long sample_x = (long)center_x + (long)delta_x;
-            vox_u32 distance;
-            if (sample_x < 0L || sample_x >= (long)VOX_WORLD_WIDTH) {
-                continue;
-            }
-            distance = (vox_u32)(delta_x < 0 ? -delta_x : delta_x) +
-                       (vox_u32)(delta_y < 0 ? -delta_y : delta_y) + 1U;
-            for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
-                const vox_cell *cell = vox_world_cell(world, (vox_u32)sample_x,
-                                                       (vox_u32)sample_y, depth);
-                if (cell != 0 && cell->material == VOX_MAT_LAVA) {
-                    glow += 96U / distance;
-                }
-            }
-        }
-    }
-    return glow > 128U ? 128U : glow;
+    return left > right ? left : right;
+}
+
+static vox_u16 vox_light_decay(vox_u16 value, vox_u16 attenuation)
+{
+    return value > attenuation ? (vox_u16)(value - attenuation) : 0U;
 }
 
 static const vox_cell *vox_surface_cell(const vox_world *world, vox_u32 x,
@@ -77,49 +64,176 @@ static const vox_cell *vox_surface_cell(const vox_world *world, vox_u32 x,
     return 0;
 }
 
-vox_result vox_software_render(const vox_world *world,
-                               vox_software_target *target)
+static void vox_inject_emission(const vox_world *world, vox_u32 x, vox_u32 y,
+                                vox_light_rgb *light)
 {
+    vox_u32 depth;
+    for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+        const vox_cell *cell = vox_world_cell(world, x, y, depth);
+        if (cell == 0 || cell->material == VOX_MAT_AIR) {
+            continue;
+        }
+        if (cell->material == VOX_MAT_LAVA) {
+            light->red = 255U;
+            light->green = vox_light_max(light->green, 150U);
+            light->blue = vox_light_max(light->blue, 48U);
+        } else if (cell->temperature_q16 > (300L << 16)) {
+            vox_u16 heat = (vox_u16)(cell->temperature_q16 >> 19);
+            light->red = vox_light_max(light->red,
+                                       heat > 255U ? 255U : heat);
+            light->green = vox_light_max(light->green,
+                                         heat > 160U ? 160U : heat);
+            light->blue = vox_light_max(light->blue, 36U);
+        }
+    }
+}
+
+static vox_light_rgb *vox_build_lightfield(const vox_world *world,
+                                            vox_u16 gi_quality)
+{
+    vox_light_rgb *source = vox_light_a;
+    vox_light_rgb *destination = vox_light_b;
+    vox_u32 passes = gi_quality == VOX_GI_COMPATIBILITY ? 1U :
+                     (gi_quality == VOX_GI_BALANCED ? 3U : 6U);
+    vox_u32 x;
+    vox_u32 y;
+    vox_u32 pass;
+    for (y = 0U; y < VOX_WORLD_HEIGHT; ++y) {
+        for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+            vox_u32 index = y * VOX_WORLD_WIDTH + x;
+            const vox_cell *surface = vox_surface_cell(world, x, y);
+            vox_u16 sky = (vox_u16)(118U - y * 36U / VOX_WORLD_HEIGHT);
+            if (surface != 0) {
+                sky = (vox_u16)(sky * 3U / 5U);
+            }
+            source[index].red = sky;
+            source[index].green = (vox_u16)(sky + 4U);
+            source[index].blue = (vox_u16)(sky + 12U);
+            vox_inject_emission(world, x, y, &source[index]);
+        }
+    }
+    for (pass = 0U; pass < passes; ++pass) {
+        for (y = 0U; y < VOX_WORLD_HEIGHT; ++y) {
+            for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+                vox_u32 index = y * VOX_WORLD_WIDTH + x;
+                const vox_cell *surface = vox_surface_cell(world, x, y);
+                vox_u16 attenuation = surface == 0 ? 13U : 24U;
+                vox_light_rgb value = source[index];
+                if (x > 0U) {
+                    value.red = vox_light_max(value.red,
+                        vox_light_decay(source[index - 1U].red, attenuation));
+                    value.green = vox_light_max(value.green,
+                        vox_light_decay(source[index - 1U].green, attenuation));
+                    value.blue = vox_light_max(value.blue,
+                        vox_light_decay(source[index - 1U].blue, attenuation));
+                }
+                if (x + 1U < VOX_WORLD_WIDTH) {
+                    value.red = vox_light_max(value.red,
+                        vox_light_decay(source[index + 1U].red, attenuation));
+                    value.green = vox_light_max(value.green,
+                        vox_light_decay(source[index + 1U].green, attenuation));
+                    value.blue = vox_light_max(value.blue,
+                        vox_light_decay(source[index + 1U].blue, attenuation));
+                }
+                if (y > 0U) {
+                    value.red = vox_light_max(value.red,
+                        vox_light_decay(source[index - VOX_WORLD_WIDTH].red,
+                                        attenuation));
+                    value.green = vox_light_max(value.green,
+                        vox_light_decay(source[index - VOX_WORLD_WIDTH].green,
+                                        attenuation));
+                    value.blue = vox_light_max(value.blue,
+                        vox_light_decay(source[index - VOX_WORLD_WIDTH].blue,
+                                        attenuation));
+                }
+                if (y + 1U < VOX_WORLD_HEIGHT) {
+                    value.red = vox_light_max(value.red,
+                        vox_light_decay(source[index + VOX_WORLD_WIDTH].red,
+                                        attenuation));
+                    value.green = vox_light_max(value.green,
+                        vox_light_decay(source[index + VOX_WORLD_WIDTH].green,
+                                        attenuation));
+                    value.blue = vox_light_max(value.blue,
+                        vox_light_decay(source[index + VOX_WORLD_WIDTH].blue,
+                                        attenuation));
+                }
+                destination[index] = value;
+                vox_inject_emission(world, x, y, &destination[index]);
+            }
+        }
+        {
+            vox_light_rgb *swap = source;
+            source = destination;
+            destination = swap;
+        }
+    }
+    return source;
+}
+
+void vox_software_config_default(vox_software_config *config)
+{
+    if (config == 0) {
+        return;
+    }
+    config->abi_version = VOX_ABI_VERSION;
+    config->struct_size = (vox_u32)sizeof(*config);
+    config->gi_quality = VOX_GI_BALANCED;
+    config->reserved = 0U;
+}
+
+vox_result vox_software_render_ex(const vox_world *world,
+                                  vox_software_target *target,
+                                  const vox_software_config *config)
+{
+    vox_light_rgb *lightfield;
     vox_u32 pixel_y;
     vox_u32 pixel_x;
-    if (world == 0 || target == 0 || target->pixels == 0 ||
+    if (world == 0 || target == 0 || config == 0 || target->pixels == 0 ||
         target->abi_version != VOX_ABI_VERSION ||
         target->struct_size < (vox_u32)sizeof(*target) ||
+        config->abi_version != VOX_ABI_VERSION ||
+        config->struct_size < (vox_u32)sizeof(*config) ||
+        config->gi_quality > VOX_GI_SHOWCASE || config->reserved != 0U ||
         target->width == 0U || target->height == 0U ||
         target->stride < target->width * VOX_SOFTWARE_RGB_BYTES) {
         return VOX_ERR_INVALID;
     }
+    lightfield = vox_build_lightfield(world, config->gi_quality);
     for (pixel_y = 0U; pixel_y < target->height; ++pixel_y) {
         vox_u32 world_y = pixel_y * VOX_WORLD_HEIGHT / target->height;
         for (pixel_x = 0U; pixel_x < target->width; ++pixel_x) {
             vox_u32 world_x = pixel_x * VOX_WORLD_WIDTH / target->width;
+            vox_u32 light_index = world_y * VOX_WORLD_WIDTH + world_x;
             const vox_cell *cell = vox_surface_cell(world, world_x, world_y);
-            vox_u8 *destination = target->pixels +
+            vox_u8 *destination_pixel = target->pixels +
                 pixel_y * target->stride + pixel_x * VOX_SOFTWARE_RGB_BYTES;
             if (cell == 0) {
-                destination[0] = (vox_u8)(18U + world_y * 20U / VOX_WORLD_HEIGHT);
-                destination[1] = (vox_u8)(26U + world_y * 24U / VOX_WORLD_HEIGHT);
-                destination[2] = (vox_u8)(44U + world_y * 30U / VOX_WORLD_HEIGHT);
+                destination_pixel[0] = (vox_u8)(16U + world_y * 18U /
+                                                 VOX_WORLD_HEIGHT);
+                destination_pixel[1] = (vox_u8)(24U + world_y * 22U /
+                                                 VOX_WORLD_HEIGHT);
+                destination_pixel[2] = (vox_u8)(42U + world_y * 28U /
+                                                 VOX_WORLD_HEIGHT);
             } else {
                 const vox_rgb *base = &vox_palette[cell->material];
-                const vox_material_properties *properties =
-                    vox_material_get(cell->material);
-                vox_u32 light = 92U + world_y * 80U / VOX_WORLD_HEIGHT;
-                light += vox_lava_glow(world, world_x, world_y);
-                if (properties != 0 &&
-                    (properties->flags & VOX_MATERIAL_EMISSIVE)) {
-                    light += 96U;
-                }
-                if (cell->temperature_q16 > (200L << 16)) {
-                    light += (vox_u32)(cell->temperature_q16 >> 18);
-                }
-                destination[0] = vox_clamp_u8((vox_u32)base->red * light / 255U);
-                destination[1] = vox_clamp_u8((vox_u32)base->green * light / 255U);
-                destination[2] = vox_clamp_u8((vox_u32)base->blue * light / 255U);
+                destination_pixel[0] = vox_clamp_u8(
+                    (vox_u32)base->red * lightfield[light_index].red / 128U);
+                destination_pixel[1] = vox_clamp_u8(
+                    (vox_u32)base->green * lightfield[light_index].green / 128U);
+                destination_pixel[2] = vox_clamp_u8(
+                    (vox_u32)base->blue * lightfield[light_index].blue / 128U);
             }
         }
     }
     return VOX_OK;
+}
+
+vox_result vox_software_render(const vox_world *world,
+                               vox_software_target *target)
+{
+    vox_software_config config;
+    vox_software_config_default(&config);
+    return vox_software_render_ex(world, target, &config);
 }
 
 vox_u32 vox_software_hash(const vox_software_target *target)

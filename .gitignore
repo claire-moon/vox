@@ -10,3 +10,5 @@ lab/**/disks/
 lab/**/snapshots/
 benchmarks/results/
 runtime/
+/dist/
+/qa/out/

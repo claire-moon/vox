@@ -15,11 +15,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install SDL2 development files
+        run: sudo apt-get update && sudo apt-get install --yes libsdl2-dev nasm
       - name: Build native foundation
-        run: cmake -S . -B build -DVOX_BUILD_TESTS=ON
+        run: cmake -S . -B build -DVOX_BUILD_TESTS=ON -DVOX_BUILD_SDL2_DEMO=ON -DVOX_BUILD_NASM_ACCEL=ON
       - name: Compile native foundation
         run: cmake --build build --parallel
       - name: Run native tests
         run: ctest --test-dir build --output-on-failure
+      - name: Run DIGS demo smoke test
+        run: build/digs_demo --smoke-test /tmp/digs-demo-smoke.ppm
       - name: Run Rust tests
         run: cargo test --workspace

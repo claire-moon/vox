@@ -1,0 +1,87 @@
+name: DIGS demo feedback
+description: Submit structured playtest evidence from the VOX Testing Cockpit.
+title: "qa: "
+labels: [qa, demo-feedback]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for testing DIGS. Please attach the cockpit packet or workbook when possible. Do not include credentials or private machine data.
+  - type: dropdown
+    id: result
+    attributes:
+      label: Overall result
+      options:
+        - PASS
+        - FAIL
+        - BLOCKED
+        - NOTE
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Highest severity
+      options:
+        - BLOCKER
+        - HIGH
+        - MEDIUM
+        - LOW
+        - NOTE
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Build identity
+      description: VOX commit, release tag, or binary-bundle SHA256.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform tuple
+      description: OS, CPU, GPU/driver or CPU software, SDL version, and display/audio path.
+    validations:
+      required: true
+  - type: input
+    id: scenario
+    attributes:
+      label: Scenario
+      description: Map, seed, bot count, arsenal, weapon, and relevant options.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Numbered, minimal steps from launch to the result.
+      placeholder: |
+        1. Launch digs_demo...
+        2. Select...
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected_actual
+    attributes:
+      label: Expected and actual behavior
+      description: State both clearly, including whether the issue reproduces.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Attach the cockpit packet, PPM/screenshot, logs, hashes, benchmark output, or workbook rows.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Submission checks
+      options:
+        - label: I removed credentials, private paths, and personal data from attached evidence.
+          required: true
+        - label: I searched existing issues for the same seed and symptom.
+          required: true

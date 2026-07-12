@@ -16,7 +16,8 @@ int main(void)
     input.abi_version = VOX_ABI_VERSION;
     input.struct_size = (vox_u32)sizeof(input);
     input.player = 0U;
-    for (i = 0U; i < rules.match_ticks; ++i) {
+    for (i = 0U; i < rules.match_ticks &&
+         match.phase == VOX_DIGS_RUNNING; ++i) {
         if (i < 60U) {
             input.actions = VOX_DIGS_ACTION_RIGHT;
         } else if (i == 60U) {
@@ -28,7 +29,8 @@ int main(void)
         } else {
             input.actions = 0U;
         }
-        if (vox_digs_submit_input(&match, &input) != VOX_OK) {
+        if (match.alive[0] &&
+            vox_digs_submit_input(&match, &input) != VOX_OK) {
             return 3;
         }
         if (vox_digs_match_step(&match) != VOX_OK) {

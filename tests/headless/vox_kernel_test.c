@@ -334,6 +334,65 @@ static int test_cellular_motion(void)
     return 0;
 }
 
+static int test_material_reactions(void)
+{
+    static vox_world world;
+    const vox_cell *cell;
+    vox_u32 x;
+    vox_u32 i;
+    vox_world_init(&world);
+    for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+        if (vox_world_set(&world, x, 40U, 0U, VOX_MAT_BEDROCK,
+                          TEST_AMBIENT_Q16) != VOX_OK) {
+            return 1;
+        }
+    }
+    if (vox_world_set(&world, 20U, 39U, 0U, VOX_MAT_LAVA,
+                      700L << 16) != VOX_OK ||
+        vox_world_set(&world, 19U, 39U, 0U, VOX_MAT_WATER,
+                      TEST_AMBIENT_Q16) != VOX_OK ||
+        vox_world_step(&world, 0) != VOX_OK) {
+        return 2;
+    }
+    cell = vox_world_cell(&world, 20U, 39U, 0U);
+    if (cell == 0 || cell->material != VOX_MAT_STONE) {
+        return 3;
+    }
+    cell = vox_world_cell(&world, 19U, 38U, 0U);
+    if (cell == 0 || cell->material != VOX_MAT_SMOKE) {
+        return 4;
+    }
+    if (vox_world_set(&world, 50U, 39U, 0U, VOX_MAT_BIOMASS,
+                      TEST_AMBIENT_Q16) != VOX_OK ||
+        vox_world_set(&world, 51U, 39U, 0U, VOX_MAT_LAVA,
+                      700L << 16) != VOX_OK) {
+        return 5;
+    }
+    for (i = 0U; i < 3U; ++i) {
+        if (vox_world_step(&world, 0) != VOX_OK) {
+            return 6;
+        }
+    }
+    cell = vox_world_cell(&world, 50U, 39U, 0U);
+    if (cell == 0 || cell->temperature_q16 < (300L << 16) ||
+        cell->damage_q16 == 0L) {
+        return 7;
+    }
+    if (vox_world_set(&world, 80U, 39U, 0U, VOX_MAT_FIREDAMP,
+                      300L << 16) != VOX_OK ||
+        vox_world_set(&world, 81U, 39U, 0U, VOX_MAT_COAL,
+                      TEST_AMBIENT_Q16) != VOX_OK ||
+        vox_world_step(&world, 0) != VOX_OK) {
+        return 8;
+    }
+    cell = vox_world_cell(&world, 81U, 39U, 0U);
+    if (cell == 0 || cell->material != VOX_MAT_AIR ||
+        test_validate_world(&world) != 0) {
+        return 9;
+    }
+    return 0;
+}
+
 int main(void)
 {
     vox_u32 first;
@@ -345,6 +404,10 @@ int main(void)
     if (test_cellular_motion() != 0) {
         fprintf(stderr, "cellular motion scenario failed\n");
         return 4;
+    }
+    if (test_material_reactions() != 0) {
+        fprintf(stderr, "material reaction scenario failed\n");
+        return 7;
     }
     if (test_chunk_metadata() != 0) {
         fprintf(stderr, "chunk metadata scenario failed\n");
