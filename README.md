@@ -42,3 +42,9 @@ are added behind the same versioned C ABI.
 The current game slice also exposes `vox_game_v1`-style Classic FFA timing,
 bot-count validation, kill attribution, deterministic lava timing, and a
 headless DIGS scenario. It is not yet the graphical demo.
+
+The portable software renderer now writes a real shallow-voxel PPM frame:
+
+```text
+./build/vox_render_demo /tmp/vox-demo.ppm
+```
