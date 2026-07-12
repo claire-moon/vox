@@ -93,6 +93,52 @@ static int run_match(vox_u32 *hash_out)
     return 0;
 }
 
+static int test_player_physics(void)
+{
+    static vox_digs_match match;
+    vox_digs_rules rules;
+    vox_u16 map_style;
+    vox_u16 player;
+    vox_u32 tick;
+    vox_u32 occupied_before;
+    vox_u32 terrain_hash;
+    vox_digs_rules_classic(&rules);
+    rules.bot_count = VOX_DIGS_MAX_BOTS;
+    for (map_style = VOX_DIGS_MAP_COAL_RIDGE;
+         map_style < VOX_DIGS_MAP_COUNT; ++map_style) {
+        rules.map_style = map_style;
+        if (vox_digs_match_init(&match, &rules) != VOX_OK) {
+            return 1;
+        }
+        occupied_before = match.world.occupied_cells;
+        terrain_hash = match.terrain_hash;
+        for (tick = 0U; tick < 120U; ++tick) {
+            if (vox_digs_match_step(&match) != VOX_OK) {
+                return 2;
+            }
+        }
+        if (match.world.occupied_cells != occupied_before ||
+            match.world.awake_cells != 0U || match.terrain_hash != terrain_hash) {
+            return 3;
+        }
+        for (player = 0U; player < VOX_DIGS_MAX_SLOTS; ++player) {
+            const vox_physics_body *body = &match.players[player];
+            if (!match.alive[player] || body->abi_version != VOX_ABI_VERSION ||
+                body->struct_size < (vox_u32)sizeof(*body) ||
+                !(body->flags & VOX_PHYSICS_BODY_GROUNDED) ||
+                body->position_x.value_q16 <= 0 ||
+                body->position_x.value_q16 >=
+                    (vox_i32)(VOX_WORLD_WIDTH << 16) ||
+                body->position_y.value_q16 <= 0 ||
+                body->position_y.value_q16 >=
+                    (vox_i32)(VOX_WORLD_HEIGHT << 16)) {
+                return 4;
+            }
+        }
+    }
+    return 0;
+}
+
 int main(void)
 {
     vox_digs_rules rules;
@@ -113,6 +159,10 @@ int main(void)
     if (test_map_generation() != 0) {
         fprintf(stderr, "DIGS map generation mismatch\n");
         return 4;
+    }
+    if (test_player_physics() != 0) {
+        fprintf(stderr, "DIGS player physics mismatch\n");
+        return 5;
     }
     if (run_match(&first) != 0 || run_match(&second) != 0 || first != second) {
         fprintf(stderr, "DIGS determinism mismatch\n");

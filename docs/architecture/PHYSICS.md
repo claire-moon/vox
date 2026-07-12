@@ -21,6 +21,13 @@ constraints, contacts between dynamic bodies, fracture clusters, or
 Havok-equivalent features. Those remain bounded follow-on systems, all with
 the C89 world as their authoritative terrain source.
 
+DIGS v0.0.1 currently instantiates one body for every living match slot. Its
+seeded spawn search chooses a non-overlapping position above the first solid
+terrain column, then the authoritative match tick advances the body against
+the read-only voxel terrain. Player input, jumping, steam-jet thrust, damage,
+and projectile impacts are the next game-facing layers; physics does not edit
+terrain by itself.
+
 The headless physics test covers gravity landing on sand, high-speed wall
 blocking, terrain-read-only stepping, safe terrain-free legacy stepping, and
 repeatable collision results from the same input. A separate C89 target proves

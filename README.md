@@ -45,7 +45,8 @@ are added behind the same versioned C ABI.
 
 The current game slice also exposes Classic FFA timing, bot-count validation,
 kill attribution, deterministic lava timing, map-style/seed generation, and a
-headless DIGS scenario. It is not yet the graphical demo.
+headless DIGS scenario. Each living slot now owns a terrain-colliding physics
+body and deterministic spawn point. It is not yet the graphical demo.
 
 The portable software renderer now writes a real shallow-voxel PPM frame:
 

@@ -124,6 +124,53 @@ vox_result vox_digs_generate_map(vox_world *world, vox_u16 map_style,
     return vox_world_sleep_all(world);
 }
 
+static int digs_cell_is_solid(const vox_world *world, vox_u32 x, vox_u32 y)
+{
+    vox_u32 z;
+    for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+        const vox_cell *cell = vox_world_cell(world, x, y, z);
+        const vox_material_properties *properties;
+        if (cell == 0 || cell->material == VOX_MAT_AIR) {
+            continue;
+        }
+        properties = vox_material_get(cell->material);
+        if (properties != 0 && (properties->flags & VOX_MATERIAL_SOLID)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static vox_result digs_spawn_player(vox_digs_match *match, vox_u16 player,
+                                    vox_u32 preferred_x)
+{
+    vox_physics_body *body = &match->players[player];
+    vox_physics_step_config spawn_config = match->physics_config;
+    vox_u32 attempt;
+    spawn_config.gravity_q16 = 0;
+    for (attempt = 0U; attempt < VOX_WORLD_WIDTH; ++attempt) {
+        vox_u32 x = (preferred_x + attempt * 11U) % VOX_WORLD_WIDTH;
+        vox_u32 y;
+        if (x == 0U || x + 1U >= VOX_WORLD_WIDTH) {
+            continue;
+        }
+        for (y = 1U; y < VOX_WORLD_HEIGHT; ++y) {
+            if (!digs_cell_is_solid(&match->world, x, y)) {
+                continue;
+            }
+            vox_physics_body_init(body);
+            body->position_x.value_q16 = (vox_i32)(x << 16) + 32768L;
+            body->position_y.value_q16 = (vox_i32)(y << 16) -
+                                         body->half_height_q16;
+            if (vox_physics_step_world(body, &match->world,
+                                       &spawn_config) == VOX_OK) {
+                return VOX_OK;
+            }
+        }
+    }
+    return VOX_ERR_CAPACITY;
+}
+
 void vox_digs_rules_classic(vox_digs_rules *rules)
 {
     if (rules == 0) {
@@ -176,9 +223,17 @@ vox_result vox_digs_match_init(vox_digs_match *match,
     match->phase = VOX_DIGS_RUNNING;
     match->lava_level_q16 = 0U;
     match->terrain_hash = vox_world_hash(&match->world);
+    vox_physics_step_config_default(&match->physics_config);
     for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
         match->scores[i] = 0U;
         match->alive[i] = i <= rules->bot_count ? 1U : 0U;
+        vox_physics_body_init(&match->players[i]);
+        if (match->alive[i] &&
+            digs_spawn_player(match, i,
+                              (vox_u32)(i + 1U) * VOX_WORLD_WIDTH /
+                              (vox_u32)(rules->bot_count + 2U)) != VOX_OK) {
+            return VOX_ERR_CAPACITY;
+        }
     }
     match->state_hash = vox_digs_hash(match);
     return VOX_OK;
@@ -187,6 +242,7 @@ vox_result vox_digs_match_init(vox_digs_match *match,
 vox_result vox_digs_match_step(vox_digs_match *match)
 {
     vox_u32 remaining;
+    vox_u16 i;
     if (match == 0 || match->abi_version != VOX_ABI_VERSION ||
         match->struct_size < (vox_u32)sizeof(*match) ||
         match->phase != VOX_DIGS_RUNNING) {
@@ -194,6 +250,13 @@ vox_result vox_digs_match_step(vox_digs_match *match)
     }
     if (vox_world_step(&match->world, 0) != VOX_OK) {
         return VOX_ERR_INVALID;
+    }
+    for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
+        if (match->alive[i] &&
+            vox_physics_step_world(&match->players[i], &match->world,
+                                   &match->physics_config) != VOX_OK) {
+            return VOX_ERR_INVALID;
+        }
     }
     if (match->tick >= match->rules.lava_start_tick) {
         remaining = match->rules.match_ticks - match->rules.lava_start_tick;
@@ -245,9 +308,25 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
     hash = digs_hash_mix(hash, match->lava_level_q16);
     hash = digs_hash_mix(hash, match->terrain_hash);
     hash = digs_hash_mix(hash, vox_world_hash(&match->world));
+    hash = digs_hash_mix(hash, (vox_u32)match->physics_config.gravity_q16);
+    hash = digs_hash_mix(hash, (vox_u32)match->physics_config.max_speed_q16);
+    hash = digs_hash_mix(hash, (vox_u32)match->physics_config.max_substeps);
     for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
         hash = digs_hash_mix(hash, (vox_u32)match->scores[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->alive[i]);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->players[i].position_x.value_q16);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->players[i].position_y.value_q16);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->players[i].velocity_x.value_q16);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->players[i].velocity_y.value_q16);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->players[i].half_width_q16);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->players[i].half_height_q16);
+        hash = digs_hash_mix(hash, (vox_u32)match->players[i].flags);
     }
     return hash;
 }

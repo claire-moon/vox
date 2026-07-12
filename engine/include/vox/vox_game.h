@@ -2,7 +2,7 @@
 #ifndef VOX_GAME_H
 #define VOX_GAME_H
 
-#include "vox_kernel.h"
+#include "vox_physics.h"
 
 #define VOX_DIGS_MAX_BOTS 3U
 #define VOX_DIGS_MAX_SLOTS 4U
@@ -47,6 +47,8 @@ typedef struct vox_digs_match {
     vox_u16 alive[VOX_DIGS_MAX_SLOTS];
     vox_u32 lava_level_q16;
     vox_u32 terrain_hash;
+    vox_physics_step_config physics_config;
+    vox_physics_body players[VOX_DIGS_MAX_SLOTS];
 } vox_digs_match;
 
 void vox_digs_rules_classic(vox_digs_rules *rules);
