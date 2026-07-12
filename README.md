@@ -96,6 +96,9 @@ The current easy-run artifact is a Linux x86-64 bundle. Extract it and start
 the launcher; it checks the dynamically linked SDL2 runtime and prints
 distribution-specific installation help if the library is missing:
 
+For a complete plain-text walkthrough written for the first local test pass,
+open [CGReadme.txt](CGReadme.txt).
+
 ```sh
 tar -xzf vox-digs-v0.0.1-linux-x86_64.tar.gz
 cd vox-digs-v0.0.1-linux-x86_64

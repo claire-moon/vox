@@ -218,6 +218,7 @@ install -m 0755 -- "$ROOT/packaging/linux/qa-cockpit.sh" \
 install -m 0644 -- "$ROOT/packaging/linux/libexec/vox-runtime.sh" \
     "$STAGE_DIR/libexec/vox-runtime.sh"
 copy_file "$ROOT/packaging/linux/START-HERE.txt" "$STAGE_DIR/START-HERE.txt"
+copy_file "$ROOT/CGReadme.txt" "$STAGE_DIR/CGReadme.txt"
 
 copy_file "$ROOT/LICENSE" "$STAGE_DIR/LICENSE"
 copy_file "$ROOT/THIRD_PARTY.md" "$STAGE_DIR/THIRD_PARTY.md"
