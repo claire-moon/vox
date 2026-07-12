@@ -90,6 +90,51 @@ configure command to build and test the optional assembly contract probe.
 The host links to the system SDL2 library. No SDL source or binary is vendored
 in this repository; see [THIRD_PARTY.md](THIRD_PARTY.md).
 
+## Run the Linux tester bundle
+
+The current easy-run artifact is a Linux x86-64 bundle. Extract it and start
+the launcher; it checks the dynamically linked SDL2 runtime and prints
+distribution-specific installation help if the library is missing:
+
+```sh
+tar -xzf vox-digs-v0.0.1-linux-x86_64.tar.gz
+cd vox-digs-v0.0.1-linux-x86_64
+./run-digs.sh
+```
+
+`smoke-test.sh`, `benchmark.sh`, and both headless proof binaries are included
+beside the game. The matching GPL Corresponding Source archive and
+`SHA256SUMS` ship next to the binary archive. Both archives contain an SPDX
+2.3 JSON SBOM. The binary bundle also preserves the package-time CTest, Rust,
+headless, smoke, renderer, and benchmark streams under `evidence/` so its
+claims can be audited against the exact executable. Maintainers create all
+three files from a clean checkout with:
+
+```sh
+tools/package-linux-demo.sh
+(cd dist && sha256sum -c SHA256SUMS)
+```
+
+This bundle is intentionally labeled for Linux x86-64; it is not evidence for
+the planned Windows, macOS, historical, or GPU adapters.
+
+## Playtest feedback
+
+The title screen's **QA Feedback** entry points testers to the versioned
+workbook and cockpit. Fill `qa/VOX_QA_FEEDBACK.xlsx`, then combine one or more
+tester workbooks with xleak and optionally exercise the exact demo binary:
+
+```sh
+tools/vox-test-cockpit.sh --binary ./build-demo/digs_demo \
+  qa/VOX_QA_FEEDBACK.xlsx
+```
+
+The command produces a Markdown report, raw sheet exports, logs, copied
+workbooks, and a reviewable `.tar.gz` evidence packet under `qa/out/`; it never
+uploads anything. See [qa/README.md](qa/README.md) for result/severity rules and
+privacy checks, then submit a reviewed packet through the
+[DIGS demo feedback form](https://github.com/claire-moon/vox/issues/new?template=demo-feedback.yml).
+
 ## Automated smoke and benchmark modes
 
 The smoke path does not initialize a window or audio device. It runs a fixed,

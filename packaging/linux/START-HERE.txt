@@ -1,0 +1,38 @@
+VOX + DIGS v0.0.1 DEMO - Linux x86_64
+=======================================
+
+1. Extract the complete archive.
+2. Double-click run-digs.sh, or run it from a terminal:
+
+       ./run-digs.sh
+
+The game is a CPU-rendered SDL2 demo. SDL2 remains a system library and is not
+bundled. If it is missing, the launch scripts print distribution-specific
+installation commands.
+
+Useful tester commands
+----------------------
+
+  ./smoke-test.sh                 deterministic non-windowed acceptance test
+  ./benchmark.sh 240              CPU Lightfield benchmark (three quality tiers)
+  ./qa-cockpit.sh                 combine the included workbook and test evidence
+  ./bin/vox_headless              minimal voxel-kernel scenario
+  ./bin/digs_headless             deterministic DIGS match scenario
+  ./bin/vox_render_demo out.ppm   software-renderer image test
+
+Smoke images, benchmark reports, and cockpit packets go to qa/out/. Open
+qa/README.md for the feedback workflow. The cockpit requires the free xleak
+command-line spreadsheet reader to inspect .xlsx feedback workbooks.
+
+The evidence/ directory contains the unmodified package-time test streams,
+exit statuses, smoke images, build profile, and an explanation of their
+provenance. SBOM.spdx.json inventories this exact bundle and records SDL2 as
+an external system library rather than bundled code.
+
+Licensing and source
+--------------------
+
+VOX + DIGS is free software under GPL-3.0-or-later. See LICENSE,
+THIRD_PARTY.md, and LICENSES/README.md. The matching source archive and
+SHA256SUMS are distributed beside this binary archive. The source archive has
+its own SPDX 2.3 JSON SBOM.

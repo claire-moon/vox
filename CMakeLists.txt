@@ -1,6 +1,16 @@
 cmake_minimum_required(VERSION 3.16)
 project(vox VERSION 0.0.1 LANGUAGES C CXX)
 
+# The portable scalar oracle is compiled as ISO C90 (the C89 language profile)
+# and the body sidecar as ISO C++98.  Keep compiler extensions off globally so
+# every target, including small tools and tests, exercises the same boundary.
+set(CMAKE_C_STANDARD 90)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+set(CMAKE_CXX_STANDARD 98)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 option(VOX_BUILD_TESTS "Build deterministic VOX tests" ON)
 option(VOX_BUILD_SDL2_DEMO "Build the playable SDL2 DIGS demo" OFF)
 option(VOX_BUILD_NASM_ACCEL "Build the optional Linux x86-64 NASM contract probe" OFF)

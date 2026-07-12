@@ -5,6 +5,8 @@
 *.dSYM/
 *.user
 *.swp
+__pycache__/
+*.py[cod]
 lab/**/roms/
 lab/**/disks/
 lab/**/snapshots/

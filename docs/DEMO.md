@@ -149,6 +149,27 @@ bindings, bot combat, damage/death/respawn, the three map styles, fixed-step
 behavior at every frame cap, Lightfield differences, fullscreen transitions,
 pause/results flow, audio fallback, debug values, and rising-lava damage.
 
+## Testing cockpit and feedback
+
+Open **QA Feedback** from the title screen for the in-game handoff. The
+repository and Linux tester bundle contain `qa/VOX_QA_FEEDBACK.xlsx`, whose
+Checkpoints, Issues, and Environment sheets turn the manual acceptance list
+into structured evidence. Preserve an untouched template and give each tester
+their own copy.
+
+With xleak installed, combine one or more completed workbooks and run the
+automated checks against the same binary:
+
+```sh
+tools/vox-test-cockpit.sh --binary ./build-demo/digs_demo \
+  tester-claire.xlsx tester-b.xlsx
+```
+
+Review the generated `REPORT.md`, copied workbooks, logs, and screenshots for
+credentials or private machine information before attaching the packet to the
+[DIGS demo feedback issue form](https://github.com/claire-moon/vox/issues/new?template=demo-feedback.yml).
+The cockpit is local-only and performs no upload.
+
 ## Deliberate v0.0.1 limits
 
 - The world is a bounded demo slab, not the planned large or streamed profile.

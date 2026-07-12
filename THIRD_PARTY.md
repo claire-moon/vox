@@ -33,6 +33,29 @@ NASM's output is assembled from original VOX source under
 not a runtime dependency. The official project site states that NASM versions
 since 2.07 use the simplified two-clause BSD license.
 
+## Optional QA tools
+
+| Tool | Use | License | Tested version | Source | Intake and modifications |
+|---|---|---|---|---|---|
+| xleak | Terminal viewing and CSV export of tester `.xlsx` workbooks | MIT | 0.2.6 | [bgreenwell/xleak](https://github.com/bgreenwell/xleak) | Invoked from the tester's `PATH`; not linked, vendored, distributed, or modified |
+| openpyxl | Rebuild and validate the committed QA workbook from its CSV source | MIT | 3.1.2 | [openpyxl project](https://openpyxl.readthedocs.io/) | Optional Python source-generation tool; not a game runtime dependency and not distributed in the tester bundle |
+
+The committed workbook contains project-authored QA records and Office Open
+XML data, not copies of either tool's source code. Testers can fill it with any
+compatible spreadsheet application; xleak is required only by the supplied
+terminal cockpit script.
+
+## CI-only actions
+
+| Action | Use | License | Pinned revision | Distribution boundary |
+|---|---|---|---|---|
+| [actions/checkout](https://github.com/actions/checkout) | Materialize the repository in GitHub Actions | MIT | `11bd71901bbe5b1630ceea73d27597364c9af683` (v4.2.2) | Runs only in the hosted CI job; not copied into VOX archives |
+| [actions/upload-artifact](https://github.com/actions/upload-artifact) | Publish the checksummed Linux tester/source bundles from CI | MIT | `ea165f8d65b6e75b540449e92b4886f43607fa02` (v4.6.2) | Runs only in the hosted CI job; not copied into VOX archives |
+
+Both actions are fixed to reviewed commit identities rather than floating
+tags. They are development infrastructure and do not become game runtime
+dependencies.
+
 ## Reference-only projects
 
 No source, assets, maps, names, or data have been copied from these projects.

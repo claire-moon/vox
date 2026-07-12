@@ -17,13 +17,24 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Install SDL2 development files
         run: sudo apt-get update && sudo apt-get install --yes libsdl2-dev nasm
-      - name: Build native foundation
-        run: cmake -S . -B build -DVOX_BUILD_TESTS=ON -DVOX_BUILD_SDL2_DEMO=ON -DVOX_BUILD_NASM_ACCEL=ON
-      - name: Compile native foundation
-        run: cmake --build build --parallel
-      - name: Run native tests
-        run: ctest --test-dir build --output-on-failure
-      - name: Run DIGS demo smoke test
-        run: build/digs_demo --smoke-test /tmp/digs-demo-smoke.ppm
-      - name: Run Rust tests
-        run: cargo test --workspace
+      - name: Run strict native, NASM, SDL2, and Rust gate
+        env:
+          VOX_BUILD_DIR: ${{ runner.temp }}/vox-verify-build
+          VOX_CARGO_TARGET_DIR: ${{ runner.temp }}/vox-cargo-target
+          VOX_SMOKE_IMAGE: ${{ runner.temp }}/digs-demo-smoke.ppm
+          VOX_NASM_ACCEL: ON
+        run: tools/vox-verify.sh
+      - name: Build Linux x86-64 tester and source bundles
+        env:
+          VOX_PACKAGE_BENCHMARK_FRAMES: 60
+        run: tools/package-linux-demo.sh
+      - name: Upload tester bundles
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vox-digs-v0.0.1-linux-x86_64
+          path: |
+            dist/vox-digs-v0.0.1-linux-x86_64.tar.gz
+            dist/vox-digs-v0.0.1-source.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30

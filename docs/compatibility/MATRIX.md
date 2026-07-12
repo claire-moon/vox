@@ -17,7 +17,7 @@ every machine released since 1990.
 
 | Surface | Exact environment | State | Evidence and boundary |
 |---|---|---|---|
-| Strict portable core and headless tests | Ageless Linux 0.1.1 (Linux Mint 22.3 base), Linux 6.17.0-35 x86-64; Intel Core i7-10750H (6 cores/12 threads); GCC/G++ 13.3.0; CMake 3.28.3; Cargo 1.95.0 | VERIFIED | Strict C89/C++98 configure/build, six native CTests, Rust workspace tests, and both deterministic headless proofs complete on CPU |
+| Strict portable core and headless tests | Ageless Linux 0.1.1 (Linux Mint 22.3 base), Linux 6.17.0-35 x86-64; Intel Core i7-10750H (6 cores/12 threads); GCC/G++ 13.3.0; CMake 3.28.3; Cargo 1.95.0 | VERIFIED | Extension-free strict C89/C++98 configure/build, eight native CTests, Rust workspace tests, and both deterministic headless proofs complete on CPU |
 | Optional NASM contract probe | Same Linux System V x86-64 host; NASM 2.16.01; `VOX_BUILD_NASM_ACCEL=ON` | VERIFIED | Selected FNV-1a leaf matches the C89 oracle for known vectors, invalid input, and every prefix length 0..1024; this is dispatch evidence, not simulation/renderer acceleration or a speed claim |
 | SDL2 software demo smoke | Same host; system SDL2 2.30.0; CPU RGB24 renderer | VERIFIED | Opt-in SDL2 build and fixed non-windowed smoke scenario complete and produce a nonempty `320 x 200` PPM; canonical hashes are recorded only from the frozen release commit |
 | SDL2 interactive desktop host | Same host and CPU renderer | BUILDS | Window/menu/input/texture/audio path compiles; the current non-windowed verification environment cannot complete the manual display/audio checklist in `docs/DEMO.md` |
@@ -27,6 +27,10 @@ every machine released since 1990.
 “VERIFIED” above applies only to the named command surface and evidence. It does
 not promote untested input/audio hardware, a different compiler, another Linux
 distribution, or a GPU path.
+
+The candidate's commands, deterministic hashes, measured CPU Lightfield
+sample, and manual boundary are recorded in
+[v0.0.1 Linux x86-64 acceptance evidence](../releasing/V0.0.1_LINUX_EVIDENCE.md).
 
 ## Evidence-gated adapter tiers
 

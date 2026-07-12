@@ -40,7 +40,7 @@
 ## Publication
 
 - [ ] Known limitations match `docs/DEMO.md`; deferred GPU, networking, large-world, rigid-body, and historical-adapter work is not described as complete.
-- [ ] Source archive and any optional binary archive are reproducible and include GPL license/notices.
+- [ ] Source archive and compiled game payload reproduce from the frozen tree/toolchain and include GPL license/notices; any intentional archive variance from preserved raw timing evidence is documented and the published artifact is checksummed.
 - [ ] `SHA256SUMS` is generated from final artifacts and checked independently.
 - [ ] `v0.0.1-rc.1` receives a clean-checkout soak and manual demo pass.
 - [ ] Final release notes include exact smoke hashes, benchmark context, compatibility state, contributors, and upgrade/ABI warning.
