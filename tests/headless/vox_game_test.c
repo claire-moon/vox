@@ -139,6 +139,82 @@ static int test_player_physics(void)
     return 0;
 }
 
+static int find_tool_target(const vox_world *world, int require_air,
+                            vox_u32 *x_out, vox_u32 *y_out)
+{
+    vox_u32 x;
+    vox_u32 y;
+    for (y = 1U; y + 2U < VOX_WORLD_HEIGHT; ++y) {
+        for (x = 1U; x + 1U < VOX_WORLD_WIDTH; ++x) {
+            const vox_cell *cell = vox_world_cell(world, x, y,
+                                                   VOX_WORLD_DEPTH - 1U);
+            if (cell == 0) {
+                return 0;
+            }
+            if (require_air ? cell->material == VOX_MAT_AIR :
+                              (cell->material != VOX_MAT_AIR &&
+                               cell->material != VOX_MAT_BEDROCK)) {
+                *x_out = x;
+                *y_out = y;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int test_tools(void)
+{
+    static vox_digs_match match;
+    vox_digs_rules rules;
+    const vox_cell *cell;
+    vox_u32 x;
+    vox_u32 y;
+    vox_u32 initial_hash;
+    vox_digs_rules_classic(&rules);
+    rules.bot_count = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK ||
+        !find_tool_target(&match.world, 0, &x, &y)) {
+        return 1;
+    }
+    initial_hash = match.state_hash;
+    if (vox_digs_use_tool(&match, 0U, VOX_DIGS_TOOL_PICK, x, y,
+                           VOX_WORLD_DEPTH - 1U) != VOX_OK) {
+        return 2;
+    }
+    cell = vox_world_cell(&match.world, x, y, VOX_WORLD_DEPTH - 1U);
+    if (cell == 0 || cell->material != VOX_MAT_AIR ||
+        match.state_hash == initial_hash ||
+        !find_tool_target(&match.world, 0, &x, &y) ||
+        vox_digs_use_tool(&match, 0U, VOX_DIGS_TOOL_BLAST_CHARGE, x, y,
+                           VOX_WORLD_DEPTH - 1U) != VOX_OK) {
+        return 3;
+    }
+    if (!find_tool_target(&match.world, 1, &x, &y) ||
+        vox_digs_use_tool(&match, 0U, VOX_DIGS_TOOL_SMOKE_POT, x, y,
+                           VOX_WORLD_DEPTH - 1U) != VOX_OK) {
+        return 4;
+    }
+    cell = vox_world_cell(&match.world, x, y, VOX_WORLD_DEPTH - 1U);
+    if (cell == 0 || cell->material != VOX_MAT_SMOKE ||
+        vox_digs_use_tool(&match, 0U, VOX_DIGS_TOOL_CINDER_FLASK, x, y,
+                           VOX_WORLD_DEPTH - 1U) != VOX_OK) {
+        return 5;
+    }
+    cell = vox_world_cell(&match.world, x, y, VOX_WORLD_DEPTH - 1U);
+    if (cell == 0 || cell->material != VOX_MAT_LAVA ||
+        vox_digs_use_tool(&match, 0U, VOX_DIGS_TOOL_PRESSURE_HOSE, x, y,
+                           VOX_WORLD_DEPTH - 1U) != VOX_OK) {
+        return 6;
+    }
+    cell = vox_world_cell(&match.world, x, y, VOX_WORLD_DEPTH - 1U);
+    if (cell == 0 || cell->material != VOX_MAT_WATER ||
+        vox_digs_match_step(&match) != VOX_OK) {
+        return 7;
+    }
+    return 0;
+}
+
 int main(void)
 {
     vox_digs_rules rules;
@@ -163,6 +239,10 @@ int main(void)
     if (test_player_physics() != 0) {
         fprintf(stderr, "DIGS player physics mismatch\n");
         return 5;
+    }
+    if (test_tools() != 0) {
+        fprintf(stderr, "DIGS terrain tool mismatch\n");
+        return 6;
     }
     if (run_match(&first) != 0 || run_match(&second) != 0 || first != second) {
         fprintf(stderr, "DIGS determinism mismatch\n");

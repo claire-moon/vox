@@ -233,6 +233,59 @@ static int test_chunk_metadata(void)
     return 0;
 }
 
+static int test_blast(void)
+{
+    static vox_world world;
+    const vox_cell *bedrock;
+    const vox_cell *smoke;
+    vox_u32 before;
+    vox_u32 x;
+    vox_u32 y;
+    vox_u32 z;
+    vox_world_init(&world);
+    for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+        for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+            if (vox_world_set(&world, x, 20U, z, VOX_MAT_BEDROCK,
+                              TEST_AMBIENT_Q16) != VOX_OK) {
+                return 1;
+            }
+        }
+        for (y = 15U; y < 20U; ++y) {
+            for (x = 7U; x < 14U; ++x) {
+                if (vox_world_set(&world, x, y, z, VOX_MAT_STONE,
+                                  TEST_AMBIENT_Q16) != VOX_OK) {
+                    return 2;
+                }
+            }
+        }
+    }
+    if (vox_world_sleep_all(&world) != VOX_OK) {
+        return 3;
+    }
+    before = world.occupied_cells;
+    if (vox_world_blast(&world, 10U, 17U, 0U, 2U,
+                        700L << 16) != VOX_OK ||
+        world.occupied_cells >= before) {
+        return 4;
+    }
+    bedrock = vox_world_cell(&world, 10U, 20U, 0U);
+    smoke = vox_world_cell(&world, 10U, 17U, 0U);
+    if (bedrock == 0 || bedrock->material != VOX_MAT_BEDROCK ||
+        smoke == 0 || smoke->material != VOX_MAT_SMOKE ||
+        test_validate_world(&world) != 0) {
+        return 5;
+    }
+    if (vox_world_step(&world, 0) != VOX_OK) {
+        return 6;
+    }
+    smoke = vox_world_cell(&world, 10U, 16U, 0U);
+    if (smoke == 0 || smoke->material != VOX_MAT_SMOKE ||
+        test_validate_world(&world) != 0) {
+        return 7;
+    }
+    return 0;
+}
+
 static int test_cellular_motion(void)
 {
     static vox_world world;
@@ -296,6 +349,10 @@ int main(void)
     if (test_chunk_metadata() != 0) {
         fprintf(stderr, "chunk metadata scenario failed\n");
         return 5;
+    }
+    if (test_blast() != 0) {
+        fprintf(stderr, "blast scenario failed\n");
+        return 6;
     }
     if (run_scenario(&first) != 0 || run_scenario(&second) != 0) {
         return 1;

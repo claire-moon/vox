@@ -288,6 +288,42 @@ vox_result vox_digs_record_kill(vox_digs_match *match, vox_u16 killer,
     return VOX_OK;
 }
 
+vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
+                             vox_u16 tool, vox_u32 x, vox_u32 y, vox_u32 z)
+{
+    const vox_cell *target;
+    vox_result result;
+    if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
+        player >= VOX_DIGS_MAX_SLOTS || !match->alive[player] ||
+        tool >= VOX_DIGS_TOOL_COUNT) {
+        return VOX_ERR_INVALID;
+    }
+    target = vox_world_cell(&match->world, x, y, z);
+    if (target == 0 || target->material == VOX_MAT_BEDROCK) {
+        return VOX_ERR_INVALID;
+    }
+    if (tool == VOX_DIGS_TOOL_PICK) {
+        result = vox_world_set(&match->world, x, y, z, VOX_MAT_AIR,
+                               20L << 16);
+    } else if (tool == VOX_DIGS_TOOL_BLAST_CHARGE) {
+        result = vox_world_blast(&match->world, x, y, z, 3U, 700L << 16);
+    } else if (tool == VOX_DIGS_TOOL_SMOKE_POT) {
+        result = vox_world_set(&match->world, x, y, z, VOX_MAT_SMOKE,
+                               180L << 16);
+    } else if (tool == VOX_DIGS_TOOL_CINDER_FLASK) {
+        result = vox_world_set(&match->world, x, y, z, VOX_MAT_LAVA,
+                               700L << 16);
+    } else {
+        result = vox_world_set(&match->world, x, y, z, VOX_MAT_WATER,
+                               20L << 16);
+    }
+    if (result != VOX_OK) {
+        return result;
+    }
+    match->state_hash = vox_digs_hash(match);
+    return VOX_OK;
+}
+
 vox_u32 vox_digs_hash(const vox_digs_match *match)
 {
     vox_u32 hash = 2166136261U;

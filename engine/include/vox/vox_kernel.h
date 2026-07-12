@@ -74,6 +74,7 @@ typedef struct vox_material_properties {
 
 #define VOX_CHUNK_ACTIVE 1U
 #define VOX_CHUNK_DIRTY 2U
+#define VOX_BLAST_MAX_RADIUS 8U
 
 typedef struct vox_cell {
     vox_u16 material;
@@ -122,6 +123,8 @@ vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
 vox_result vox_world_wake(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z);
 vox_result vox_world_sleep_all(vox_world *world);
 vox_result vox_world_clear_dirty(vox_world *world);
+vox_result vox_world_blast(vox_world *world, vox_u32 x, vox_u32 y,
+                           vox_u32 z, vox_u32 radius, vox_i32 heat_q16);
 vox_result vox_world_step(vox_world *world, const vox_step_command *command);
 vox_u32 vox_world_hash(const vox_world *world);
 const vox_cell *vox_world_cell(const vox_world *world, vox_u32 x, vox_u32 y,

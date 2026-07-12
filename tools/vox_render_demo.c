@@ -34,6 +34,10 @@ static void vox_demo_world(vox_world *world)
         (void)vox_world_set(world, x, 50U, VOX_WORLD_DEPTH - 1U,
                             VOX_MAT_SMOKE, 40L << 16);
     }
+    (void)vox_world_blast(world, 91U, 55U, 0U, 4U, 700L << 16);
+    for (x = 0U; x < 4U; ++x) {
+        (void)vox_world_step(world, 0);
+    }
 }
 
 int main(int argc, char **argv)

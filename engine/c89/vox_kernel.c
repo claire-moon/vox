@@ -500,6 +500,87 @@ vox_result vox_world_clear_dirty(vox_world *world)
     return VOX_OK;
 }
 
+vox_result vox_world_blast(vox_world *world, vox_u32 x, vox_u32 y,
+                           vox_u32 z, vox_u32 radius, vox_i32 heat_q16)
+{
+    long min_x;
+    long max_x;
+    long min_y;
+    long max_y;
+    long sample_x;
+    long sample_y;
+    long radius_squared;
+    vox_u32 depth;
+    if (world == 0 || !vox_in_bounds(x, y, z) ||
+        radius == 0U || radius > VOX_BLAST_MAX_RADIUS) {
+        return VOX_ERR_INVALID;
+    }
+    min_x = (long)x - (long)radius;
+    max_x = (long)x + (long)radius;
+    min_y = (long)y - (long)radius;
+    max_y = (long)y + (long)radius;
+    if (min_x < 0L) {
+        min_x = 0L;
+    }
+    if (min_y < 0L) {
+        min_y = 0L;
+    }
+    if (max_x >= (long)VOX_WORLD_WIDTH) {
+        max_x = (long)VOX_WORLD_WIDTH - 1L;
+    }
+    if (max_y >= (long)VOX_WORLD_HEIGHT) {
+        max_y = (long)VOX_WORLD_HEIGHT - 1L;
+    }
+    radius_squared = (long)radius * (long)radius;
+    for (sample_y = min_y; sample_y <= max_y; ++sample_y) {
+        for (sample_x = min_x; sample_x <= max_x; ++sample_x) {
+            long delta_x = sample_x - (long)x;
+            long delta_y = sample_y - (long)y;
+            if (delta_x * delta_x + delta_y * delta_y > radius_squared) {
+                continue;
+            }
+            for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+                vox_cell *cell = &world->cells[vox_index((vox_u32)sample_x,
+                                                          (vox_u32)sample_y,
+                                                          depth)];
+                vox_chunk *chunk = &world->chunks[vox_chunk_index(
+                    (vox_u32)sample_x, (vox_u32)sample_y)];
+                if (cell->material != VOX_MAT_AIR &&
+                    cell->material != VOX_MAT_BEDROCK) {
+                    vox_clear_cell(world, chunk, vox_index((vox_u32)sample_x,
+                                                           (vox_u32)sample_y,
+                                                           depth), cell);
+                }
+            }
+        }
+    }
+    for (sample_y = min_y > 0L ? min_y - 1L : 0L;
+         sample_y <= max_y + 1L && sample_y < (long)VOX_WORLD_HEIGHT;
+         ++sample_y) {
+        for (sample_x = min_x > 0L ? min_x - 1L : 0L;
+             sample_x <= max_x + 1L && sample_x < (long)VOX_WORLD_WIDTH;
+             ++sample_x) {
+            for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+                if (world->cells[vox_index((vox_u32)sample_x,
+                                            (vox_u32)sample_y,
+                                            depth)].material != VOX_MAT_AIR) {
+                    (void)vox_world_wake(world, (vox_u32)sample_x,
+                                         (vox_u32)sample_y, depth);
+                }
+            }
+        }
+    }
+    for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+        vox_cell *cell = &world->cells[vox_index(x, y, depth)];
+        if (cell->material == VOX_MAT_AIR && heat_q16 > VOX_AMBIENT_Q16 &&
+            vox_world_set(world, x, y, depth, VOX_MAT_SMOKE,
+                          heat_q16) != VOX_OK) {
+            return VOX_ERR_INVALID;
+        }
+    }
+    return VOX_OK;
+}
+
 vox_result vox_world_step(vox_world *world, const vox_step_command *command)
 {
     vox_result result = VOX_OK;

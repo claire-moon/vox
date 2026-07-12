@@ -22,6 +22,15 @@ typedef enum vox_digs_map_style {
     VOX_DIGS_MAP_COUNT = 3
 } vox_digs_map_style;
 
+typedef enum vox_digs_tool {
+    VOX_DIGS_TOOL_PICK = 0,
+    VOX_DIGS_TOOL_BLAST_CHARGE = 1,
+    VOX_DIGS_TOOL_SMOKE_POT = 2,
+    VOX_DIGS_TOOL_CINDER_FLASK = 3,
+    VOX_DIGS_TOOL_PRESSURE_HOSE = 4,
+    VOX_DIGS_TOOL_COUNT = 5
+} vox_digs_tool;
+
 typedef struct vox_digs_rules {
     vox_u32 abi_version;
     vox_u32 struct_size;
@@ -59,6 +68,8 @@ vox_result vox_digs_match_init(vox_digs_match *match,
 vox_result vox_digs_match_step(vox_digs_match *match);
 vox_result vox_digs_record_kill(vox_digs_match *match, vox_u16 killer,
                                 vox_u16 victim);
+vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
+                             vox_u16 tool, vox_u32 x, vox_u32 y, vox_u32 z);
 vox_u32 vox_digs_hash(const vox_digs_match *match);
 
 #endif
