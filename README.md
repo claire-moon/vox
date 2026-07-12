@@ -32,6 +32,10 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+For the complete strict-language gate, run `tools/vox-verify.sh`. It builds
+the C89/C++98 targets out of tree, runs both native determinism tests, runs
+the Rust workspace tests, and prints the VOX and DIGS headless proofs.
+
 The renderer, Rust host, physics layer, Foundry Lab, and DIGS vertical slice
 are added behind the same versioned C ABI.
 
