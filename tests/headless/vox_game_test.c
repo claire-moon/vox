@@ -215,6 +215,82 @@ static int test_tools(void)
     return 0;
 }
 
+static int test_player_controls(void)
+{
+    static vox_digs_match match;
+    vox_digs_rules rules;
+    vox_digs_input input;
+    vox_i32 start_x;
+    vox_i32 start_y;
+    vox_u16 steam_before;
+    vox_u32 tick;
+    vox_digs_rules_classic(&rules);
+    rules.bot_count = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) {
+        return 1;
+    }
+    for (tick = 0U; tick < 120U; ++tick) {
+        if (vox_digs_match_step(&match) != VOX_OK) {
+            return 2;
+        }
+    }
+    if (!(match.players[0].flags & VOX_PHYSICS_BODY_GROUNDED)) {
+        return 3;
+    }
+    input.abi_version = VOX_ABI_VERSION;
+    input.struct_size = (vox_u32)sizeof(input);
+    input.player = 0U;
+    start_x = match.players[0].position_x.value_q16;
+    input.actions = VOX_DIGS_ACTION_RIGHT;
+    if (vox_digs_submit_input(&match, &input) != VOX_OK ||
+        vox_digs_match_step(&match) != VOX_OK ||
+        match.players[0].position_x.value_q16 <= start_x) {
+        return 4;
+    }
+    input.actions = 0U;
+    if (vox_digs_submit_input(&match, &input) != VOX_OK) {
+        return 5;
+    }
+    for (tick = 0U; tick < 120U; ++tick) {
+        if (vox_digs_match_step(&match) != VOX_OK) {
+            return 6;
+        }
+    }
+    if (!(match.players[0].flags & VOX_PHYSICS_BODY_GROUNDED)) {
+        return 7;
+    }
+    start_y = match.players[0].position_y.value_q16;
+    input.actions = VOX_DIGS_ACTION_JUMP;
+    if (vox_digs_submit_input(&match, &input) != VOX_OK ||
+        vox_digs_match_step(&match) != VOX_OK ||
+        match.players[0].position_y.value_q16 >= start_y) {
+        return 8;
+    }
+    input.actions = 0U;
+    if (vox_digs_submit_input(&match, &input) != VOX_OK) {
+        return 9;
+    }
+    for (tick = 0U; tick < 120U; ++tick) {
+        if (vox_digs_match_step(&match) != VOX_OK) {
+            return 10;
+        }
+    }
+    steam_before = match.steam_q16[0];
+    start_y = match.players[0].position_y.value_q16;
+    input.actions = VOX_DIGS_ACTION_STEAM;
+    if (vox_digs_submit_input(&match, &input) != VOX_OK ||
+        vox_digs_match_step(&match) != VOX_OK ||
+        match.steam_q16[0] >= steam_before ||
+        match.players[0].position_y.value_q16 >= start_y) {
+        return 11;
+    }
+    input.actions = (vox_u16)(VOX_DIGS_ACTION_MASK | 16U);
+    if (vox_digs_submit_input(&match, &input) != VOX_ERR_INVALID) {
+        return 12;
+    }
+    return 0;
+}
+
 int main(void)
 {
     vox_digs_rules rules;
@@ -243,6 +319,10 @@ int main(void)
     if (test_tools() != 0) {
         fprintf(stderr, "DIGS terrain tool mismatch\n");
         return 6;
+    }
+    if (test_player_controls() != 0) {
+        fprintf(stderr, "DIGS player control mismatch\n");
+        return 7;
     }
     if (run_match(&first) != 0 || run_match(&second) != 0 || first != second) {
         fprintf(stderr, "DIGS determinism mismatch\n");

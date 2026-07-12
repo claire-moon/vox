@@ -1,6 +1,13 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "vox/vox_game.h"
 
+#define DIGS_RUN_SPEED_Q16 16384L
+#define DIGS_JUMP_SPEED_Q16 (-49152L)
+#define DIGS_STEAM_ACCEL_Q16 8192L
+#define DIGS_MAX_VERTICAL_SPEED_Q16 (4L << 16)
+#define DIGS_STEAM_USE_Q16 1024U
+#define DIGS_STEAM_RECHARGE_Q16 512U
+
 static vox_u32 digs_hash_mix(vox_u32 hash, vox_u32 value)
 {
     hash ^= value;
@@ -171,6 +178,48 @@ static vox_result digs_spawn_player(vox_digs_match *match, vox_u16 player,
     return VOX_ERR_CAPACITY;
 }
 
+static void digs_apply_player_controls(vox_digs_match *match, vox_u16 player)
+{
+    vox_physics_body *body = &match->players[player];
+    vox_u16 actions = match->player_actions[player];
+    if ((actions & (VOX_DIGS_ACTION_LEFT | VOX_DIGS_ACTION_RIGHT)) ==
+        VOX_DIGS_ACTION_LEFT) {
+        body->velocity_x.value_q16 = -DIGS_RUN_SPEED_Q16;
+    } else if ((actions & (VOX_DIGS_ACTION_LEFT | VOX_DIGS_ACTION_RIGHT)) ==
+               VOX_DIGS_ACTION_RIGHT) {
+        body->velocity_x.value_q16 = DIGS_RUN_SPEED_Q16;
+    } else {
+        body->velocity_x.value_q16 = 0;
+    }
+    if ((actions & VOX_DIGS_ACTION_JUMP) &&
+        (body->flags & VOX_PHYSICS_BODY_GROUNDED)) {
+        body->velocity_y.value_q16 = DIGS_JUMP_SPEED_Q16;
+    }
+    if ((actions & VOX_DIGS_ACTION_STEAM) &&
+        match->steam_q16[player] != 0U) {
+        if (body->velocity_y.value_q16 >
+            -DIGS_MAX_VERTICAL_SPEED_Q16 + DIGS_STEAM_ACCEL_Q16) {
+            body->velocity_y.value_q16 -= DIGS_STEAM_ACCEL_Q16;
+        } else {
+            body->velocity_y.value_q16 = -DIGS_MAX_VERTICAL_SPEED_Q16;
+        }
+        if (match->steam_q16[player] <= DIGS_STEAM_USE_Q16) {
+            match->steam_q16[player] = 0U;
+        } else {
+            match->steam_q16[player] = (vox_u16)(match->steam_q16[player] -
+                                                  DIGS_STEAM_USE_Q16);
+        }
+    } else if (body->flags & VOX_PHYSICS_BODY_GROUNDED) {
+        if (match->steam_q16[player] >
+            (vox_u16)(65535U - DIGS_STEAM_RECHARGE_Q16)) {
+            match->steam_q16[player] = 65535U;
+        } else {
+            match->steam_q16[player] = (vox_u16)(match->steam_q16[player] +
+                                                  DIGS_STEAM_RECHARGE_Q16);
+        }
+    }
+}
+
 void vox_digs_rules_classic(vox_digs_rules *rules)
 {
     if (rules == 0) {
@@ -227,6 +276,8 @@ vox_result vox_digs_match_init(vox_digs_match *match,
     for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
         match->scores[i] = 0U;
         match->alive[i] = i <= rules->bot_count ? 1U : 0U;
+        match->player_actions[i] = 0U;
+        match->steam_q16[i] = 65535U;
         vox_physics_body_init(&match->players[i]);
         if (match->alive[i] &&
             digs_spawn_player(match, i,
@@ -252,6 +303,9 @@ vox_result vox_digs_match_step(vox_digs_match *match)
         return VOX_ERR_INVALID;
     }
     for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
+        if (match->alive[i]) {
+            digs_apply_player_controls(match, i);
+        }
         if (match->alive[i] &&
             vox_physics_step_world(&match->players[i], &match->world,
                                    &match->physics_config) != VOX_OK) {
@@ -284,6 +338,22 @@ vox_result vox_digs_record_kill(vox_digs_match *match, vox_u16 killer,
     if (match->scores[killer] >= match->rules.score_limit) {
         match->phase = VOX_DIGS_RESULTS;
     }
+    match->state_hash = vox_digs_hash(match);
+    return VOX_OK;
+}
+
+vox_result vox_digs_submit_input(vox_digs_match *match,
+                                 const vox_digs_input *input)
+{
+    if (match == 0 || input == 0 || match->phase != VOX_DIGS_RUNNING ||
+        input->abi_version != VOX_ABI_VERSION ||
+        input->struct_size < (vox_u32)sizeof(*input) ||
+        input->player >= VOX_DIGS_MAX_SLOTS ||
+        !match->alive[input->player] ||
+        (input->actions & (vox_u16)~VOX_DIGS_ACTION_MASK) != 0U) {
+        return VOX_ERR_INVALID;
+    }
+    match->player_actions[input->player] = input->actions;
     match->state_hash = vox_digs_hash(match);
     return VOX_OK;
 }
@@ -350,6 +420,8 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
     for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
         hash = digs_hash_mix(hash, (vox_u32)match->scores[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->alive[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->player_actions[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->steam_q16[i]);
         hash = digs_hash_mix(hash,
                              (vox_u32)match->players[i].position_x.value_q16);
         hash = digs_hash_mix(hash,

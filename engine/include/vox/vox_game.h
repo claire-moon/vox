@@ -8,6 +8,12 @@
 #define VOX_DIGS_MAX_SLOTS 4U
 #define VOX_DIGS_TICKS_PER_SECOND 60U
 #define VOX_DIGS_MAP_GENERATOR_VERSION 1U
+#define VOX_DIGS_ACTION_LEFT 1U
+#define VOX_DIGS_ACTION_RIGHT 2U
+#define VOX_DIGS_ACTION_JUMP 4U
+#define VOX_DIGS_ACTION_STEAM 8U
+#define VOX_DIGS_ACTION_MASK (VOX_DIGS_ACTION_LEFT | VOX_DIGS_ACTION_RIGHT | \
+                              VOX_DIGS_ACTION_JUMP | VOX_DIGS_ACTION_STEAM)
 
 typedef enum vox_digs_phase {
     VOX_DIGS_SETUP = 0,
@@ -44,6 +50,13 @@ typedef struct vox_digs_rules {
     vox_u32 seed;
 } vox_digs_rules;
 
+typedef struct vox_digs_input {
+    vox_u32 abi_version;
+    vox_u32 struct_size;
+    vox_u16 player;
+    vox_u16 actions;
+} vox_digs_input;
+
 typedef struct vox_digs_match {
     vox_u32 abi_version;
     vox_u32 struct_size;
@@ -54,6 +67,8 @@ typedef struct vox_digs_match {
     vox_digs_phase phase;
     vox_u16 scores[VOX_DIGS_MAX_SLOTS];
     vox_u16 alive[VOX_DIGS_MAX_SLOTS];
+    vox_u16 player_actions[VOX_DIGS_MAX_SLOTS];
+    vox_u16 steam_q16[VOX_DIGS_MAX_SLOTS];
     vox_u32 lava_level_q16;
     vox_u32 terrain_hash;
     vox_physics_step_config physics_config;
@@ -68,6 +83,8 @@ vox_result vox_digs_match_init(vox_digs_match *match,
 vox_result vox_digs_match_step(vox_digs_match *match);
 vox_result vox_digs_record_kill(vox_digs_match *match, vox_u16 killer,
                                 vox_u16 victim);
+vox_result vox_digs_submit_input(vox_digs_match *match,
+                                 const vox_digs_input *input);
 vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
                              vox_u16 tool, vox_u32 x, vox_u32 y, vox_u32 z);
 vox_u32 vox_digs_hash(const vox_digs_match *match);

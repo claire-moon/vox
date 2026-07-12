@@ -17,7 +17,7 @@ typedef char vox_require_16_bit_short[(sizeof(vox_i16) * CHAR_BIT == 16) ?
 typedef char vox_require_32_bit_int[(sizeof(vox_i32) * CHAR_BIT == 32) ?
                                       1 : -1];
 
-#define VOX_ABI_VERSION 4U
+#define VOX_ABI_VERSION 5U
 
 typedef vox_u32 vox_result;
 

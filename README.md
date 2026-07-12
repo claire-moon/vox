@@ -48,6 +48,10 @@ kill attribution, deterministic lava timing, map-style/seed generation, and a
 headless DIGS scenario. Each living slot now owns a terrain-colliding physics
 body and deterministic spawn point. It is not yet the graphical demo.
 
+The current input contract supports left/right running, grounded jumping, and
+a rechargeable steam jet. Rendering cadence remains separate from these fixed
+simulation ticks.
+
 The first callable terrain tools are the Pick, Blast Charge, Smoke Pot, Cinder
 Flask, and Pressure Hose. They route through the same authoritative material
 world and are deliberately a focused foundation for the larger steampunk
