@@ -1,0 +1,32 @@
+VOX + DIGS SUPPORT ROADMAP
+
+Support states:
+  PLANNED    design target only
+  BUILDS     reproducible build exists
+  RUNS       boots and completes smoke scenario
+  VERIFIED   native or reproducible acceptance evidence recorded
+  UNSUPPORTED explicitly not targeted by the current profile
+
+v0.0.1 VERIFIED target:
+  Linux x86-64 / current test laptop / software renderer and SDL3-GPU path
+  (GPU status pending driver/device preflight)
+
+Modern future targets:
+  Windows 10/11 x86-64
+  macOS 11+ Intel/Apple Silicon
+  Linux ARM64 and additional x86-64 distributions
+
+Compatibility future targets:
+  Windows XP/7, older i686 Linux, older Intel macOS
+  OpenGL/D3D9 and software framebuffer profiles
+
+Retro future targets:
+  DOS, Windows 3.1/95/98/NT4/2000, and period Linux
+  320x200/640x480 software profiles
+
+Classic Mac future targets:
+  System 7/8/9 on 68k/PPC using QuickDraw/native adapters
+
+No platform becomes VERIFIED from a compile alone. Record the exact OS,
+CPU, GPU/API, compiler, build, boot, input, render, match-completion, and
+performance evidence before advertising support.

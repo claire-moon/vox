@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: foundation-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build native foundation
+        run: cmake -S . -B build -DVOX_BUILD_TESTS=ON
+      - name: Compile native foundation
+        run: cmake --build build --parallel
+      - name: Run native tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Run Rust tests
+        run: cargo test --workspace

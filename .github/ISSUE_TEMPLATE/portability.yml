@@ -1,0 +1,30 @@
+name: Portability report
+description: Report a build or runtime result for a platform tuple.
+title: "port: "
+labels: [portability]
+body:
+  - type: input
+    id: tuple
+    attributes:
+      label: Exact platform tuple
+      description: OS version, CPU, GPU/API, compiler, and profile.
+    validations:
+      required: true
+  - type: dropdown
+    id: state
+    attributes:
+      label: Evidence state
+      options:
+        - BUILDS
+        - RUNS
+        - VERIFIED
+        - UNSUPPORTED
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Attach commands, logs, replay hash, screenshots, and timings.
+    validations:
+      required: true

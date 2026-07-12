@@ -1,0 +1,26 @@
+name: Bug report
+description: Report a reproducible VOX or DIGS problem.
+title: "bug: "
+labels: [bug]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Include seed, rules, replay, commands, and expected behavior.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform tuple
+      description: OS, CPU, GPU/API, compiler, and VOX commit.
+    validations:
+      required: true

@@ -1,0 +1,12 @@
+/build/
+/target/
+/.cache/
+*.log
+*.dSYM/
+*.user
+*.swp
+lab/**/roms/
+lab/**/disks/
+lab/**/snapshots/
+benchmarks/results/
+runtime/
