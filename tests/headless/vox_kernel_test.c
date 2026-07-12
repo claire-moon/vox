@@ -51,14 +51,64 @@ static int test_materials_and_sleep(void)
     if (vox_world_step(&world, 0) != VOX_OK || world.awake_cells != 0U) {
         return 4;
     }
-    if (vox_world_set(&world, 2U, 2U, 2U, VOX_MAT_WATER, 120L << 16) != VOX_OK) {
+    if (vox_world_set(&world, 1U, 3U, 2U, VOX_MAT_BEDROCK, 20L << 16) != VOX_OK ||
+        vox_world_set(&world, 2U, 3U, 2U, VOX_MAT_BEDROCK, 20L << 16) != VOX_OK ||
+        vox_world_set(&world, 3U, 3U, 2U, VOX_MAT_BEDROCK, 20L << 16) != VOX_OK) {
         return 5;
     }
-    if (vox_world_step(&world, 0) != VOX_OK) {
+    if (vox_world_set(&world, 2U, 2U, 2U, VOX_MAT_WATER, 120L << 16) != VOX_OK) {
         return 6;
+    }
+    if (vox_world_step(&world, 0) != VOX_OK) {
+        return 7;
     }
     water = vox_world_cell(&world, 2U, 2U, 2U);
     if (water == 0 || !(water->flags & VOX_CELL_PHASE_GAS)) {
+        return 8;
+    }
+    return 0;
+}
+
+static int test_cellular_motion(void)
+{
+    vox_world world;
+    const vox_cell *sand;
+    const vox_cell *smoke;
+    vox_u32 x;
+    vox_u32 i;
+    vox_world_init(&world);
+    for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+        if (vox_world_set(&world, x, VOX_WORLD_HEIGHT - 1U, 0U,
+                          VOX_MAT_BEDROCK, 20L << 16) != VOX_OK) {
+            return 1;
+        }
+    }
+    if (vox_world_set(&world, VOX_WORLD_WIDTH / 2U, 1U, 0U,
+                      VOX_MAT_SAND, 20L << 16) != VOX_OK) {
+        return 2;
+    }
+    for (i = 0U; i < VOX_WORLD_HEIGHT + 2U; ++i) {
+        if (vox_world_step(&world, 0) != VOX_OK) {
+            return 3;
+        }
+    }
+    sand = vox_world_cell(&world, VOX_WORLD_WIDTH / 2U,
+                          VOX_WORLD_HEIGHT - 2U, 0U);
+    if (sand == 0 || sand->material != VOX_MAT_SAND) {
+        return 4;
+    }
+    if (vox_world_set(&world, VOX_WORLD_WIDTH / 2U, VOX_WORLD_HEIGHT - 3U,
+                      1U, VOX_MAT_SMOKE, 20L << 16) != VOX_OK) {
+        return 5;
+    }
+    for (i = 0U; i < 4U; ++i) {
+        if (vox_world_step(&world, 0) != VOX_OK) {
+            return 6;
+        }
+    }
+    smoke = vox_world_cell(&world, VOX_WORLD_WIDTH / 2U,
+                           VOX_WORLD_HEIGHT - 7U, 1U);
+    if (smoke == 0 || smoke->material != VOX_MAT_SMOKE) {
         return 7;
     }
     return 0;
@@ -71,6 +121,10 @@ int main(void)
     if (test_materials_and_sleep() != 0) {
         fprintf(stderr, "material/sleep scenario failed\n");
         return 3;
+    }
+    if (test_cellular_motion() != 0) {
+        fprintf(stderr, "cellular motion scenario failed\n");
+        return 4;
     }
     if (run_scenario(&first) != 0 || run_scenario(&second) != 0) {
         return 1;

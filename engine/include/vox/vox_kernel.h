@@ -50,6 +50,7 @@ typedef struct vox_material_properties {
 #define VOX_CELL_OCCUPIED 1U
 #define VOX_CELL_AWAKE 2U
 #define VOX_CELL_PHASE_GAS 4U
+#define VOX_CELL_MOVED 8U
 
 typedef struct vox_cell {
     vox_u16 material;

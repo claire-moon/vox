@@ -22,6 +22,7 @@ The first implementation slice is a strict C89 headless kernel with:
 - fixed-width integer state and deterministic stepping;
 - a shallow voxel slab with activity/sleep flags;
 - the 14-material catalog with phase and activity flags;
+- deterministic cellular motion for sand, liquids, and gases;
 - canonical state hashing and a repeatable scenario test.
 
 Run it with:

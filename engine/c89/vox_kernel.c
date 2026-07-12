@@ -56,6 +56,142 @@ static void vox_wake_cell(vox_world *world, vox_cell *cell)
     }
 }
 
+static void vox_clear_cell(vox_world *world, vox_cell *cell)
+{
+    if (cell->flags & VOX_CELL_AWAKE) {
+        world->awake_cells--;
+    }
+    if (cell->flags & VOX_CELL_OCCUPIED) {
+        world->occupied_cells--;
+    }
+    cell->material = VOX_MAT_AIR;
+    cell->flags = 0U;
+    cell->temperature_q16 = VOX_AMBIENT_Q16;
+    cell->damage_q16 = 0L;
+}
+
+static int vox_is_falling_material(vox_u16 material)
+{
+    return material == VOX_MAT_SAND || material == VOX_MAT_WATER ||
+           material == VOX_MAT_LAVA || material == VOX_MAT_BLOOD;
+}
+
+static int vox_is_gas_cell(const vox_cell *cell)
+{
+    return cell->material == VOX_MAT_SMOKE || cell->material == VOX_MAT_FIREDAMP ||
+           (cell->flags & VOX_CELL_PHASE_GAS);
+}
+
+static int vox_try_move(vox_world *world, vox_u32 source_x, vox_u32 source_y,
+                        vox_u32 source_z, int delta_x, int delta_y)
+{
+    long destination_x = (long)source_x + (long)delta_x;
+    long destination_y = (long)source_y + (long)delta_y;
+    vox_cell *source;
+    vox_cell *destination;
+    vox_cell original;
+    vox_cell *above;
+    if (destination_x < 0L || destination_y < 0L ||
+        destination_x >= (long)VOX_WORLD_WIDTH ||
+        destination_y >= (long)VOX_WORLD_HEIGHT) {
+        return 0;
+    }
+    source = &world->cells[vox_index(source_x, source_y, source_z)];
+    destination = &world->cells[vox_index((vox_u32)destination_x,
+                                          (vox_u32)destination_y, source_z)];
+    if (source->material == VOX_MAT_AIR || destination->material != VOX_MAT_AIR) {
+        return 0;
+    }
+    original = *source;
+    vox_clear_cell(world, source);
+    destination->material = original.material;
+    destination->flags = (vox_u16)(original.flags & VOX_CELL_PHASE_GAS);
+    destination->temperature_q16 = original.temperature_q16;
+    destination->damage_q16 = original.damage_q16;
+    vox_update_active(world, destination);
+    vox_wake_cell(world, destination);
+    destination->flags = (vox_u16)(destination->flags | VOX_CELL_MOVED);
+    if (source_y > 0U) {
+        above = &world->cells[vox_index(source_x, source_y - 1U, source_z)];
+        if (above->material != VOX_MAT_AIR) {
+            vox_wake_cell(world, above);
+        }
+    }
+    return 1;
+}
+
+static void vox_step_falling(vox_world *world)
+{
+    vox_u32 depth;
+    vox_u32 y;
+    vox_u32 x;
+    for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+        for (y = VOX_WORLD_HEIGHT - 1U; y > 0U; --y) {
+            vox_u32 source_y = y - 1U;
+            for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+                vox_cell *cell = &world->cells[vox_index(x, source_y, depth)];
+                int moved = 0;
+                int prefer_left;
+                if (!(cell->flags & VOX_CELL_AWAKE) ||
+                    (cell->flags & VOX_CELL_PHASE_GAS) ||
+                    !vox_is_falling_material(cell->material)) {
+                    continue;
+                }
+                moved = vox_try_move(world, x, source_y, depth, 0, 1);
+                if (!moved) {
+                    prefer_left = (int)((world->tick + x + source_y + depth) & 1U);
+                    if (prefer_left) {
+                        moved = vox_try_move(world, x, source_y, depth, -1, 1);
+                        if (!moved) {
+                            (void)vox_try_move(world, x, source_y, depth, 1, 1);
+                        }
+                    } else {
+                        moved = vox_try_move(world, x, source_y, depth, 1, 1);
+                        if (!moved) {
+                            (void)vox_try_move(world, x, source_y, depth, -1, 1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void vox_step_gases(vox_world *world)
+{
+    vox_u32 depth;
+    vox_u32 y;
+    vox_u32 x;
+    for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+        for (y = 0U; y + 1U < VOX_WORLD_HEIGHT; ++y) {
+            vox_u32 source_y = y + 1U;
+            for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+                vox_cell *cell = &world->cells[vox_index(x, source_y, depth)];
+                int moved = 0;
+                int prefer_left;
+                if (!(cell->flags & VOX_CELL_AWAKE) || !vox_is_gas_cell(cell)) {
+                    continue;
+                }
+                moved = vox_try_move(world, x, source_y, depth, 0, -1);
+                if (!moved) {
+                    prefer_left = (int)((world->tick + x + source_y + depth) & 1U);
+                    if (prefer_left) {
+                        moved = vox_try_move(world, x, source_y, depth, -1, -1);
+                        if (!moved) {
+                            (void)vox_try_move(world, x, source_y, depth, 1, -1);
+                        }
+                    } else {
+                        moved = vox_try_move(world, x, source_y, depth, 1, -1);
+                        if (!moved) {
+                            (void)vox_try_move(world, x, source_y, depth, -1, -1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 void vox_world_init(vox_world *world)
 {
     vox_u32 i;
@@ -129,12 +265,17 @@ vox_result vox_world_step(vox_world *world, const vox_step_command *command)
             return result;
         }
     }
+    vox_step_falling(world);
+    vox_step_gases(world);
     for (i = 0U; i < VOX_WORLD_CELLS; ++i) {
         vox_cell *cell = &world->cells[i];
         if (!(cell->flags & VOX_CELL_AWAKE)) {
             continue;
         }
-        if (cell->material == VOX_MAT_WATER && cell->temperature_q16 > (100L << 16)) {
+        if (cell->flags & VOX_CELL_MOVED) {
+            cell->flags = (vox_u16)(cell->flags & (vox_u16)~VOX_CELL_MOVED);
+        } else if (cell->material == VOX_MAT_WATER &&
+                   cell->temperature_q16 > (100L << 16)) {
             cell->flags = (vox_u16)(cell->flags | VOX_CELL_PHASE_GAS);
             cell->temperature_q16 = 80L << 16;
         } else if (cell->material == VOX_MAT_LAVA && cell->temperature_q16 < (650L << 16)) {

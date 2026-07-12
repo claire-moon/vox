@@ -14,6 +14,12 @@ biomass, sand, water, lava, metal, flesh, blood, smoke, and firedamp. A cell
 can remain occupied while changing phase, such as water becoming a gaseous
 steam state. Occupancy and wake state are tracked independently.
 
+The first cellular pass is deterministic and bounded: sand, water, lava, and
+blood fall one cell per tick; smoke, firedamp, and gaseous water rise one cell
+per tick. Diagonal fallback is selected from the match tick and cell position,
+not a mutable random stream. A moved voxel remains awake for the next tick;
+settled voxels sleep.
+
 ## Determinism rule
 
 State changes are integer-only and ordered by stable cell index. The scalar
