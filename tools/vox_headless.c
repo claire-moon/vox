@@ -21,9 +21,10 @@ int main(void)
         }
         command.material = VOX_MAT_AIR;
     }
-    printf("VOX headless tick=%u active=%u hash=%08x\n",
+    printf("VOX headless tick=%u occupied=%u awake=%u hash=%08x\n",
            (unsigned int)world.tick,
-           (unsigned int)world.active_cells,
+           (unsigned int)world.occupied_cells,
+           (unsigned int)world.awake_cells,
            (unsigned int)vox_world_hash(&world));
     return 0;
 }

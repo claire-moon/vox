@@ -9,6 +9,11 @@ activity queues, fixed-point body/particle pools, and a renderer-neutral C
 ABI. The small `32 x 24 x 4` world in this slice keeps the first build easy to
 run on every compiler while the interfaces stabilize.
 
+The material IDs are stable across profiles: air, bedrock, stone, soil, coal,
+biomass, sand, water, lava, metal, flesh, blood, smoke, and firedamp. A cell
+can remain occupied while changing phase, such as water becoming a gaseous
+steam state. Occupancy and wake state are tracked independently.
+
 ## Determinism rule
 
 State changes are integer-only and ordered by stable cell index. The scalar

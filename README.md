@@ -21,7 +21,7 @@ The first implementation slice is a strict C89 headless kernel with:
 
 - fixed-width integer state and deterministic stepping;
 - a shallow voxel slab with activity/sleep flags;
-- material definitions for air, stone, soil, water, lava, and bedrock;
+- the 14-material catalog with phase and activity flags;
 - canonical state hashing and a repeatable scenario test.
 
 Run it with:

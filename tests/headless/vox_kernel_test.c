@@ -29,10 +29,49 @@ static int run_scenario(vox_u32 *hash_out)
     return 0;
 }
 
+static int test_materials_and_sleep(void)
+{
+    vox_world world;
+    const vox_material_properties *lava;
+    const vox_material_properties *bedrock;
+    const vox_cell *water;
+    vox_world_init(&world);
+    lava = vox_material_get(VOX_MAT_LAVA);
+    bedrock = vox_material_get(VOX_MAT_BEDROCK);
+    if (lava == 0 || bedrock == 0 ||
+        !(lava->flags & VOX_MATERIAL_EMISSIVE) || bedrock->strength == 0U) {
+        return 1;
+    }
+    if (vox_world_set(&world, 1U, 1U, 1U, VOX_MAT_STONE, 20L << 16) != VOX_OK) {
+        return 2;
+    }
+    if (world.occupied_cells != 1U || world.awake_cells != 1U) {
+        return 3;
+    }
+    if (vox_world_step(&world, 0) != VOX_OK || world.awake_cells != 0U) {
+        return 4;
+    }
+    if (vox_world_set(&world, 2U, 2U, 2U, VOX_MAT_WATER, 120L << 16) != VOX_OK) {
+        return 5;
+    }
+    if (vox_world_step(&world, 0) != VOX_OK) {
+        return 6;
+    }
+    water = vox_world_cell(&world, 2U, 2U, 2U);
+    if (water == 0 || !(water->flags & VOX_CELL_PHASE_GAS)) {
+        return 7;
+    }
+    return 0;
+}
+
 int main(void)
 {
     vox_u32 first;
     vox_u32 second;
+    if (test_materials_and_sleep() != 0) {
+        fprintf(stderr, "material/sleep scenario failed\n");
+        return 3;
+    }
     if (run_scenario(&first) != 0 || run_scenario(&second) != 0) {
         return 1;
     }
