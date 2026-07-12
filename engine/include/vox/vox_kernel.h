@@ -65,6 +65,7 @@ typedef struct vox_material_properties {
 #define VOX_MATERIAL_FLUID 2U
 #define VOX_MATERIAL_GAS 4U
 #define VOX_MATERIAL_EMISSIVE 8U
+#define VOX_MATERIAL_SOLID 16U
 
 #define VOX_CELL_OCCUPIED 1U
 #define VOX_CELL_AWAKE 2U
@@ -110,6 +111,10 @@ typedef struct vox_step_command {
     vox_i16 temperature_delta_q8;
 } vox_step_command;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void vox_world_init(vox_world *world);
 const vox_material_properties *vox_material_get(vox_u16 material);
 vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
@@ -123,5 +128,9 @@ const vox_cell *vox_world_cell(const vox_world *world, vox_u32 x, vox_u32 y,
                                vox_u32 z);
 const vox_chunk *vox_world_chunk(const vox_world *world, vox_u32 chunk_x,
                                  vox_u32 chunk_y);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

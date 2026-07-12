@@ -2,7 +2,7 @@
 //! Modern host boundary. Authoritative simulation remains in the C ABI.
 
 /// ABI version shared with the native headers.
-pub const ABI_VERSION: u32 = 2;
+pub const ABI_VERSION: u32 = 3;
 
 /// A small, dependency-free host capability record for the foundation slice.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

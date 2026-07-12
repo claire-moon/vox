@@ -25,6 +25,7 @@ The first implementation slice is a strict C89 headless kernel with:
 - the 14-material catalog with phase and activity flags;
 - deterministic cellular motion for sand, liquids, and gases;
 - deterministic Coal Ridge, Deepworks, and Furnace Yard terrain generation;
+- a strict C++98 fixed-point collision sidecar for bodies against voxel terrain;
 - canonical state hashing and repeatable kernel and DIGS scenarios.
 
 Run it with:
