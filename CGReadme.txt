@@ -87,7 +87,7 @@ Deterministic smoke test:
 A good result exits successfully and prints these values:
 
   state hash: d49e20fd
-  frame hash: pending release package rebuild
+  frame hash: 4ed9909b
 
 CPU Lightfield benchmark:
 
