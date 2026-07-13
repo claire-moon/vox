@@ -5,13 +5,13 @@
 #include "vox_types.h"
 
 #ifndef VOX_WORLD_WIDTH
-#define VOX_WORLD_WIDTH 128U
+#define VOX_WORLD_WIDTH 256U
 #endif
 #ifndef VOX_WORLD_HEIGHT
-#define VOX_WORLD_HEIGHT 80U
+#define VOX_WORLD_HEIGHT 160U
 #endif
 #ifndef VOX_WORLD_DEPTH
-#define VOX_WORLD_DEPTH 4U
+#define VOX_WORLD_DEPTH 10U
 #endif
 #ifndef VOX_CHUNK_WIDTH
 #define VOX_CHUNK_WIDTH 16U
@@ -75,7 +75,7 @@ typedef struct vox_material_properties {
 
 #define VOX_CHUNK_ACTIVE 1U
 #define VOX_CHUNK_DIRTY 2U
-#define VOX_BLAST_MAX_RADIUS 8U
+#define VOX_BLAST_MAX_RADIUS 16U
 
 typedef struct vox_cell {
     vox_u16 material;

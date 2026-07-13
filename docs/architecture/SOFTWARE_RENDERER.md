@@ -2,11 +2,11 @@
 # Software Lightfield renderer
 
 The software renderer is VOX's portable presentation oracle. It projects the
-four-layer shallow voxel slab into a caller-owned RGB24 framebuffer without an
+ten-layer mini-voxel slab into a caller-owned RGB24 framebuffer without an
 OS, window, GPU, allocator, floating-point calculation, or external asset.
 
 For each `x/y` world location, the renderer resolves the frontmost non-air cell
-across depth. It initializes a `128 x 80` RGB lightfield with vertical ambient
+across depth. It initializes a `256 x 160` RGB lightfield with vertical ambient
 skylight, injects colored emission from lava and sufficiently hot material,
 and propagates the maximum attenuated neighbor light. Air transmits farther
 than occupied cells. The final pass samples material palette color and the
@@ -24,7 +24,7 @@ materials also emit visible colored light, at predictable fixed cost.
 |---|---:|---|
 | `VOX_GI_COMPATIBILITY` | 1 | Minimum propagation work |
 | `VOX_GI_BALANCED` | 3 | Default demo presentation |
-| `VOX_GI_SHOWCASE` | 6 | Wider propagation where CPU time permits |
+| `VOX_GI_SHOWCASE` | 5 | Wider propagation where CPU time permits |
 
 Quality is a presentation setting and is excluded from authoritative state.
 All tiers share surface visibility, emission injection, integer arithmetic,

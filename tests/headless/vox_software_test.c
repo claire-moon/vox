@@ -2,8 +2,8 @@
 #include <stdio.h>
 #include "vox/vox_render.h"
 
-#define TEST_WIDTH 64U
-#define TEST_HEIGHT 48U
+#define TEST_WIDTH 256U
+#define TEST_HEIGHT 160U
 
 static vox_u8 pixels_a[TEST_WIDTH * TEST_HEIGHT * VOX_SOFTWARE_RGB_BYTES];
 static vox_u8 pixels_b[TEST_WIDTH * TEST_HEIGHT * VOX_SOFTWARE_RGB_BYTES];
@@ -15,6 +15,7 @@ static int render_scene(vox_u8 *pixels, vox_u16 gi_quality,
     vox_software_target target;
     vox_software_config config;
     vox_u32 x;
+    vox_u32 y;
     vox_world_init(&world);
     for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
         if (vox_world_set(&world, x, VOX_WORLD_HEIGHT - 1U, 0U,
@@ -24,10 +25,14 @@ static int render_scene(vox_u8 *pixels, vox_u16 gi_quality,
             return 1;
         }
     }
-    if (vox_world_set(&world, VOX_WORLD_WIDTH / 2U,
-                      VOX_WORLD_HEIGHT - 3U, 3U,
-                      VOX_MAT_LAVA, 700L << 16) != VOX_OK) {
-        return 2;
+    for (y = VOX_WORLD_HEIGHT - 12U; y < VOX_WORLD_HEIGHT - 4U; ++y) {
+        for (x = VOX_WORLD_WIDTH / 2U - 4U;
+             x < VOX_WORLD_WIDTH / 2U + 4U; ++x) {
+            if (vox_world_set(&world, x, y, VOX_WORLD_DEPTH - 1U,
+                              VOX_MAT_LAVA, 700L << 16) != VOX_OK) {
+                return 2;
+            }
+        }
     }
     target.abi_version = VOX_ABI_VERSION;
     target.struct_size = (vox_u32)sizeof(target);

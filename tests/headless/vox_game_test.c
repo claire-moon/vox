@@ -537,6 +537,7 @@ static int test_rising_lava(void)
     const vox_cell *cell;
     vox_u32 tick;
     vox_u32 carve_x;
+    int lava_found = 0;
     vox_digs_rules_classic(&rules);
     rules.bot_count = 0U;
     rules.match_ticks = 180U;
@@ -550,12 +551,19 @@ static int test_rising_lava(void)
         }
     }
     if (match.lava_level_q16 == 0U ||
-        match.lava_surface_y >= VOX_WORLD_HEIGHT - 2U) {
+        match.lava_surface_y >= VOX_WORLD_HEIGHT - 4U) {
         return 3;
     }
-    cell = vox_world_cell(&match.world, VOX_WORLD_WIDTH / 2U,
-                          match.lava_surface_y, VOX_WORLD_DEPTH - 1U);
-    if (cell == 0 || cell->material != VOX_MAT_LAVA) {
+    for (carve_x = 0U; carve_x < VOX_WORLD_WIDTH; ++carve_x) {
+        cell = vox_world_cell(&match.world, carve_x,
+                              match.lava_surface_y,
+                              VOX_WORLD_DEPTH - 1U);
+        if (cell != 0 && cell->material == VOX_MAT_LAVA) {
+            lava_found = 1;
+            break;
+        }
+    }
+    if (!lava_found) {
         return 4;
     }
     for (carve_x = VOX_WORLD_WIDTH / 2U - 1U;

@@ -25,8 +25,9 @@ C89 material world   C++98 fixed-point bodies
  SDL2 texture / custom UI / procedural audio
 ```
 
-The bounded development profile is `128 x 80 x 4`, split into forty
-`16 x 16 x 4` chunks. It is small enough for strict-language test cycles while
+The bounded dense profile is `256 x 160 x 10`, split into 160
+`16 x 16 x 10` chunks. Its 409,600 cells are exactly ten times the original
+demo volume while remaining practical for strict-language test cycles and
 exercising map-sized storage, cross-chunk material motion, sleeping, dirty
 regions, projectiles, reactions, hazards, and multiple miners. A future large
 profile may use a `2048 x 1024 x 4` shallow slab, cold-chunk compression, and

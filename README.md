@@ -13,8 +13,9 @@ only after their own reproducible acceptance evidence is recorded.
 
 ## Demo highlights
 
-- A bounded `128 x 80 x 4` shallow-voxel world, partitioned into forty
-  `16 x 16 x 4` active/sleeping chunks.
+- A bounded `256 x 160 x 10` mini-voxel world: 409,600 simulated cells,
+  exactly 10x the original demo volume, partitioned into 160
+  `16 x 16 x 10` active/sleeping chunks.
 - Four-player Classic FFA with one local player and zero to three deterministic
   bots, health, damage, scoring, death effects, respawns, and match results.
 - Coal Ridge, Deepworks, and Furnace Yard maps generated from a visible seed.

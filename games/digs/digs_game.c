@@ -1,38 +1,40 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "vox/vox_game.h"
 
-#define DIGS_RUN_SPEED_Q16 16384L
-#define DIGS_JUMP_SPEED_Q16 (-49152L)
-#define DIGS_STEAM_ACCEL_Q16 8192L
-#define DIGS_MAX_VERTICAL_SPEED_Q16 (4L << 16)
+#define DIGS_DENSITY_SCALE 2U
+#define DIGS_SCALE(value) ((value) * DIGS_DENSITY_SCALE)
+#define DIGS_RUN_SPEED_Q16 32768L
+#define DIGS_JUMP_SPEED_Q16 (-98304L)
+#define DIGS_STEAM_ACCEL_Q16 16384L
+#define DIGS_MAX_VERTICAL_SPEED_Q16 (8L << 16)
 #define DIGS_STEAM_USE_Q16 1024U
 #define DIGS_STEAM_RECHARGE_Q16 512U
 #define DIGS_PROJECTILE_SUBSTEPS 4U
-#define DIGS_PROJECTILE_GRAVITY_Q16 3072L
+#define DIGS_PROJECTILE_GRAVITY_Q16 6144L
 #define DIGS_REACTION_SAMPLES 128U
 
 static const vox_digs_weapon_properties digs_weapons[VOX_DIGS_TOOL_COUNT] = {
-    {"PICK", 10U, 28U, 1U, 0U, 0U, VOX_DIGS_WEAPON_MELEE},
-    {"BLAST CHARGE", 45U, 72U, 4U, 256U, 60U,
+    {"PICK", 10U, 28U, 2U, 0U, 0U, VOX_DIGS_WEAPON_MELEE},
+    {"BLAST CHARGE", 45U, 72U, 8U, 512U, 60U,
      VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_EXPLOSIVE |
      VOX_DIGS_WEAPON_GRAVITY},
-    {"SMOKE POT", 35U, 0U, 2U, 320U, 45U,
+    {"SMOKE POT", 35U, 0U, 4U, 640U, 45U,
      VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_DEPOSIT |
      VOX_DIGS_WEAPON_GRAVITY},
-    {"CINDER FLASK", 30U, 12U, 2U, 384U, 40U,
+    {"CINDER FLASK", 30U, 12U, 4U, 768U, 40U,
      VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_DEPOSIT |
      VOX_DIGS_WEAPON_GRAVITY},
-    {"PRESSURE HOSE", 4U, 4U, 0U, 768U, 12U,
+    {"PRESSURE HOSE", 4U, 4U, 0U, 1536U, 12U,
      VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_DEPOSIT},
-    {"SLEDGE", 28U, 48U, 2U, 0U, 0U, VOX_DIGS_WEAPON_MELEE},
-    {"NAIL GUN", 5U, 18U, 0U, 1024U, 40U,
+    {"SLEDGE", 28U, 48U, 4U, 0U, 0U, VOX_DIGS_WEAPON_MELEE},
+    {"NAIL GUN", 5U, 18U, 0U, 2048U, 40U,
      VOX_DIGS_WEAPON_PROJECTILE},
-    {"BOILER SHOTGUN", 36U, 14U, 1U, 896U, 20U,
+    {"BOILER SHOTGUN", 36U, 14U, 2U, 1792U, 20U,
      VOX_DIGS_WEAPON_PROJECTILE},
-    {"CONCUSSION GRENADE", 46U, 38U, 5U, 384U, 50U,
+    {"CONCUSSION GRENADE", 46U, 38U, 10U, 768U, 50U,
      VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_EXPLOSIVE |
      VOX_DIGS_WEAPON_GRAVITY},
-    {"NAIL BOMB", 56U, 62U, 4U, 320U, 55U,
+    {"NAIL BOMB", 56U, 62U, 8U, 640U, 55U,
      VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_EXPLOSIVE |
      VOX_DIGS_WEAPON_GRAVITY}
 };
@@ -73,8 +75,8 @@ static vox_u32 digs_noise(vox_u32 seed, vox_u32 x, vox_u32 y, vox_u32 salt)
 
 static vox_u32 digs_surface_y(vox_u32 seed, vox_u32 x, vox_u16 map_style)
 {
-    vox_u32 anchor = x / 8U;
-    vox_u32 offset = x % 8U;
+    vox_u32 anchor = x / DIGS_SCALE(8U);
+    vox_u32 offset = x % DIGS_SCALE(8U);
     vox_u32 left_noise = digs_noise(seed, anchor, 0U,
                                     (vox_u32)map_style + 1U);
     vox_u32 right_noise = digs_noise(seed, anchor + 1U, 0U,
@@ -85,9 +87,9 @@ static vox_u32 digs_surface_y(vox_u32 seed, vox_u32 x, vox_u16 map_style)
     vox_u32 right = VOX_WORLD_HEIGHT / 2U +
                     (right_noise % (amplitude + 1U));
     if (right >= left) {
-        return left + ((right - left) * offset) / 8U;
+        return left + ((right - left) * offset) / DIGS_SCALE(8U);
     }
-    return left - ((left - right) * offset) / 8U;
+    return left - ((left - right) * offset) / DIGS_SCALE(8U);
 }
 
 static vox_u16 digs_map_material(vox_u16 map_style, vox_u32 seed,
@@ -95,7 +97,7 @@ static vox_u16 digs_map_material(vox_u16 map_style, vox_u32 seed,
 {
     vox_u32 surface = digs_surface_y(seed, x, map_style);
     vox_u32 noise = digs_noise(seed, x, y, (vox_u32)map_style + 17U);
-    if (y >= VOX_WORLD_HEIGHT - 2U) {
+    if (y >= VOX_WORLD_HEIGHT - DIGS_SCALE(2U)) {
         return VOX_MAT_BEDROCK;
     }
     if (map_style == VOX_DIGS_MAP_COAL_RIDGE) {
@@ -105,19 +107,20 @@ static vox_u16 digs_map_material(vox_u16 map_style, vox_u32 seed,
         if (y == surface) {
             return (noise % 9U) < 2U ? VOX_MAT_SAND : VOX_MAT_BIOMASS;
         }
-        if (y <= surface + 2U && (noise % 31U) == 0U) {
+        if (y <= surface + DIGS_SCALE(2U) && (noise % 31U) == 0U) {
             return VOX_MAT_SAND;
         }
-        if (y > surface + 3U && (noise % 17U) == 0U) {
+        if (y > surface + DIGS_SCALE(3U) && (noise % 17U) == 0U) {
             return VOX_MAT_COAL;
         }
-        return y > surface + 20U ? VOX_MAT_STONE : VOX_MAT_SOIL;
+        return y > surface + DIGS_SCALE(20U) ? VOX_MAT_STONE : VOX_MAT_SOIL;
     }
     if (map_style == VOX_DIGS_MAP_DEEPWORKS) {
         if (y < surface) {
             return VOX_MAT_AIR;
         }
-        if (y > surface + 7U && y < VOX_WORLD_HEIGHT - 5U &&
+        if (y > surface + DIGS_SCALE(7U) &&
+            y < VOX_WORLD_HEIGHT - DIGS_SCALE(5U) &&
             (noise % 19U) == 0U) {
             return (digs_noise(seed, x, y, 91U) % 5U) == 0U ?
                    VOX_MAT_FIREDAMP : VOX_MAT_AIR;
@@ -130,20 +133,21 @@ static vox_u16 digs_map_material(vox_u16 map_style, vox_u32 seed,
         }
         return VOX_MAT_STONE;
     }
-    if ((x % 24U) < 2U && y + 12U >= surface && y <= surface) {
+    if ((x % DIGS_SCALE(24U)) < DIGS_SCALE(2U) &&
+        y + DIGS_SCALE(12U) >= surface && y <= surface) {
         return VOX_MAT_METAL;
     }
     if (y >= surface) {
-        if (y == surface && (x % 12U) < 7U) {
+        if (y == surface && (x % DIGS_SCALE(12U)) < DIGS_SCALE(7U)) {
             return VOX_MAT_METAL;
         }
-        if (y == surface && (x % 12U) >= 9U) {
+        if (y == surface && (x % DIGS_SCALE(12U)) >= DIGS_SCALE(9U)) {
             return VOX_MAT_SAND;
         }
         if ((noise % 23U) == 0U) {
             return VOX_MAT_COAL;
         }
-        return y > surface + 14U ? VOX_MAT_STONE : VOX_MAT_SOIL;
+        return y > surface + DIGS_SCALE(14U) ? VOX_MAT_STONE : VOX_MAT_SOIL;
     }
     return VOX_MAT_AIR;
 }
@@ -216,6 +220,8 @@ static vox_result digs_spawn_player(vox_digs_match *match, vox_u16 player,
                 continue;
             }
             vox_physics_body_init(body);
+            body->half_width_q16 *= (vox_i32)DIGS_DENSITY_SCALE;
+            body->half_height_q16 *= (vox_i32)DIGS_DENSITY_SCALE;
             body->position_x.value_q16 = (vox_i32)(x << 16) + 32768L;
             body->position_y.value_q16 = (vox_i32)(y << 16) -
                                          body->half_height_q16;
@@ -326,12 +332,14 @@ vox_result vox_digs_match_init(vox_digs_match *match,
     match->tick = 0U;
     match->phase = VOX_DIGS_RUNNING;
     match->lava_level_q16 = 0U;
-    match->lava_surface_y = (vox_u16)(VOX_WORLD_HEIGHT - 2U);
+    match->lava_surface_y =
+        (vox_u16)(VOX_WORLD_HEIGHT - DIGS_SCALE(2U));
     match->projectile_count = 0U;
     match->effect_count = 0U;
     match->effect_cursor = 0U;
     match->terrain_hash = vox_world_hash(&match->world);
     vox_physics_step_config_default(&match->physics_config);
+    match->physics_config.gravity_q16 *= (vox_i32)DIGS_DENSITY_SCALE;
     for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
         match->scores[i] = 0U;
         match->alive[i] = i <= rules->bot_count ? 1U : 0U;
@@ -530,7 +538,8 @@ vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
         result = vox_world_set(&match->world, x, y, z, VOX_MAT_AIR,
                                20L << 16);
     } else if (tool == VOX_DIGS_TOOL_BLAST_CHARGE) {
-        result = vox_world_blast(&match->world, x, y, z, 3U, 700L << 16);
+        result = vox_world_blast(&match->world, x, y, z,
+                                 DIGS_SCALE(3U), 700L << 16);
     } else if (tool == VOX_DIGS_TOOL_SMOKE_POT) {
         result = vox_world_set(&match->world, x, y, z, VOX_MAT_SMOKE,
                                180L << 16);
@@ -541,15 +550,20 @@ vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
         result = vox_world_set(&match->world, x, y, z, VOX_MAT_WATER,
                                20L << 16);
     } else if (tool == VOX_DIGS_TOOL_SLEDGE) {
-        result = vox_world_blast(&match->world, x, y, z, 2U, 80L << 16);
+        result = vox_world_blast(&match->world, x, y, z,
+                                 DIGS_SCALE(2U), 80L << 16);
     } else if (tool == VOX_DIGS_TOOL_NAIL_GUN) {
-        result = vox_world_blast(&match->world, x, y, z, 1U, 40L << 16);
+        result = vox_world_blast(&match->world, x, y, z,
+                                 DIGS_SCALE(1U), 40L << 16);
     } else if (tool == VOX_DIGS_TOOL_BOILER_SHOTGUN) {
-        result = vox_world_blast(&match->world, x, y, z, 2U, 180L << 16);
+        result = vox_world_blast(&match->world, x, y, z,
+                                 DIGS_SCALE(2U), 180L << 16);
     } else if (tool == VOX_DIGS_TOOL_CONCUSSION_GRENADE) {
-        result = vox_world_blast(&match->world, x, y, z, 5U, 400L << 16);
+        result = vox_world_blast(&match->world, x, y, z,
+                                 DIGS_SCALE(5U), 400L << 16);
     } else {
-        result = vox_world_blast(&match->world, x, y, z, 4U, 500L << 16);
+        result = vox_world_blast(&match->world, x, y, z,
+                                 DIGS_SCALE(4U), 500L << 16);
     }
     if (result != VOX_OK) {
         return result;
@@ -859,7 +873,8 @@ static vox_result digs_fire_melee(vox_digs_match *match, vox_u16 player,
     vox_i32 delta_x = (vox_i32)target_x - player_x;
     vox_i32 delta_y = (vox_i32)target_y - player_y;
     vox_u16 victim;
-    if (digs_abs_i32(delta_x) > 4U || digs_abs_i32(delta_y) > 4U) {
+    if (digs_abs_i32(delta_x) > DIGS_SCALE(4U) ||
+        digs_abs_i32(delta_y) > DIGS_SCALE(4U)) {
         return VOX_ERR_INVALID;
     }
     if (target_x > 0U && target_y > 0U &&
@@ -1124,7 +1139,8 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
     } else if (projectile.blast_radius > 0U &&
                projectile.weapon == VOX_DIGS_TOOL_BOILER_SHOTGUN) {
         (void)vox_world_blast(&match->world, x, y,
-                              VOX_WORLD_DEPTH - 1U, 1U, 100L << 16);
+                              VOX_WORLD_DEPTH - 1U,
+                              DIGS_SCALE(1U), 100L << 16);
     }
     if (properties->flags & VOX_DIGS_WEAPON_DEPOSIT) {
         digs_deposit_projectile(match, &projectile, x, y);
@@ -1305,8 +1321,9 @@ static void digs_update_lava(vox_digs_match *match)
     if (match->lava_level_q16 == 0U) {
         return;
     }
-    desired_surface = (vox_u16)((VOX_WORLD_HEIGHT - 3U) -
-        (match->lava_level_q16 * (VOX_WORLD_HEIGHT - 3U) / 65535U));
+    desired_surface = (vox_u16)((VOX_WORLD_HEIGHT - DIGS_SCALE(3U)) -
+        (match->lava_level_q16 *
+         (VOX_WORLD_HEIGHT - DIGS_SCALE(3U)) / 65535U));
     while (match->lava_surface_y > desired_surface) {
         vox_u32 x;
         vox_u32 z;

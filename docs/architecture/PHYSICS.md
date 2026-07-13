@@ -9,7 +9,7 @@ The v0.0.1 body is an axis-aligned fixed-point capsule proxy with Q16.16
 position, velocity, and half extents. Each 60 Hz tick applies saturating
 gravity, clamps speed, then resolves horizontal movement before vertical
 movement through bounded one-sixteenth-cell substeps. A projected side-view
-query scans all four depth layers. Only materials marked solid block a body, so
+query scans all ten depth layers. Only materials marked solid block a body, so
 terrain and granular sand support a miner while water, lava, blood, smoke, and
 firedamp remain nonblocking. World bounds are solid. Ground, ceiling, left, and
 right flags report the current step's contacts.

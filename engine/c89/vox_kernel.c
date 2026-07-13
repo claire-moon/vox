@@ -362,11 +362,22 @@ static int vox_cell_has_support(const vox_world *world, vox_u32 x,
 static void vox_step_structures(vox_world *world)
 {
     vox_u32 z;
-    vox_u32 y;
-    vox_u32 x;
+    vox_u32 chunk_y;
+    vox_u32 chunk_x;
+    vox_u32 local_y;
+    vox_u32 local_x;
     for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-        for (y = 0U; y < VOX_WORLD_HEIGHT; ++y) {
-            for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+        for (chunk_y = 0U; chunk_y < VOX_WORLD_CHUNKS_Y; ++chunk_y) {
+            for (chunk_x = 0U; chunk_x < VOX_WORLD_CHUNKS_X; ++chunk_x) {
+                vox_chunk *active = &world->chunks[
+                    chunk_y * VOX_WORLD_CHUNKS_X + chunk_x];
+                if (!(active->flags & VOX_CHUNK_ACTIVE)) {
+                    continue;
+                }
+                for (local_y = 0U; local_y < VOX_CHUNK_HEIGHT; ++local_y) {
+                    vox_u32 y = chunk_y * VOX_CHUNK_HEIGHT + local_y;
+                    for (local_x = 0U; local_x < VOX_CHUNK_WIDTH; ++local_x) {
+                        vox_u32 x = chunk_x * VOX_CHUNK_WIDTH + local_x;
                 vox_u32 index = vox_index(x, y, z);
                 vox_cell *cell = &world->cells[index];
                 vox_chunk *chunk;
@@ -389,6 +400,8 @@ static void vox_step_structures(vox_world *world)
                                              (vox_u16)~VOX_CELL_UNSTABLE);
                     vox_toggle_cell_signature(chunk, index, cell);
                     vox_mark_dirty(chunk);
+                }
+            }
                 }
             }
         }

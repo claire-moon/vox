@@ -447,6 +447,14 @@ static void demo_render_voxel(int x, int y, vox_u16 material)
                         demo_material_temperature(material));
 }
 
+static void demo_render_miner_voxel(int x, int y, vox_u16 material)
+{
+    demo_render_voxel(x, y, material);
+    demo_render_voxel(x + 1, y, material);
+    demo_render_voxel(x, y + 1, material);
+    demo_render_voxel(x + 1, y + 1, material);
+}
+
 static void demo_voxelize_miner(vox_u16 player)
 {
     static const vox_u16 coats[VOX_DIGS_MAX_SLOTS] = {
@@ -457,25 +465,26 @@ static void demo_voxelize_miner(vox_u16 player)
                                VOX_WORLD_WIDTH, VOX_WORLD_WIDTH);
     int y = demo_q16_to_screen(body->position_y.value_q16,
                                VOX_WORLD_HEIGHT, VOX_WORLD_HEIGHT);
-    int lamp_x = demo_match.facing_right[player] ? x + 2 : x - 2;
+    int lamp_x = demo_match.facing_right[player] ? x + 4 : x - 4;
     int row;
     int column;
     for (column = -1; column <= 1; ++column) {
-        demo_render_voxel(x + column, y - 4, VOX_MAT_METAL);
-        demo_render_voxel(x + column, y - 3, VOX_MAT_FLESH);
+        demo_render_miner_voxel(x + column * 2, y - 8, VOX_MAT_METAL);
+        demo_render_miner_voxel(x + column * 2, y - 6, VOX_MAT_FLESH);
     }
-    demo_render_voxel(lamp_x, y - 4, VOX_MAT_LAVA);
+    demo_render_miner_voxel(lamp_x, y - 8, VOX_MAT_LAVA);
     for (row = -2; row <= 0; ++row) {
         for (column = -1; column <= 1; ++column) {
-            demo_render_voxel(x + column, y + row, coats[player]);
+            demo_render_miner_voxel(x + column * 2, y + row * 2,
+                                    coats[player]);
         }
     }
-    demo_render_voxel(x - 2, y - 1, coats[player]);
-    demo_render_voxel(x + 2, y - 1, coats[player]);
-    demo_render_voxel(x - 1, y + 1, VOX_MAT_METAL);
-    demo_render_voxel(x + 1, y + 1, VOX_MAT_METAL);
-    demo_render_voxel(x - 1, y + 2, VOX_MAT_COAL);
-    demo_render_voxel(x + 1, y + 2, VOX_MAT_COAL);
+    demo_render_miner_voxel(x - 4, y - 2, coats[player]);
+    demo_render_miner_voxel(x + 4, y - 2, coats[player]);
+    demo_render_miner_voxel(x - 2, y + 2, VOX_MAT_METAL);
+    demo_render_miner_voxel(x + 2, y + 2, VOX_MAT_METAL);
+    demo_render_miner_voxel(x - 2, y + 4, VOX_MAT_COAL);
+    demo_render_miner_voxel(x + 2, y + 4, VOX_MAT_COAL);
 }
 
 static void demo_build_render_world(void)

@@ -32,6 +32,7 @@ static const vox_rgb vox_palette[VOX_MAT_COUNT] = {
 
 static vox_light_rgb vox_light_a[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
 static vox_light_rgb vox_light_b[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
+static vox_u8 vox_light_solid[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
 
 static vox_u8 vox_clamp_u8(vox_u32 value)
 {
@@ -94,7 +95,7 @@ static vox_light_rgb *vox_build_lightfield(const vox_world *world,
     vox_light_rgb *source = vox_light_a;
     vox_light_rgb *destination = vox_light_b;
     vox_u32 passes = gi_quality == VOX_GI_COMPATIBILITY ? 1U :
-                     (gi_quality == VOX_GI_BALANCED ? 3U : 6U);
+                     (gi_quality == VOX_GI_BALANCED ? 3U : 5U);
     vox_u32 x;
     vox_u32 y;
     vox_u32 pass;
@@ -106,6 +107,7 @@ static vox_light_rgb *vox_build_lightfield(const vox_world *world,
             if (surface != 0) {
                 sky = (vox_u16)(sky * 3U / 5U);
             }
+            vox_light_solid[index] = surface != 0 ? 1U : 0U;
             source[index].red = sky;
             source[index].green = (vox_u16)(sky + 4U);
             source[index].blue = (vox_u16)(sky + 12U);
@@ -116,8 +118,8 @@ static vox_light_rgb *vox_build_lightfield(const vox_world *world,
         for (y = 0U; y < VOX_WORLD_HEIGHT; ++y) {
             for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
                 vox_u32 index = y * VOX_WORLD_WIDTH + x;
-                const vox_cell *surface = vox_surface_cell(world, x, y);
-                vox_u16 attenuation = surface == 0 ? 13U : 24U;
+                vox_u16 attenuation = vox_light_solid[index] == 0U ?
+                                      13U : 24U;
                 vox_light_rgb value = source[index];
                 if (x > 0U) {
                     value.red = vox_light_max(value.red,
@@ -158,7 +160,6 @@ static vox_light_rgb *vox_build_lightfield(const vox_world *world,
                                         attenuation));
                 }
                 destination[index] = value;
-                vox_inject_emission(world, x, y, &destination[index]);
             }
         }
         {

@@ -70,7 +70,7 @@ the deterministic match state rather than being presentation-only particles.
 | `9` | Concussion Grenade | Fused gravity projectile with the widest terrain shock |
 | `0` | Nail Bomb | Fused explosive with blast damage and nail-like voxel effects |
 
-The pools are fixed and bounded: up to 64 authoritative projectiles and 192
+The pools are fixed and bounded: up to 64 authoritative projectiles and 768
 transient voxel effects. A stable slot order, integer positions/velocities, and
 bounded projectile substeps make exhaustion and collision behavior repeatable.
 
@@ -95,8 +95,8 @@ the first systemic vocabulary, not a chemically complete simulation.
 ## Lightfield and presentation
 
 The software renderer first resolves the frontmost occupied cell across the
-four-cell depth slab, injects skylight and RGB emission from lava/hot cells,
-then propagates that light through a `128 x 80` world-space field. Occupied
+ten-cell depth slab, injects skylight and RGB emission from lava/hot cells,
+then propagates that light through a `256 x 160` world-space field. Occupied
 cells attenuate light more strongly than air. The field is sampled while
 writing a caller-owned `320 x 200` RGB24 framebuffer.
 
@@ -106,7 +106,7 @@ The option changes propagation work, not simulation:
 |---|---:|---|
 | Compatibility | 1 | Lowest-cost CPU presentation and future constrained adapters |
 | Balanced | 3 | Default desktop setting |
-| Showcase | 6 | Wider glow where CPU headroom permits |
+| Showcase | 5 | Wider glow where CPU headroom permits |
 
 The host builds a render-only snapshot for miners, projectiles, and effects so
 they receive the same Lightfield treatment without mutating authoritative
