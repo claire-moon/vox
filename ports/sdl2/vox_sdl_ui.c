@@ -220,3 +220,21 @@ void vox_ui_text_center(vox_ui_surface *surface, int center_x, int y,
     vox_ui_text(surface, center_x - vox_ui_text_width(text, scale) / 2,
                 y, scale, text, red, green, blue);
 }
+
+void vox_ui_text_shadow(vox_ui_surface *surface, int x, int y, int scale,
+                        const char *text, vox_u8 red, vox_u8 green,
+                        vox_u8 blue)
+{
+    int offset = scale > 1 ? 2 : 1;
+    vox_ui_text(surface, x + offset, y + offset, scale, text, 0U, 0U, 0U);
+    vox_ui_text(surface, x, y, scale, text, red, green, blue);
+}
+
+void vox_ui_text_center_shadow(vox_ui_surface *surface, int center_x, int y,
+                               int scale, const char *text, vox_u8 red,
+                               vox_u8 green, vox_u8 blue)
+{
+    vox_ui_text_shadow(surface,
+                       center_x - vox_ui_text_width(text, scale) / 2,
+                       y, scale, text, red, green, blue);
+}

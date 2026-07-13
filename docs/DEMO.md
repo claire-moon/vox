@@ -20,6 +20,11 @@ From the title screen:
 - **Options** selects the presentation frame cap, Lightfield tier, debug
   overlay, and desktop fullscreen.
 
+The interface uses a repository-owned 5 x 7 BIOS-style bitmap alphabet with
+VGA-era drop shadows and the fixed IBM-PC 16-color values. It loads no host
+font, so glyph shape, spacing, palette, and licensing remain identical across
+platform adapters.
+
 Classic FFA runs for two minutes or until the score limit. Rising lava enters
 the physical world during the final thirty seconds; it is not a UI-only height
 counter. A dead miner leaves voxel effects, then respawns after a deterministic

@@ -30,6 +30,18 @@
 #define DEMO_ARSENAL_POWDER 2
 #define DEMO_ARSENAL_COUNT 3
 
+/* Fixed IBM-PC/VGA 16-color values keep UI output identical on every host. */
+#define DEMO_VGA_BLACK 0U, 0U, 0U
+#define DEMO_VGA_BLUE 0U, 0U, 170U
+#define DEMO_VGA_CYAN 0U, 170U, 170U
+#define DEMO_VGA_BROWN 170U, 85U, 0U
+#define DEMO_VGA_LIGHT_GRAY 170U, 170U, 170U
+#define DEMO_VGA_DARK_GRAY 85U, 85U, 85U
+#define DEMO_VGA_LIGHT_CYAN 85U, 255U, 255U
+#define DEMO_VGA_LIGHT_RED 255U, 85U, 85U
+#define DEMO_VGA_YELLOW 255U, 255U, 85U
+#define DEMO_VGA_WHITE 255U, 255U, 255U
+
 typedef enum demo_screen {
     DEMO_TITLE = 0,
     DEMO_SETUP = 1,
@@ -282,18 +294,21 @@ static void demo_build_title_world(void)
 
 static void demo_dark_panel(int x, int y, int width, int height)
 {
-    vox_ui_rect(&demo_ui, x, y, width, height, 10U, 13U, 19U);
-    vox_ui_frame(&demo_ui, x, y, width, height, 151U, 97U, 46U);
+    vox_ui_rect(&demo_ui, x, y, width, height, DEMO_VGA_BLACK);
+    vox_ui_frame(&demo_ui, x, y, width, height, DEMO_VGA_BROWN);
 }
 
 static void demo_menu_item(int y, const char *label, int selected)
 {
     if (selected) {
-        vox_ui_rect(&demo_ui, 82, y - 2, 156, 11, 72U, 43U, 28U);
-        vox_ui_frame(&demo_ui, 82, y - 2, 156, 11, 224U, 151U, 54U);
-        vox_ui_text_center(&demo_ui, 160, y, 1, label, 255U, 224U, 129U);
+        vox_ui_rect(&demo_ui, 82, y - 2, 156, 11, DEMO_VGA_BLUE);
+        vox_ui_frame(&demo_ui, 82, y - 2, 156, 11,
+                     DEMO_VGA_LIGHT_CYAN);
+        vox_ui_text_center_shadow(&demo_ui, 160, y, 1, label,
+                                  DEMO_VGA_YELLOW);
     } else {
-        vox_ui_text_center(&demo_ui, 160, y, 1, label, 191U, 195U, 198U);
+        vox_ui_text_center_shadow(&demo_ui, 160, y, 1, label,
+                                  DEMO_VGA_LIGHT_GRAY);
     }
 }
 
@@ -303,30 +318,34 @@ static void demo_draw_title(demo_app *app)
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
     demo_dark_panel(62, 18, 196, 164);
-    vox_ui_text_center(&demo_ui, 160, 29, 4, "VOX", 239U, 161U, 55U);
-    vox_ui_text_center(&demo_ui, 160, 62, 2, "DIGS", 203U, 211U, 219U);
-    vox_ui_text_center(&demo_ui, 160, 80, 1,
-                       "STEAMPUNK VOXEL DEATHMATCH", 137U, 151U, 158U);
-    demo_menu_item(101, "START MATCH", app->selection == 0);
-    demo_menu_item(115, "VOX FOUNDRY LAB", app->selection == 1);
-    demo_menu_item(129, "OPTIONS", app->selection == 2);
-    demo_menu_item(143, "QA FEEDBACK", app->selection == 3);
-    demo_menu_item(157, "QUIT", app->selection == 4);
+    vox_ui_text_center_shadow(&demo_ui, 160, 29, 4, "VOX",
+                              DEMO_VGA_YELLOW);
+    vox_ui_text_center_shadow(&demo_ui, 160, 62, 2, "DIGS",
+                              DEMO_VGA_LIGHT_CYAN);
+    vox_ui_rect(&demo_ui, 82, 84, 156, 1, DEMO_VGA_DARK_GRAY);
+    vox_ui_rect(&demo_ui, 82, 85, 156, 1, DEMO_VGA_BROWN);
+    demo_menu_item(94, "START MATCH", app->selection == 0);
+    demo_menu_item(110, "VOX FOUNDRY LAB", app->selection == 1);
+    demo_menu_item(126, "OPTIONS", app->selection == 2);
+    demo_menu_item(142, "QA FEEDBACK", app->selection == 3);
+    demo_menu_item(158, "QUIT", app->selection == 4);
     vox_ui_text_center(&demo_ui, 160, 171, 1,
-                       "GPL-3.0-OR-LATER  V0.0.1 DEMO", 94U, 110U, 120U);
+                       "GPL-3.0-OR-LATER  V0.0.1 DEMO",
+                       DEMO_VGA_DARK_GRAY);
 }
 
 static void demo_value_line(int y, const char *label, const char *value,
                             int selected)
 {
     if (selected) {
-        vox_ui_rect(&demo_ui, 44, y - 2, 232, 11, 63U, 40U, 27U);
-        vox_ui_frame(&demo_ui, 44, y - 2, 232, 11, 206U, 134U, 50U);
+        vox_ui_rect(&demo_ui, 44, y - 2, 232, 11, DEMO_VGA_BLUE);
+        vox_ui_frame(&demo_ui, 44, y - 2, 232, 11,
+                     DEMO_VGA_LIGHT_CYAN);
     }
-    vox_ui_text(&demo_ui, 50, y, 1, label, 178U, 185U, 190U);
+    vox_ui_text(&demo_ui, 50, y, 1, label, DEMO_VGA_LIGHT_GRAY);
     vox_ui_text(&demo_ui, 170, y, 1, value,
-                selected ? 255U : 207U, selected ? 218U : 201U,
-                selected ? 116U : 192U);
+                selected ? 255U : 170U, selected ? 255U : 170U,
+                selected ? 85U : 170U);
 }
 
 static void demo_draw_setup(demo_app *app)
@@ -336,7 +355,8 @@ static void demo_draw_setup(demo_app *app)
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
     demo_dark_panel(32, 18, 256, 166);
-    vox_ui_text_center(&demo_ui, 160, 28, 2, "MATCH SETUP", 237U, 164U, 65U);
+    vox_ui_text_center_shadow(&demo_ui, 160, 28, 2, "MATCH SETUP",
+                              DEMO_VGA_YELLOW);
     sprintf(value, "%d", app->bots);
     demo_value_line(61, "BOTS", value, app->selection == 0);
     demo_value_line(79, "MAP", demo_map_names[app->map_style],
@@ -348,7 +368,7 @@ static void demo_draw_setup(demo_app *app)
     demo_menu_item(140, "START DEATHMATCH", app->selection == 4);
     demo_menu_item(157, "BACK", app->selection == 5);
     vox_ui_text_center(&demo_ui, 160, 174, 1,
-                       "ARROWS CHANGE  ENTER SELECTS", 99U, 116U, 126U);
+                       "ARROWS CHANGE  ENTER SELECTS", DEMO_VGA_DARK_GRAY);
 }
 
 static void demo_draw_options(demo_app *app)
@@ -358,7 +378,8 @@ static void demo_draw_options(demo_app *app)
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
     demo_dark_panel(32, 18, 256, 166);
-    vox_ui_text_center(&demo_ui, 160, 28, 2, "OPTIONS", 237U, 164U, 65U);
+    vox_ui_text_center_shadow(&demo_ui, 160, 28, 2, "OPTIONS",
+                              DEMO_VGA_YELLOW);
     demo_value_line(62, "FRAME CAP", demo_frame_names[app->options.frame_cap_index],
                     app->selection == 0);
     demo_value_line(82, "VOX LIGHTFIELD", demo_gi_names[app->options.gi_quality],
@@ -369,7 +390,8 @@ static void demo_draw_options(demo_app *app)
     demo_value_line(122, "FULLSCREEN", toggle, app->selection == 3);
     demo_menu_item(151, "BACK", app->selection == 4);
     vox_ui_text_center(&demo_ui, 160, 174, 1,
-                       "SIMULATION REMAINS FIXED AT 60 HZ", 99U, 116U, 126U);
+                       "SIMULATION REMAINS FIXED AT 60 HZ",
+                       DEMO_VGA_DARK_GRAY);
 }
 
 static void demo_draw_feedback(demo_app *app)
@@ -378,21 +400,21 @@ static void demo_draw_feedback(demo_app *app)
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
     demo_dark_panel(24, 18, 272, 166);
-    vox_ui_text_center(&demo_ui, 160, 28, 2, "QA FEEDBACK",
-                       237U, 164U, 65U);
+    vox_ui_text_center_shadow(&demo_ui, 160, 28, 2, "QA FEEDBACK",
+                              DEMO_VGA_YELLOW);
     vox_ui_text(&demo_ui, 39, 62, 1,
-                "1 OPEN QA/VOX_QA_FEEDBACK.XLSX", 205U, 211U, 214U);
+                "1 OPEN QA/VOX_QA_FEEDBACK.XLSX", DEMO_VGA_LIGHT_GRAY);
     vox_ui_text(&demo_ui, 39, 78, 1,
-                "2 RECORD STEPS EXPECTED ACTUAL", 205U, 211U, 214U);
+                "2 RECORD STEPS EXPECTED ACTUAL", DEMO_VGA_LIGHT_GRAY);
     vox_ui_text(&demo_ui, 39, 94, 1,
-                "3 RUN TOOLS/VOX-TEST-COCKPIT.SH", 205U, 211U, 214U);
+                "3 RUN TOOLS/VOX-TEST-COCKPIT.SH", DEMO_VGA_LIGHT_GRAY);
     vox_ui_text(&demo_ui, 39, 110, 1,
-                "4 ATTACH PACKET TO GITHUB ISSUE", 205U, 211U, 214U);
+                "4 ATTACH PACKET TO GITHUB ISSUE", DEMO_VGA_LIGHT_GRAY);
     vox_ui_text_center(&demo_ui, 160, 134, 1,
                        "CLAIRE-MOON/VOX  DEMO FEEDBACK",
-                       139U, 184U, 199U);
+                       DEMO_VGA_LIGHT_CYAN);
     vox_ui_text_center(&demo_ui, 160, 158, 1,
-                       "ENTER OR ESC RETURNS", 214U, 189U, 112U);
+                       "ENTER OR ESC RETURNS", DEMO_VGA_YELLOW);
 }
 
 static vox_i32 demo_material_temperature(vox_u16 material)
@@ -497,31 +519,31 @@ static void demo_draw_hud(demo_app *app)
     int health_width = (int)((vox_u32)demo_match.health[0] * 42U /
                              VOX_DIGS_MAX_HEALTH);
     int steam_width = (int)((vox_u32)demo_match.steam_q16[0] * 40U / 65535U);
-    vox_ui_rect(&demo_ui, 3, 3, 166, 29, 9U, 12U, 17U);
-    vox_ui_frame(&demo_ui, 3, 3, 166, 29, 113U, 83U, 47U);
+    vox_ui_rect(&demo_ui, 3, 3, 166, 29, DEMO_VGA_BLACK);
+    vox_ui_frame(&demo_ui, 3, 3, 166, 29, DEMO_VGA_BROWN);
     sprintf(text, "P1 K%u D%u HP%u  %lu:%02lu",
             (unsigned int)demo_match.scores[0],
             (unsigned int)demo_match.deaths[0],
             (unsigned int)demo_match.health[0],
             (unsigned long)(seconds / 60U),
             (unsigned long)(seconds % 60U));
-    vox_ui_text(&demo_ui, 7, 7, 1, text, 220U, 222U, 217U);
-    vox_ui_text(&demo_ui, 7, 18, 1, "HP", 204U, 126U, 113U);
-    vox_ui_rect(&demo_ui, 22, 18, 44, 5, 42U, 28U, 29U);
-    vox_ui_rect(&demo_ui, 23, 19, health_width, 3, 207U, 68U, 57U);
-    vox_ui_text(&demo_ui, 73, 18, 1, "STEAM", 153U, 181U, 196U);
-    vox_ui_rect(&demo_ui, 112, 18, 42, 5, 31U, 42U, 49U);
-    vox_ui_rect(&demo_ui, 113, 19, steam_width, 3, 70U, 184U, 221U);
-    vox_ui_rect(&demo_ui, 174, 3, 143, 29, 9U, 12U, 17U);
-    vox_ui_frame(&demo_ui, 174, 3, 143, 29, 113U, 83U, 47U);
+    vox_ui_text(&demo_ui, 7, 7, 1, text, DEMO_VGA_WHITE);
+    vox_ui_text(&demo_ui, 7, 18, 1, "HP", DEMO_VGA_LIGHT_RED);
+    vox_ui_rect(&demo_ui, 22, 18, 44, 5, DEMO_VGA_BROWN);
+    vox_ui_rect(&demo_ui, 23, 19, health_width, 3, DEMO_VGA_LIGHT_RED);
+    vox_ui_text(&demo_ui, 73, 18, 1, "STEAM", DEMO_VGA_LIGHT_CYAN);
+    vox_ui_rect(&demo_ui, 112, 18, 42, 5, DEMO_VGA_BLUE);
+    vox_ui_rect(&demo_ui, 113, 19, steam_width, 3, DEMO_VGA_CYAN);
+    vox_ui_rect(&demo_ui, 174, 3, 143, 29, DEMO_VGA_BLACK);
+    vox_ui_frame(&demo_ui, 174, 3, 143, 29, DEMO_VGA_BROWN);
     vox_ui_text(&demo_ui, 179, 7, 1,
                 weapon == 0 ? "UNKNOWN" : weapon->name,
-                248U, 184U, 78U);
+                DEMO_VGA_YELLOW);
     sprintf(text, "CD %u  LMB FIRE",
             (unsigned int)demo_match.weapon_cooldown[0]);
-    vox_ui_text(&demo_ui, 179, 15, 1, text, 164U, 174U, 177U);
+    vox_ui_text(&demo_ui, 179, 15, 1, text, DEMO_VGA_LIGHT_GRAY);
     vox_ui_text(&demo_ui, 179, 23, 1, "1-0 OR WHEEL SELECT",
-                133U, 145U, 151U);
+                DEMO_VGA_DARK_GRAY);
 }
 
 static void demo_draw_debug(demo_app *app)
@@ -541,8 +563,8 @@ static void demo_draw_debug(demo_app *app)
     }
     cell = vox_world_cell(&demo_match.world, world_x, world_y,
                           VOX_WORLD_DEPTH - 1U);
-    vox_ui_rect(&demo_ui, 3, 174, 314, 23, 8U, 10U, 14U);
-    vox_ui_frame(&demo_ui, 3, 174, 314, 23, 69U, 87U, 94U);
+    vox_ui_rect(&demo_ui, 3, 174, 314, 23, DEMO_VGA_BLACK);
+    vox_ui_frame(&demo_ui, 3, 174, 314, 23, DEMO_VGA_DARK_GRAY);
     sprintf(text, "FPS %lu CAP %s T%lu P%u FX%u L%u H%08lX",
             (unsigned long)(app->measured_fps + 0.5),
             demo_frame_names[app->options.frame_cap_index],
@@ -551,13 +573,13 @@ static void demo_draw_debug(demo_app *app)
             (unsigned int)demo_match.effect_count,
             (unsigned int)demo_match.lava_surface_y,
             (unsigned long)demo_match.state_hash);
-    vox_ui_text(&demo_ui, 7, 178, 1, text, 164U, 214U, 188U);
+    vox_ui_text(&demo_ui, 7, 178, 1, text, DEMO_VGA_LIGHT_CYAN);
     sprintf(text, "CELLS %lu AWAKE %lu TARGET %lu,%lu MAT %u",
             (unsigned long)demo_match.world.occupied_cells,
             (unsigned long)demo_match.world.awake_cells,
             (unsigned long)world_x, (unsigned long)world_y,
             cell == 0 ? 0U : (unsigned int)cell->material);
-    vox_ui_text(&demo_ui, 7, 187, 1, text, 144U, 164U, 172U);
+    vox_ui_text(&demo_ui, 7, 187, 1, text, DEMO_VGA_LIGHT_GRAY);
 }
 
 static void demo_draw_play(demo_app *app)
@@ -567,14 +589,15 @@ static void demo_draw_play(demo_app *app)
     (void)vox_software_render_ex(&demo_render_world, &demo_target,
                                  &demo_render_config);
     vox_ui_frame(&demo_ui, app->mouse_x - 3, app->mouse_y - 3,
-                 7, 7, 241U, 221U, 142U);
+                 7, 7, DEMO_VGA_YELLOW);
     vox_ui_rect(&demo_ui, app->mouse_x, app->mouse_y, 1, 1,
-                255U, 255U, 255U);
+                DEMO_VGA_WHITE);
     demo_draw_hud(app);
     demo_draw_debug(app);
     if (app->screen == DEMO_PAUSE) {
         demo_dark_panel(88, 65, 144, 70);
-        vox_ui_text_center(&demo_ui, 160, 76, 2, "PAUSED", 239U, 169U, 69U);
+        vox_ui_text_center_shadow(&demo_ui, 160, 76, 2, "PAUSED",
+                                  DEMO_VGA_YELLOW);
         demo_menu_item(105, "RESUME", app->selection == 0);
         demo_menu_item(120, "EXIT TO TITLE", app->selection == 1);
     }
@@ -585,13 +608,15 @@ static void demo_draw_results(demo_app *app)
     char line[64];
     demo_draw_play(app);
     demo_dark_panel(67, 48, 186, 104);
-    vox_ui_text_center(&demo_ui, 160, 59, 2, "MATCH RESULTS", 241U, 168U, 66U);
+    vox_ui_text_center_shadow(&demo_ui, 160, 59, 2, "MATCH RESULTS",
+                              DEMO_VGA_YELLOW);
     sprintf(line, "PLAYER SCORE %u", (unsigned int)demo_match.scores[0]);
-    vox_ui_text_center(&demo_ui, 160, 91, 1, line, 218U, 220U, 215U);
+    vox_ui_text_center(&demo_ui, 160, 91, 1, line, DEMO_VGA_WHITE);
     sprintf(line, "STATE HASH %08lX", (unsigned long)demo_match.state_hash);
-    vox_ui_text_center(&demo_ui, 160, 105, 1, line, 140U, 164U, 174U);
+    vox_ui_text_center(&demo_ui, 160, 105, 1, line,
+                       DEMO_VGA_LIGHT_CYAN);
     vox_ui_text_center(&demo_ui, 160, 130, 1,
-                       "ENTER RETURNS TO TITLE", 214U, 189U, 112U);
+                       "ENTER RETURNS TO TITLE", DEMO_VGA_YELLOW);
 }
 
 static void demo_render(demo_app *app)

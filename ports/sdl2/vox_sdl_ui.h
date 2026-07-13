@@ -22,6 +22,12 @@ void vox_ui_text(vox_ui_surface *surface, int x, int y, int scale,
 void vox_ui_text_center(vox_ui_surface *surface, int center_x, int y,
                         int scale, const char *text, vox_u8 red,
                         vox_u8 green, vox_u8 blue);
+void vox_ui_text_shadow(vox_ui_surface *surface, int x, int y, int scale,
+                        const char *text, vox_u8 red, vox_u8 green,
+                        vox_u8 blue);
+void vox_ui_text_center_shadow(vox_ui_surface *surface, int center_x, int y,
+                               int scale, const char *text, vox_u8 red,
+                               vox_u8 green, vox_u8 blue);
 int vox_ui_text_width(const char *text, int scale);
 
 #endif
