@@ -44,7 +44,8 @@ delay unless the score limit has ended the match.
 | Match | mouse | Aim |
 | Match | left mouse | Fire/use selected weapon |
 | Match | `1`..`0` | Select weapons 1 through 10 |
-| Match | mouse wheel | Cycle weapons |
+| Match | mouse wheel | Zoom the player-locked camera from 1x through 4x |
+| Match | Shift + mouse wheel | Cycle weapons allowed by the active arsenal |
 | Match | `R` | Restart the current seed and mode |
 | Match | `Esc` | Pause |
 | Anywhere | `F1` | Toggle debug overlay |

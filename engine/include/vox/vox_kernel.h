@@ -71,6 +71,7 @@ typedef struct vox_material_properties {
 #define VOX_CELL_AWAKE 2U
 #define VOX_CELL_PHASE_GAS 4U
 #define VOX_CELL_MOVED 8U
+#define VOX_CELL_UNSTABLE 16U
 
 #define VOX_CHUNK_ACTIVE 1U
 #define VOX_CHUNK_DIRTY 2U

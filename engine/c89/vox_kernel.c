@@ -323,6 +323,78 @@ static int vox_is_falling_material(vox_u16 material)
            material == VOX_MAT_LAVA || material == VOX_MAT_BLOOD;
 }
 
+static int vox_is_structural_material(vox_u16 material)
+{
+    return material == VOX_MAT_SOIL || material == VOX_MAT_STONE ||
+           material == VOX_MAT_COAL || material == VOX_MAT_BIOMASS ||
+           material == VOX_MAT_METAL;
+}
+
+static int vox_cell_has_support(const vox_world *world, vox_u32 x,
+                                vox_u32 y, vox_u32 z)
+{
+    const vox_cell *below;
+    if (y + 1U >= VOX_WORLD_HEIGHT) {
+        return 1;
+    }
+    below = &world->cells[vox_index(x, y + 1U, z)];
+    if (below->material != VOX_MAT_AIR &&
+        !(below->flags & VOX_CELL_PHASE_GAS)) {
+        return 1;
+    }
+    if (x > 0U) {
+        below = &world->cells[vox_index(x - 1U, y + 1U, z)];
+        if (below->material != VOX_MAT_AIR &&
+            !(below->flags & VOX_CELL_PHASE_GAS)) {
+            return 1;
+        }
+    }
+    if (x + 1U < VOX_WORLD_WIDTH) {
+        below = &world->cells[vox_index(x + 1U, y + 1U, z)];
+        if (below->material != VOX_MAT_AIR &&
+            !(below->flags & VOX_CELL_PHASE_GAS)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void vox_step_structures(vox_world *world)
+{
+    vox_u32 z;
+    vox_u32 y;
+    vox_u32 x;
+    for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+        for (y = 0U; y < VOX_WORLD_HEIGHT; ++y) {
+            for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+                vox_u32 index = vox_index(x, y, z);
+                vox_cell *cell = &world->cells[index];
+                vox_chunk *chunk;
+                int supported;
+                if (!(cell->flags & VOX_CELL_AWAKE) ||
+                    !vox_is_structural_material(cell->material)) {
+                    continue;
+                }
+                supported = vox_cell_has_support(world, x, y, z);
+                if (!supported && !(cell->flags & VOX_CELL_UNSTABLE)) {
+                    chunk = &world->chunks[vox_chunk_index(x, y)];
+                    vox_toggle_cell_signature(chunk, index, cell);
+                    cell->flags = (vox_u16)(cell->flags | VOX_CELL_UNSTABLE);
+                    vox_toggle_cell_signature(chunk, index, cell);
+                    vox_mark_dirty(chunk);
+                } else if (supported && (cell->flags & VOX_CELL_UNSTABLE)) {
+                    chunk = &world->chunks[vox_chunk_index(x, y)];
+                    vox_toggle_cell_signature(chunk, index, cell);
+                    cell->flags = (vox_u16)(cell->flags &
+                                             (vox_u16)~VOX_CELL_UNSTABLE);
+                    vox_toggle_cell_signature(chunk, index, cell);
+                    vox_mark_dirty(chunk);
+                }
+            }
+        }
+    }
+}
+
 static int vox_is_gas_cell(const vox_cell *cell)
 {
     return cell->material == VOX_MAT_SMOKE || cell->material == VOX_MAT_FIREDAMP ||
@@ -363,7 +435,8 @@ static int vox_try_move(vox_world *world, vox_u32 source_x, vox_u32 source_y,
                                         (vox_u32)destination_y, source_z),
                               destination);
     destination->material = original.material;
-    destination->flags = (vox_u16)(original.flags & VOX_CELL_PHASE_GAS);
+    destination->flags = (vox_u16)(original.flags &
+                                    (VOX_CELL_PHASE_GAS | VOX_CELL_UNSTABLE));
     destination->temperature_q16 = original.temperature_q16;
     destination->damage_q16 = original.damage_q16;
     vox_toggle_cell_signature(destination_chunk,
@@ -425,7 +498,8 @@ static void vox_step_falling(vox_world *world)
                         int prefer_left;
                         if (!(cell->flags & VOX_CELL_AWAKE) ||
                             (cell->flags & VOX_CELL_PHASE_GAS) ||
-                            !vox_is_falling_material(cell->material)) {
+                            (!vox_is_falling_material(cell->material) &&
+                             !(cell->flags & VOX_CELL_UNSTABLE))) {
                             continue;
                         }
                         moved = vox_try_move(world, x, source_y, depth, 0, 1);
@@ -683,16 +757,19 @@ vox_result vox_world_blast(vox_world *world, vox_u32 x, vox_u32 y,
     long max_y;
     long sample_x;
     long sample_y;
-    long radius_squared;
+    long core_squared;
+    long fracture_radius;
+    long fracture_squared;
     vox_u32 depth;
     if (world == 0 || !vox_in_bounds(x, y, z) ||
         radius == 0U || radius > VOX_BLAST_MAX_RADIUS) {
         return VOX_ERR_INVALID;
     }
-    min_x = (long)x - (long)radius;
-    max_x = (long)x + (long)radius;
-    min_y = (long)y - (long)radius;
-    max_y = (long)y + (long)radius;
+    fracture_radius = (long)radius + 2L;
+    min_x = (long)x - fracture_radius;
+    max_x = (long)x + fracture_radius;
+    min_y = (long)y - fracture_radius;
+    max_y = (long)y + fracture_radius;
     if (min_x < 0L) {
         min_x = 0L;
     }
@@ -705,12 +782,19 @@ vox_result vox_world_blast(vox_world *world, vox_u32 x, vox_u32 y,
     if (max_y >= (long)VOX_WORLD_HEIGHT) {
         max_y = (long)VOX_WORLD_HEIGHT - 1L;
     }
-    radius_squared = (long)radius * (long)radius;
+    core_squared = (long)radius * (long)radius;
+    fracture_squared = fracture_radius * fracture_radius;
     for (sample_y = min_y; sample_y <= max_y; ++sample_y) {
         for (sample_x = min_x; sample_x <= max_x; ++sample_x) {
             long delta_x = sample_x - (long)x;
             long delta_y = sample_y - (long)y;
-            if (delta_x * delta_x + delta_y * delta_y > radius_squared) {
+            long distance_squared = delta_x * delta_x + delta_y * delta_y;
+            vox_u32 fracture = ((vox_u32)sample_x * 1103515245U) ^
+                               ((vox_u32)sample_y * 2654435761U) ^
+                               (world->tick * 2246822519U) ^
+                               (x * 3266489917U) ^ (y * 668265263U);
+            if (distance_squared > fracture_squared ||
+                (distance_squared > core_squared && (fracture & 3U) == 0U)) {
                 continue;
             }
             for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
@@ -720,7 +804,9 @@ vox_result vox_world_blast(vox_world *world, vox_u32 x, vox_u32 y,
                 vox_chunk *chunk = &world->chunks[vox_chunk_index(
                     (vox_u32)sample_x, (vox_u32)sample_y)];
                 if (cell->material != VOX_MAT_AIR &&
-                    cell->material != VOX_MAT_BEDROCK) {
+                    cell->material != VOX_MAT_BEDROCK &&
+                    (distance_squared <= core_squared ||
+                     ((fracture >> (depth & 7U)) & 1U) != 0U)) {
                     vox_clear_cell(world, chunk, vox_index((vox_u32)sample_x,
                                                            (vox_u32)sample_y,
                                                            depth), cell);
@@ -775,6 +861,7 @@ vox_result vox_world_step(vox_world *world, const vox_step_command *command)
     }
     if (world->awake_cells != 0U) {
         vox_step_reactions(world);
+        vox_step_structures(world);
         vox_step_falling(world);
         vox_step_gases(world);
         vox_step_materials(world);

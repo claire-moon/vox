@@ -1,11 +1,16 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # Weapons, terrain, and material effects
 
-`vox_world_blast` is the C89 terrain-destruction primitive. It removes every
-non-bedrock cell inside a bounded side-view radius across the shallow depth
-layers, marks affected chunks dirty, wakes the neighboring material ring, and
-leaves hot smoke at the blast center when space is available. Bedrock remains
-the arena boundary.
+`vox_world_blast` is the C89 terrain-destruction primitive. It removes a
+guaranteed destructive core plus a deterministic irregular fracture shell
+across the shallow depth layers, marks affected chunks dirty, wakes the
+neighboring material ring, and leaves hot smoke at the blast center. Bedrock
+remains the arena boundary.
+
+Exposed soil, stone, coal, biomass, and metal voxels enter the bounded gravity
+pass when direct and diagonal support is severed, producing cascading cave-ins.
+Explosions sample nearby terrain before removal and emit mixed rubble, smoke,
+embers, and weapon fragments; settled rubble can rejoin the canonical world.
 
 DIGS `v0.0.1` defines ten stable weapon IDs:
 

@@ -1083,6 +1083,29 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
     const vox_digs_weapon_properties *properties =
         &digs_weapons[projectile.weapon];
     vox_u16 spark;
+    vox_u16 particle_count;
+    vox_u16 debris_materials[96];
+    particle_count = (vox_u16)(projectile.blast_radius *
+                               projectile.blast_radius * 3U + 8U);
+    if (particle_count > 96U) {
+        particle_count = 96U;
+    }
+    for (spark = 0U; spark < particle_count; ++spark) {
+        long sample_x = (long)x + (long)((int)(spark % 9U) - 4);
+        long sample_y = (long)y + (long)((int)((spark * 5U) % 9U) - 4);
+        const vox_cell *sample = 0;
+        if (sample_x >= 0L && sample_y >= 0L &&
+            sample_x < (long)VOX_WORLD_WIDTH &&
+            sample_y < (long)VOX_WORLD_HEIGHT) {
+            sample = vox_world_cell(&match->world, (vox_u32)sample_x,
+                                    (vox_u32)sample_y,
+                                    VOX_WORLD_DEPTH - 1U);
+        }
+        debris_materials[spark] = sample != 0 &&
+                                  sample->material != VOX_MAT_AIR &&
+                                  sample->material != VOX_MAT_BEDROCK ?
+                                  sample->material : projectile.material;
+    }
     match->projectiles[slot].active = 0U;
     if (match->projectile_count > 0U) {
         match->projectile_count--;
@@ -1106,15 +1129,24 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
     if (properties->flags & VOX_DIGS_WEAPON_DEPOSIT) {
         digs_deposit_projectile(match, &projectile, x, y);
     }
-    for (spark = 0U; spark <
-         (vox_u16)(projectile.blast_radius * 4U + 2U); ++spark) {
-        vox_i32 velocity_x = (vox_i32)((int)(spark % 5U) - 2) * 12288L;
-        vox_i32 velocity_y = -8192L - (vox_i32)((spark % 4U) * 8192U);
-        vox_u16 material = projectile.weapon == VOX_DIGS_TOOL_NAIL_BOMB ?
-                           VOX_MAT_METAL : projectile.material;
+    for (spark = 0U; spark < particle_count; ++spark) {
+        vox_i32 velocity_x = (vox_i32)((int)(spark % 11U) - 5) * 11264L;
+        vox_i32 velocity_y = -10240L -
+                             (vox_i32)((spark * 7U % 9U) * 7168U);
+        vox_u16 material = debris_materials[spark];
+        if (projectile.weapon == VOX_DIGS_TOOL_NAIL_BOMB &&
+            (spark & 1U) == 0U) {
+            material = VOX_MAT_METAL;
+        } else if ((properties->flags & VOX_DIGS_WEAPON_EXPLOSIVE) &&
+                   spark % 7U == 0U) {
+            material = VOX_MAT_SMOKE;
+        } else if ((properties->flags & VOX_DIGS_WEAPON_EXPLOSIVE) &&
+                   spark % 13U == 0U) {
+            material = VOX_MAT_LAVA;
+        }
         digs_spawn_effect(match, material, (vox_i32)(x << 16),
                           (vox_i32)(y << 16), velocity_x, velocity_y,
-                          (vox_u16)(20U + spark));
+                          (vox_u16)(24U + spark % 48U));
     }
 }
 
@@ -1238,7 +1270,12 @@ static void digs_step_effects(vox_digs_match *match)
                 x_cell < (vox_i32)VOX_WORLD_WIDTH &&
                 y_cell < (vox_i32)VOX_WORLD_HEIGHT &&
                 (effect->material == VOX_MAT_BLOOD ||
-                 effect->material == VOX_MAT_SMOKE)) {
+                 effect->material == VOX_MAT_SMOKE ||
+                 effect->material == VOX_MAT_SOIL ||
+                 effect->material == VOX_MAT_STONE ||
+                 effect->material == VOX_MAT_COAL ||
+                 effect->material == VOX_MAT_SAND ||
+                 effect->material == VOX_MAT_BIOMASS)) {
                 const vox_cell *cell = vox_world_cell(
                     &match->world, (vox_u32)x_cell, (vox_u32)y_cell,
                     VOX_WORLD_DEPTH - 1U);

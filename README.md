@@ -170,7 +170,8 @@ exercise the identical scalar fallback explicitly.
 - Movement: `A`/`D` or left/right arrows run; `W`, up arrow, or `Space` jumps;
   left or right `Shift` engages the rechargeable steam jet.
 - Combat: aim with the mouse and fire with the left mouse button. Number keys
-  `1` through `0` select the ten weapons; the mouse wheel cycles them.
+  `1` through `0` select the ten weapons. The mouse wheel zooms the
+  player-locked camera; Shift+wheel cycles the active arsenal.
 - Match: `Esc` pauses and `R` restarts the current map and mode.
 - Diagnostics: `F1` toggles the live FPS/tick/hash/material overlay and `F11`
   toggles desktop fullscreen.

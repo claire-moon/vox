@@ -156,7 +156,9 @@ static int test_materials_and_sleep(void)
     if (world.occupied_cells != 1U || world.awake_cells != 1U) {
         return 3;
     }
-    if (vox_world_step(&world, 0) != VOX_OK || world.awake_cells != 0U) {
+    if (vox_world_step(&world, 0) != VOX_OK ||
+        vox_world_cell(&world, 1U, 2U, 1U)->material != VOX_MAT_STONE ||
+        !(vox_world_cell(&world, 1U, 2U, 1U)->flags & VOX_CELL_UNSTABLE)) {
         return 4;
     }
     if (vox_world_set(&world, 1U, 3U, 2U, VOX_MAT_BEDROCK, 20L << 16) != VOX_OK ||

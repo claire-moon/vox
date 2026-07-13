@@ -18,10 +18,12 @@ The SDL2 host maps controls as follows:
 - `A`/`D` and left/right arrows set horizontal actions;
 - `W`, up arrow, and `Space` set jump;
 - either `Shift` key sets steam;
-- mouse position is transformed through the letterboxed logical viewport to
-  an integer world target;
+- mouse position is transformed through the letterboxed logical viewport and
+  active camera exactly once to an integer world target;
 - left mouse fires; `1` through `0` select the ten weapon IDs; and
-- the mouse wheel wraps through weapons allowed by the active arsenal mask.
+- the mouse wheel changes the player-locked camera zoom from 1x through 4x;
+- Shift plus mouse wheel wraps through weapons allowed by the active arsenal
+  mask.
 
 Host key repeat, desktop resolution, presentation frame cap, mouse sampling
 rate, and Lightfield tier never change the order of authoritative ticks. One

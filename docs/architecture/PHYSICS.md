@@ -24,6 +24,8 @@ DIGS owns the game-facing layer around those bodies:
   bounded substeps, terrain/player impacts, material deposits, and blasts.
 
 Terrain destruction is never an implicit side effect of the body solver.
+The C89 world pass marks awake structural cells unstable when they lose direct
+or diagonal support, then moves them through the deterministic gravity solver.
 Weapons call bounded C89 world primitives after their authoritative collision
 or fuse condition. Conversely, liquids and gases can move without becoming
 rigid bodies; the cellular world remains their authority.

@@ -70,6 +70,10 @@ typedef struct demo_app {
     int selected_tool;
     int mouse_x;
     int mouse_y;
+    int mouse_inside;
+    int camera_zoom;
+    double camera_world_x;
+    double camera_world_y;
     int foundry;
     double measured_fps;
     vox_u32 rendered_frames;
@@ -83,6 +87,7 @@ typedef struct demo_app {
 } demo_app;
 
 static vox_u8 demo_pixels[DEMO_WIDTH * DEMO_HEIGHT * VOX_SOFTWARE_RGB_BYTES];
+static vox_u8 demo_camera_pixels[DEMO_WIDTH * DEMO_HEIGHT * VOX_SOFTWARE_RGB_BYTES];
 static vox_digs_match demo_match;
 static vox_world demo_title_world;
 static vox_world demo_render_world;
@@ -507,6 +512,63 @@ static void demo_build_render_world(void)
     }
 }
 
+static void demo_apply_player_camera(demo_app *app)
+{
+    const vox_physics_body *player = &demo_match.players[0];
+    int center_x;
+    int center_y;
+    int x;
+    int y;
+    int zoom = app->camera_zoom;
+    app->camera_world_x = (double)player->position_x.value_q16 / 65536.0;
+    app->camera_world_y = (double)player->position_y.value_q16 / 65536.0;
+    center_x = (int)(app->camera_world_x *
+                     (double)DEMO_WIDTH / (double)VOX_WORLD_WIDTH);
+    center_y = (int)(app->camera_world_y *
+                     (double)DEMO_HEIGHT / (double)VOX_WORLD_HEIGHT);
+    memcpy(demo_camera_pixels, demo_pixels, sizeof(demo_pixels));
+    for (y = 0; y < (int)DEMO_HEIGHT; ++y) {
+        for (x = 0; x < (int)DEMO_WIDTH; ++x) {
+            int source_x = center_x + (x - (int)DEMO_WIDTH / 2) / zoom;
+            int source_y = center_y + (y - (int)DEMO_HEIGHT / 2) / zoom;
+            vox_u8 *destination = &demo_pixels[(y * (int)DEMO_WIDTH + x) *
+                                               VOX_SOFTWARE_RGB_BYTES];
+            if (source_x >= 0 && source_y >= 0 &&
+                source_x < (int)DEMO_WIDTH && source_y < (int)DEMO_HEIGHT) {
+                const vox_u8 *source = &demo_camera_pixels[
+                    (source_y * (int)DEMO_WIDTH + source_x) *
+                    VOX_SOFTWARE_RGB_BYTES];
+                destination[0] = source[0];
+                destination[1] = source[1];
+                destination[2] = source[2];
+            } else {
+                destination[0] = 0U;
+                destination[1] = 0U;
+                destination[2] = 0U;
+            }
+        }
+    }
+}
+
+static void demo_mouse_world(const demo_app *app, vox_u32 *world_x,
+                             vox_u32 *world_y)
+{
+    double offset_x = (double)(app->mouse_x - (int)DEMO_WIDTH / 2) /
+                      ((double)app->camera_zoom *
+                       ((double)DEMO_WIDTH / (double)VOX_WORLD_WIDTH));
+    double offset_y = (double)(app->mouse_y - (int)DEMO_HEIGHT / 2) /
+                      ((double)app->camera_zoom *
+                       ((double)DEMO_HEIGHT / (double)VOX_WORLD_HEIGHT));
+    long x = (long)(app->camera_world_x + offset_x);
+    long y = (long)(app->camera_world_y + offset_y);
+    if (x < 0L) x = 0L;
+    if (y < 0L) y = 0L;
+    if (x >= (long)VOX_WORLD_WIDTH) x = (long)VOX_WORLD_WIDTH - 1L;
+    if (y >= (long)VOX_WORLD_HEIGHT) y = (long)VOX_WORLD_HEIGHT - 1L;
+    *world_x = (vox_u32)x;
+    *world_y = (vox_u32)y;
+}
+
 static void demo_draw_hud(demo_app *app)
 {
     char text[96];
@@ -542,7 +604,7 @@ static void demo_draw_hud(demo_app *app)
     sprintf(text, "CD %u  LMB FIRE",
             (unsigned int)demo_match.weapon_cooldown[0]);
     vox_ui_text(&demo_ui, 179, 15, 1, text, DEMO_VGA_LIGHT_GRAY);
-    vox_ui_text(&demo_ui, 179, 23, 1, "1-0 OR WHEEL SELECT",
+    vox_ui_text(&demo_ui, 179, 23, 1, "1-0 WEAPON  WHEEL ZOOM",
                 DEMO_VGA_DARK_GRAY);
 }
 
@@ -550,11 +612,12 @@ static void demo_draw_debug(demo_app *app)
 {
     char text[128];
     const vox_cell *cell;
-    vox_u32 world_x = (vox_u32)app->mouse_x * VOX_WORLD_WIDTH / DEMO_WIDTH;
-    vox_u32 world_y = (vox_u32)app->mouse_y * VOX_WORLD_HEIGHT / DEMO_HEIGHT;
+    vox_u32 world_x;
+    vox_u32 world_y;
     if (!app->options.debug) {
         return;
     }
+    demo_mouse_world(app, &world_x, &world_y);
     if (world_x >= VOX_WORLD_WIDTH) {
         world_x = VOX_WORLD_WIDTH - 1U;
     }
@@ -588,10 +651,13 @@ static void demo_draw_play(demo_app *app)
     demo_build_render_world();
     (void)vox_software_render_ex(&demo_render_world, &demo_target,
                                  &demo_render_config);
-    vox_ui_frame(&demo_ui, app->mouse_x - 3, app->mouse_y - 3,
-                 7, 7, DEMO_VGA_YELLOW);
-    vox_ui_rect(&demo_ui, app->mouse_x, app->mouse_y, 1, 1,
-                DEMO_VGA_WHITE);
+    demo_apply_player_camera(app);
+    if (app->mouse_inside) {
+        vox_ui_frame(&demo_ui, app->mouse_x - 3, app->mouse_y - 3,
+                     7, 7, DEMO_VGA_YELLOW);
+        vox_ui_rect(&demo_ui, app->mouse_x, app->mouse_y, 1, 1,
+                    DEMO_VGA_WHITE);
+    }
     demo_draw_hud(app);
     demo_draw_debug(app);
     if (app->screen == DEMO_PAUSE) {
@@ -745,23 +811,42 @@ static void demo_apply_fullscreen(demo_app *app)
     (void)SDL_SetWindowFullscreen(app->window, flags);
 }
 
-static int demo_window_to_logical(demo_app *app, int window_x, int window_y,
-                                  int *logical_x, int *logical_y)
+static void demo_set_mouse_logical(demo_app *app, int logical_x,
+                                   int logical_y)
 {
+    if (logical_x < 0) {
+        logical_x = 0;
+    } else if (logical_x >= (int)DEMO_WIDTH) {
+        logical_x = (int)DEMO_WIDTH - 1;
+    }
+    if (logical_y < 0) {
+        logical_y = 0;
+    } else if (logical_y >= (int)DEMO_HEIGHT) {
+        logical_y = (int)DEMO_HEIGHT - 1;
+    }
+    app->mouse_x = logical_x;
+    app->mouse_y = logical_y;
+}
+
+static int demo_sync_hardware_mouse(demo_app *app)
+{
+    int window_x;
+    int window_y;
     int window_width;
     int window_height;
     int view_width;
     int view_height;
     int view_x;
     int view_y;
-    int inside;
+    int logical_x;
+    int logical_y;
     double scale_x;
     double scale_y;
     double scale;
+    (void)SDL_GetMouseState(&window_x, &window_y);
     SDL_GetWindowSize(app->window, &window_width, &window_height);
     if (window_width <= 0 || window_height <= 0) {
-        *logical_x = 0;
-        *logical_y = 0;
+        app->mouse_inside = 0;
         return 0;
     }
     scale_x = (double)window_width / (double)DEMO_WIDTH;
@@ -773,34 +858,25 @@ static int demo_window_to_logical(demo_app *app, int window_x, int window_y,
     view_width = (int)((double)DEMO_WIDTH * scale);
     view_height = (int)((double)DEMO_HEIGHT * scale);
     if (view_width <= 0 || view_height <= 0) {
-        *logical_x = 0;
-        *logical_y = 0;
+        app->mouse_inside = 0;
         return 0;
     }
     view_x = (window_width - view_width) / 2;
     view_y = (window_height - view_height) / 2;
-    inside = window_x >= view_x && window_y >= view_y &&
-             window_x < view_x + view_width &&
-             window_y < view_y + view_height;
-    *logical_x = (int)((double)(window_x - view_x) / scale);
-    *logical_y = (int)((double)(window_y - view_y) / scale);
-    if (*logical_x < 0) {
-        *logical_x = 0;
-    } else if (*logical_x >= (int)DEMO_WIDTH) {
-        *logical_x = (int)DEMO_WIDTH - 1;
-    }
-    if (*logical_y < 0) {
-        *logical_y = 0;
-    } else if (*logical_y >= (int)DEMO_HEIGHT) {
-        *logical_y = (int)DEMO_HEIGHT - 1;
-    }
-    return inside;
+    app->mouse_inside = window_x >= view_x && window_y >= view_y &&
+                        window_x < view_x + view_width &&
+                        window_y < view_y + view_height;
+    logical_x = (int)((double)(window_x - view_x) / scale);
+    logical_y = (int)((double)(window_y - view_y) / scale);
+    demo_set_mouse_logical(app, logical_x, logical_y);
+    return app->mouse_inside;
 }
 
 static void demo_fire_at_mouse(demo_app *app)
 {
-    vox_u32 world_x = (vox_u32)app->mouse_x * VOX_WORLD_WIDTH / DEMO_WIDTH;
-    vox_u32 world_y = (vox_u32)app->mouse_y * VOX_WORLD_HEIGHT / DEMO_HEIGHT;
+    vox_u32 world_x;
+    vox_u32 world_y;
+    demo_mouse_world(app, &world_x, &world_y);
     if (world_x >= VOX_WORLD_WIDTH) {
         world_x = VOX_WORLD_WIDTH - 1U;
     }
@@ -917,17 +993,13 @@ static void demo_handle_event(demo_app *app, const SDL_Event *event)
     if (event->type == SDL_QUIT) {
         app->running = 0;
     } else if (event->type == SDL_MOUSEMOTION) {
-        (void)demo_window_to_logical(app, event->motion.x, event->motion.y,
-                                     &app->mouse_x, &app->mouse_y);
+        /* The renderer filters event coordinates already, so query the raw
+         * window-relative hardware pointer and transform that exactly once. */
+        (void)demo_sync_hardware_mouse(app);
     } else if (event->type == SDL_MOUSEBUTTONDOWN &&
                event->button.button == SDL_BUTTON_LEFT &&
                app->screen == DEMO_PLAY) {
-        int logical_x;
-        int logical_y;
-        if (demo_window_to_logical(app, event->button.x, event->button.y,
-                                   &logical_x, &logical_y)) {
-            app->mouse_x = logical_x;
-            app->mouse_y = logical_y;
+        if (demo_sync_hardware_mouse(app)) {
             demo_fire_at_mouse(app);
         }
     } else if (event->type == SDL_MOUSEWHEEL && app->screen == DEMO_PLAY) {
@@ -936,7 +1008,16 @@ static void demo_handle_event(demo_app *app, const SDL_Event *event)
             if (event->wheel.direction == SDL_MOUSEWHEEL_FLIPPED) {
                 direction = -direction;
             }
-            demo_cycle_weapon(app, direction);
+            if ((SDL_GetModState() & KMOD_SHIFT) != 0) {
+                demo_cycle_weapon(app, direction);
+            } else {
+                app->camera_zoom += direction;
+                if (app->camera_zoom < 1) {
+                    app->camera_zoom = 1;
+                } else if (app->camera_zoom > 4) {
+                    app->camera_zoom = 4;
+                }
+            }
             demo_audio_play(app, DEMO_SOUND_MOVE);
         }
     } else if (event->type == SDL_KEYDOWN && !event->key.repeat) {
@@ -1109,6 +1190,7 @@ static int demo_smoke_test(const char *path)
     app.screen = DEMO_PLAY;
     app.mouse_x = 160;
     app.mouse_y = 100;
+    app.camera_zoom = 2;
     app.options.debug = 1;
     app.measured_fps = 60.0;
     demo_render(&app);
@@ -1279,9 +1361,15 @@ int main(int argc, char **argv)
         SDL_Quit();
         return 4;
     }
-    (void)SDL_RenderSetLogicalSize(app.renderer, (int)DEMO_WIDTH,
-                                   (int)DEMO_HEIGHT);
-    (void)SDL_RenderSetIntegerScale(app.renderer, SDL_TRUE);
+    if (SDL_RenderSetLogicalSize(app.renderer, (int)DEMO_WIDTH,
+                                 (int)DEMO_HEIGHT) != 0 ||
+        SDL_RenderSetIntegerScale(app.renderer, SDL_TRUE) != 0) {
+        fprintf(stderr, "logical renderer setup failed: %s\n", SDL_GetError());
+        SDL_DestroyRenderer(app.renderer);
+        SDL_DestroyWindow(app.window);
+        SDL_Quit();
+        return 5;
+    }
     app.texture = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_RGB24,
                                     SDL_TEXTUREACCESS_STREAMING,
                                     (int)DEMO_WIDTH, (int)DEMO_HEIGHT);
@@ -1290,7 +1378,7 @@ int main(int argc, char **argv)
         SDL_DestroyRenderer(app.renderer);
         SDL_DestroyWindow(app.window);
         SDL_Quit();
-        return 5;
+        return 6;
     }
     demo_audio_open(&app);
     demo_prepare_targets();
@@ -1312,6 +1400,7 @@ int main(int argc, char **argv)
         while (SDL_PollEvent(&event)) {
             demo_handle_event(&app, &event);
         }
+        (void)demo_sync_hardware_mouse(&app);
         while (accumulator >= 1.0 / (double)DEMO_SIM_HZ &&
                catchup < DEMO_MAX_CATCHUP) {
             demo_tick(&app);

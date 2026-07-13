@@ -58,7 +58,8 @@ Match:
   Shift             Use the rechargeable steam jet.
   Mouse             Aim.
   Left mouse        Fire or use the selected tool.
-  Mouse wheel       Cycle weapons.
+  Mouse wheel       Zoom the player-locked camera from 1x through 4x.
+  Shift+wheel       Cycle weapons allowed by the match arsenal.
   1 through 0       Select one of the ten weapons.
   Escape            Pause.
   R                 Restart the current map and seed.
@@ -85,8 +86,8 @@ Deterministic smoke test:
 
 A good result exits successfully and prints these values:
 
-  state hash: 86dc7ba8
-  frame hash: c3ff194e
+  state hash: 9daace5d
+  frame hash: ad14d48e
 
 CPU Lightfield benchmark:
 
@@ -120,7 +121,10 @@ Please check at least these items:
   [ ] All three maps generate and the same seed regenerates the same terrain.
   [ ] Movement, jumping, aiming, and the steam jet respond correctly.
   [ ] All ten weapon keys work.
-  [ ] Terrain can be dug, blasted, burned, cooled, and displaced.
+  [ ] Blasts have varied fracture edges instead of identical round holes.
+  [ ] Unsupported structural terrain collapses under gravity.
+  [ ] Explosions throw mixed terrain, smoke, ember, and weapon debris.
+  [ ] Camera stays centered on P1; wheel zoom and aim remain aligned.
   [ ] Sand falls; smoke and firedamp rise; water cools lava into stone.
   [ ] Bots move, attack, take damage, die, score, and respawn.
   [ ] Rising lava enters the world and damages a miner.
