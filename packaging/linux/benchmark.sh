@@ -18,7 +18,7 @@ vox_require_executable "$BINARY"
 vox_require_runtime_libraries "$BINARY"
 mkdir -p -- "$OUT_DIR"
 {
-    printf 'VOX + DIGS v0.0.1 Linux benchmark\n'
+    printf 'DIGS v0.0.1 Linux benchmark\n'
     printf 'UTC: %s\n' "$STAMP"
     printf 'Kernel: %s\n' "$(uname -srmo 2>/dev/null || uname -a)"
     if [[ -r /proc/cpuinfo ]]; then

@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# VOX + DIGS v0.0.1 demo guide
+# DIGS v0.0.1 demo guide
 
 The `v0.0.1` demo is an executable statement of intent: a small match in which
 the same bounded voxel world drives terrain destruction, granular motion,

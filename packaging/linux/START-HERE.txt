@@ -1,5 +1,5 @@
-VOX + DIGS v0.0.1 DEMO - Linux x86_64
-=======================================
+DIGS v0.0.1 DEMO - Linux x86_64
+================================
 
 1. Extract the complete archive.
 2. Double-click run-digs.sh, or run it from a terminal:
@@ -32,7 +32,7 @@ an external system library rather than bundled code.
 Licensing and source
 --------------------
 
-VOX + DIGS is free software under GPL-3.0-or-later. See LICENSE,
+DIGS and its VOX engine are free software under GPL-3.0-or-later. See LICENSE,
 THIRD_PARTY.md, and LICENSES/README.md. The matching source archive and
 SHA256SUMS are distributed beside this binary archive. The source archive has
 its own SPDX 2.3 JSON SBOM.

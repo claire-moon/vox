@@ -1,5 +1,5 @@
-VOX + DIGS v0.0.1 - CG QUICK-START AND TEST GUIDE
-=================================================
+DIGS v0.0.1 - CG QUICK-START AND TEST GUIDE
+===========================================
 
 This is the Linux x86-64 CPU-rendered demo build. The game does not use the
 GTX 1660 Ti yet; the GPU path is planned for a later VOX version.
@@ -28,7 +28,7 @@ If SDL2 is missing on Linux Mint, Ubuntu, or Debian:
 At the title screen:
 
   START MATCH       Configure a normal deathmatch.
-  VOX FOUNDRY LAB   Open the systemic-material sandbox.
+  FOUNDRY LAB       Open the systemic-material sandbox.
   OPTIONS           Change frame cap, lighting, debug, and fullscreen.
   QA FEEDBACK       Show the testing-cockpit reminder.
   QUIT              Exit the demo.

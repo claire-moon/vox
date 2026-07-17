@@ -1,4 +1,4 @@
-# VOX + DIGS
+# VOX engine / DIGS game
 
 VOX is a CPU-authoritative mini-voxel engine for deterministic, systemic
 worlds. DIGS is its first game: a real-time, side-view steampunk-miner
@@ -98,7 +98,7 @@ the launcher; it checks the dynamically linked SDL2 runtime and prints
 distribution-specific installation help if the library is missing:
 
 For a complete plain-text walkthrough written for the first local test pass,
-open [CGReadme.txt](CGReadme.txt).
+open [CG-README.TXT](CG-README.TXT).
 
 ```sh
 tar -xzf vox-digs-v0.0.1-linux-x86_64.tar.gz

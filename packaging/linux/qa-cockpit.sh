@@ -8,12 +8,12 @@ WORKBOOK="$ROOT/qa/VOX_QA_FEEDBACK.xlsx"
 BINARY="$ROOT/bin/digs_demo"
 
 if [[ ! -x "$COCKPIT" ]]; then
-    printf 'VOX + DIGS: the QA cockpit is missing from this archive.\n' >&2
+    printf 'DIGS: the QA cockpit is missing from this archive.\n' >&2
     exit 1
 fi
 if (( $# == 0 )); then
     if [[ ! -f "$WORKBOOK" ]]; then
-        printf 'VOX + DIGS: the default QA workbook is missing: %s\n' \
+        printf 'DIGS: the default QA workbook is missing: %s\n' \
             "$WORKBOOK" >&2
         exit 1
     fi

@@ -6,7 +6,7 @@
 
 vox_die()
 {
-    printf 'VOX + DIGS: %s\n' "$*" >&2
+    printf 'DIGS: %s\n' "$*" >&2
     exit 1
 }
 vox_require_executable()
@@ -21,7 +21,7 @@ vox_require_executable()
 vox_print_sdl2_help()
 {
     cat >&2 <<'EOF'
-VOX + DIGS needs the SDL2 runtime library supplied by your Linux distribution.
+DIGS needs the SDL2 runtime library supplied by your Linux distribution.
 Install it, then run this script again. Common commands are:
   Debian / Ubuntu / Mint: sudo apt install libsdl2-2.0-0
   Fedora:                 sudo dnf install SDL2
@@ -37,7 +37,7 @@ vox_require_runtime_libraries()
 
     if ! command -v ldd >/dev/null 2>&1; then
         printf '%s\n' \
-            'VOX + DIGS: warning: ldd is unavailable; skipping the runtime-library preflight.' >&2
+            'DIGS: warning: ldd is unavailable; skipping the runtime-library preflight.' >&2
         return 0
     fi
 
@@ -46,7 +46,7 @@ vox_require_runtime_libraries()
         vox_die "could not inspect runtime libraries for $binary"
     fi
     if grep -F 'not found' <<<"$dependencies" >/dev/null; then
-        printf '%s\n' 'VOX + DIGS: one or more runtime libraries are missing:' >&2
+        printf '%s\n' 'DIGS: one or more runtime libraries are missing:' >&2
         printf '%s\n' "$dependencies" | grep -F 'not found' >&2
         if grep -Eiq 'SDL2|libSDL' <<<"$dependencies"; then
             vox_print_sdl2_help
