@@ -15,7 +15,7 @@ From the title screen:
   Deepworks, or Furnace Yard, a visible 32-bit seed, and an arsenal. Full Works
   enables all ten demo weapons; Miner Kit groups direct mining/firearms, while
   Powder Keg groups thrown explosives and material deposits.
-- **VOX Foundry Lab** opens a no-bot sandbox with the same authoritative
+- **Foundry Lab** opens a no-bot sandbox with the same authoritative
   material and weapon rules and a longer experimentation timer.
 - **Options** selects the presentation frame cap, Lightfield tier, debug
   overlay, and desktop fullscreen.

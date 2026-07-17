@@ -16,6 +16,9 @@
 #define DEMO_WINDOW_HEIGHT 800
 #define DEMO_SIM_HZ 60U
 #define DEMO_MAX_CATCHUP 8U
+#define DEMO_CAMERA_ZOOM_MIN 1
+#define DEMO_CAMERA_ZOOM_MAX 4
+#define DEMO_CAMERA_ZOOM_DEFAULT 2
 #define DEMO_AUDIO_RATE 22050
 #define DEMO_AUDIO_MAX_SAMPLES 3087
 
@@ -323,14 +326,12 @@ static void demo_draw_title(demo_app *app)
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
     demo_dark_panel(62, 18, 196, 164);
-    vox_ui_text_center_shadow(&demo_ui, 160, 29, 4, "VOX",
+    vox_ui_text_center_shadow(&demo_ui, 160, 35, 4, "DIGS",
                               DEMO_VGA_YELLOW);
-    vox_ui_text_center_shadow(&demo_ui, 160, 62, 2, "DIGS",
-                              DEMO_VGA_LIGHT_CYAN);
     vox_ui_rect(&demo_ui, 82, 84, 156, 1, DEMO_VGA_DARK_GRAY);
     vox_ui_rect(&demo_ui, 82, 85, 156, 1, DEMO_VGA_BROWN);
     demo_menu_item(94, "START MATCH", app->selection == 0);
-    demo_menu_item(110, "VOX FOUNDRY LAB", app->selection == 1);
+    demo_menu_item(110, "FOUNDRY LAB", app->selection == 1);
     demo_menu_item(126, "OPTIONS", app->selection == 2);
     demo_menu_item(142, "QA FEEDBACK", app->selection == 3);
     demo_menu_item(158, "QUIT", app->selection == 4);
@@ -521,6 +522,15 @@ static void demo_build_render_world(void)
     }
 }
 
+static int demo_normalize_camera_zoom(demo_app *app)
+{
+    if (app->camera_zoom < DEMO_CAMERA_ZOOM_MIN ||
+        app->camera_zoom > DEMO_CAMERA_ZOOM_MAX) {
+        app->camera_zoom = DEMO_CAMERA_ZOOM_DEFAULT;
+    }
+    return app->camera_zoom;
+}
+
 static void demo_apply_player_camera(demo_app *app)
 {
     const vox_physics_body *player = &demo_match.players[0];
@@ -528,7 +538,7 @@ static void demo_apply_player_camera(demo_app *app)
     int center_y;
     int x;
     int y;
-    int zoom = app->camera_zoom;
+    int zoom = demo_normalize_camera_zoom(app);
     app->camera_world_x = (double)player->position_x.value_q16 / 65536.0;
     app->camera_world_y = (double)player->position_y.value_q16 / 65536.0;
     center_x = (int)(app->camera_world_x *
@@ -559,14 +569,15 @@ static void demo_apply_player_camera(demo_app *app)
     }
 }
 
-static void demo_mouse_world(const demo_app *app, vox_u32 *world_x,
+static void demo_mouse_world(demo_app *app, vox_u32 *world_x,
                              vox_u32 *world_y)
 {
+    int zoom = demo_normalize_camera_zoom(app);
     double offset_x = (double)(app->mouse_x - (int)DEMO_WIDTH / 2) /
-                      ((double)app->camera_zoom *
+                      ((double)zoom *
                        ((double)DEMO_WIDTH / (double)VOX_WORLD_WIDTH));
     double offset_y = (double)(app->mouse_y - (int)DEMO_HEIGHT / 2) /
-                      ((double)app->camera_zoom *
+                      ((double)zoom *
                        ((double)DEMO_HEIGHT / (double)VOX_WORLD_HEIGHT));
     long x = (long)(app->camera_world_x + offset_x);
     long y = (long)(app->camera_world_y + offset_y);
@@ -768,6 +779,7 @@ static int demo_start_match(demo_app *app, int foundry)
         demo_match.state_hash = vox_digs_hash(&demo_match);
     }
     app->foundry = foundry;
+    (void)demo_normalize_camera_zoom(app);
     app->selected_tool = demo_first_weapon(rules.weapon_mask);
     app->screen = DEMO_PLAY;
     app->selection = 0;
@@ -1021,10 +1033,10 @@ static void demo_handle_event(demo_app *app, const SDL_Event *event)
                 demo_cycle_weapon(app, direction);
             } else {
                 app->camera_zoom += direction;
-                if (app->camera_zoom < 1) {
-                    app->camera_zoom = 1;
-                } else if (app->camera_zoom > 4) {
-                    app->camera_zoom = 4;
+                if (app->camera_zoom < DEMO_CAMERA_ZOOM_MIN) {
+                    app->camera_zoom = DEMO_CAMERA_ZOOM_MIN;
+                } else if (app->camera_zoom > DEMO_CAMERA_ZOOM_MAX) {
+                    app->camera_zoom = DEMO_CAMERA_ZOOM_MAX;
                 }
             }
             demo_audio_play(app, DEMO_SOUND_MOVE);
@@ -1199,12 +1211,15 @@ static int demo_smoke_test(const char *path)
     app.screen = DEMO_PLAY;
     app.mouse_x = 160;
     app.mouse_y = 100;
-    app.camera_zoom = 2;
+    app.camera_zoom = 0;
     app.options.debug = 1;
     app.measured_fps = 60.0;
     demo_render(&app);
-    if (!demo_write_ppm(path)) {
+    if (app.camera_zoom != DEMO_CAMERA_ZOOM_DEFAULT) {
         return 4;
+    }
+    if (!demo_write_ppm(path)) {
+        return 5;
     }
     printf("DIGS demo smoke tick=%lu hash=%08lx frame=%08lx "
            "fired=%03x projectiles=%u effects=%u damage=%u deaths=%u "
@@ -1341,6 +1356,7 @@ int main(int argc, char **argv)
     app.seed = 0x564F5831U;
     app.mouse_x = 160;
     app.mouse_y = 100;
+    app.camera_zoom = DEMO_CAMERA_ZOOM_DEFAULT;
     app.options.frame_cap_index = 1;
     app.options.gi_quality = VOX_GI_BALANCED;
     SDL_SetMainReady();
@@ -1349,7 +1365,7 @@ int main(int argc, char **argv)
         return 2;
     }
     (void)SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
-    app.window = SDL_CreateWindow("VOX + DIGS v0.0.1 Demo",
+    app.window = SDL_CreateWindow("DIGS v0.0.1 Demo",
                                   SDL_WINDOWPOS_CENTERED,
                                   SDL_WINDOWPOS_CENTERED,
                                   DEMO_WINDOW_WIDTH, DEMO_WINDOW_HEIGHT,
@@ -1393,6 +1409,15 @@ int main(int argc, char **argv)
     demo_prepare_targets();
     demo_build_title_world();
     frequency = SDL_GetPerformanceFrequency();
+    if (frequency == 0U) {
+        fprintf(stderr, "performance timer unavailable: %s\n", SDL_GetError());
+        demo_audio_close(&app);
+        SDL_DestroyTexture(app.texture);
+        SDL_DestroyRenderer(app.renderer);
+        SDL_DestroyWindow(app.window);
+        SDL_Quit();
+        return 7;
+    }
     previous_counter = SDL_GetPerformanceCounter();
     app.fps_stamp = SDL_GetTicks();
     while (app.running) {
@@ -1420,10 +1445,14 @@ int main(int argc, char **argv)
             accumulator = 0.0;
         }
         demo_render(&app);
-        (void)SDL_UpdateTexture(app.texture, 0, demo_pixels,
-                                (int)demo_ui.stride);
-        (void)SDL_RenderClear(app.renderer);
-        (void)SDL_RenderCopy(app.renderer, app.texture, 0, 0);
+        if (SDL_UpdateTexture(app.texture, 0, demo_pixels,
+                              (int)demo_ui.stride) != 0 ||
+            SDL_RenderClear(app.renderer) != 0 ||
+            SDL_RenderCopy(app.renderer, app.texture, 0, 0) != 0) {
+            fprintf(stderr, "frame presentation failed: %s\n", SDL_GetError());
+            app.running = 0;
+            continue;
+        }
         SDL_RenderPresent(app.renderer);
         ++app.rendered_frames;
         if (SDL_GetTicks() - app.fps_stamp >= 1000U) {
