@@ -8,8 +8,8 @@ Support states:
   UNSUPPORTED explicitly not targeted by the current profile
 
 v0.0.1 VERIFIED target:
-  Linux x86-64 / current test laptop / software renderer and SDL3-GPU path
-  (GPU status pending driver/device preflight)
+  Linux x86-64 / current test laptop / software renderer
+  (modern GPU backend and GPU/device preflight remain pending)
 
 Modern future targets:
   Windows 10/11 x86-64
