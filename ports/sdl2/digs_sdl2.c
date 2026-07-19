@@ -783,7 +783,9 @@ static void demo_close_controller(demo_app *app, SDL_JoystickID instance)
             app->controllers[slot].joystick = 0;
             app->controllers[slot].instance_id = -1;
             app->controllers[slot].claimed_player = -1;
-            if (app->screen == DEMO_PLAY && claimed_player >= 0) {
+            if (app->screen == DEMO_PLAY && claimed_player >= 0 &&
+                claimed_player < app->local_players &&
+                claimed_player < (int)DEMO_LOCAL_MAX) {
                 demo_player_input *input =
                     &app->player_input[claimed_player];
                 if (input->preference == DEMO_INPUT_CONTROLLER) {
@@ -3308,7 +3310,8 @@ static void demo_handle_controller_button(demo_app *app,
             demo_handle_key(app, SDLK_ESCAPE, SDL_SCANCODE_UNKNOWN);
             return;
         }
-        if (player >= 0) {
+        if (player >= 0 && player < app->local_players &&
+            player < (int)DEMO_LOCAL_MAX) {
             changed = demo_activate_source(app, player,
                                            DEMO_SOURCE_CONTROLLER, 1);
             if (app->player_input[player].active_source !=
