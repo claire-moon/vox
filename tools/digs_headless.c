@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include <stdio.h>
+#include <string.h>
 #include "vox/vox_game.h"
 
 int main(void)
@@ -10,9 +11,13 @@ int main(void)
     vox_u32 i;
     vox_u16 minimum_steam = 65535U;
     vox_digs_rules_classic(&rules);
+    rules.match_ticks = 600U;
+    rules.score_limit = 100U;
+    rules.lava_start_tick = 300U;
     if (vox_digs_match_init(&match, &rules) != VOX_OK) {
         return 2;
     }
+    memset(&input, 0, sizeof(input));
     input.abi_version = VOX_ABI_VERSION;
     input.struct_size = (vox_u32)sizeof(input);
     input.player = 0U;
@@ -29,6 +34,8 @@ int main(void)
         } else {
             input.actions = 0U;
         }
+        input.move_x_q15 = (input.actions & VOX_DIGS_ACTION_RIGHT) ?
+                           32767 : 0;
         if (match.alive[0] &&
             vox_digs_submit_input(&match, &input) != VOX_OK) {
             return 3;

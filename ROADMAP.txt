@@ -11,6 +11,19 @@ v0.0.1 VERIFIED target:
   Linux x86-64 / current test laptop / software renderer
   (modern GPU backend and GPU/device preflight remain pending)
 
+v0.0.2 DEVELOPMENT CANDIDATE:
+  Preserve the v0.0.1 scalar CPU and evidence baseline while adding:
+  - one or two local humans, zero through two bots, team/friendly-fire rules;
+  - responsive fixed-point movement, steam traversal, and breakable rope;
+  - controller hotplug/claim, run-local rebinding, and shared dynamic camera;
+  - spawn protection, stateful bots, anatomy, varied simulated FX, and chip SFX;
+  - bounded Lua 5.1 catalog, How To Play, Miner's Index, and QA coverage.
+
+  This row is not VERIFIED by implementation or compile status alone. Promotion
+  requires a frozen commit, strict automated gate, packaged-runtime script
+  validation, repeatable hashes per simulation profile, controller/manual
+  acceptance, reviewed QA workbook, source archive, SBOM, and checksums.
+
 Modern future targets:
   Windows 10/11 x86-64
   macOS 11+ Intel/Apple Silicon
@@ -30,3 +43,12 @@ Classic Mac future targets:
 No platform becomes VERIFIED from a compile alone. Record the exact OS,
 CPU, GPU/API, compiler, build, boot, input, render, match-completion, and
 performance evidence before advertising support.
+
+Engine milestones after the v0.0.2 acceptance gate:
+  - replay/input-log format and deterministic network research;
+  - broader rigid-body/joint/constraint physics behind the stable C ABI;
+  - renderer-neutral snapshots plus measured OpenGL/D3D/Metal adapters;
+  - streamed/larger-world profiles with explicit memory and CPU budgets;
+  - QEMU automation, 86Box device-fidelity profiles, then native acceptance;
+  - versioned reduced profiles for legacy and retro hosts without weakening
+    the strict C89 behavioral oracle or overstating equivalence.

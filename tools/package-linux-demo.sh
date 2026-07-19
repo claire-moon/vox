@@ -7,7 +7,7 @@ umask 022
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 DIST_DIR=${VOX_PACKAGE_DIST_DIR:-"$ROOT/dist"}
-VERSION=${VOX_PACKAGE_VERSION:-v0.0.1}
+VERSION=${VOX_PACKAGE_VERSION:-v0.0.2}
 ARCHIVE_STEM="vox-digs-$VERSION-linux-x86_64"
 SOURCE_STEM="vox-digs-$VERSION-source"
 BINARY_ARCHIVE="$DIST_DIR/$ARCHIVE_STEM.tar.gz"
@@ -192,6 +192,17 @@ capture_evidence cargo-test "$ROOT" \
         --manifest-path "$ROOT/Cargo.toml" --workspace --locked
 capture_evidence vox-headless "$EVIDENCE_DIR" "$BUILD_DIR/vox_headless"
 capture_evidence digs-headless "$EVIDENCE_DIR" "$BUILD_DIR/digs_headless"
+[[ -f "$BUILD_DIR/share/digs/scripts/manifest.txt" ]] || \
+    die 'the build did not stage the DIGS Lua manifest'
+capture_evidence digs-script-validate "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_script" --validate \
+        "$BUILD_DIR/share/digs/scripts/manifest.txt"
+capture_evidence digs-script-hash "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_script" --hash \
+        "$BUILD_DIR/share/digs/scripts/manifest.txt"
+capture_evidence digs-script-headless "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_script" --headless \
+        "$BUILD_DIR/share/digs/scripts/manifest.txt"
 capture_evidence digs-demo-smoke "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --smoke-test digs-demo-smoke.ppm
 [[ -s "$EVIDENCE_DIR/digs-demo-smoke.ppm" ]] || \
@@ -204,9 +215,16 @@ capture_evidence vox-render-demo "$EVIDENCE_DIR" \
     die 'vox_render_demo produced no image'
 
 mkdir -p -- "$STAGE_DIR/bin" "$STAGE_DIR/libexec" "$STAGE_DIR/tools"
-for binary in digs_demo vox_headless digs_headless vox_render_demo; do
+for binary in digs_demo digs_script vox_headless digs_headless vox_render_demo; do
     install -m 0755 -- "$BUILD_DIR/$binary" "$STAGE_DIR/bin/$binary"
 done
+copy_tree "$BUILD_DIR/share" "$STAGE_DIR/share"
+# SDL_GetBasePath() resolves from bin/, while tester-facing tools and package
+# layout expose data under the conventional archive-root share/. Keep one
+# canonical copy and make the executable-relative path resolve to it.
+ln -s ../share "$STAGE_DIR/bin/share"
+[[ -r "$STAGE_DIR/bin/share/digs/scripts/manifest.txt" ]] || \
+    die 'the executable-relative DIGS Lua manifest path is broken'
 install -m 0755 -- "$ROOT/packaging/linux/run-digs.sh" \
     "$STAGE_DIR/run-digs.sh"
 install -m 0755 -- "$ROOT/packaging/linux/smoke-test.sh" \

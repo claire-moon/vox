@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # VOX + DIGS testing cockpit
 
-`VOX_QA_FEEDBACK.xlsx` is the portable feedback workbook for the `v0.0.1`
+`VOX_QA_FEEDBACK.xlsx` is the portable feedback workbook for the `v0.0.2`
 demo. It can be filled in with Excel, LibreOffice, OnlyOffice, or another
 application that preserves `.xlsx` files. The repository builds it
 deterministically from `VOX_QA_CHECKPOINTS.csv` with
@@ -22,10 +22,18 @@ The workbook has three sheets:
 ## Run the cockpit
 
 Install [xleak](https://github.com/bgreenwell/xleak) and make sure `xleak` is
-available on `PATH`. Then run from the repository or tester-bundle root:
+available on `PATH`. From a source checkout, run:
 
 ```sh
-tools/vox-test-cockpit.sh --binary ./digs_demo qa/VOX_QA_FEEDBACK.xlsx
+tools/vox-test-cockpit.sh --binary ./build-demo/digs_demo \
+  qa/VOX_QA_FEEDBACK.xlsx
+```
+
+From the extracted Linux tester bundle, the short form uses the same workbook
+and the packaged binary automatically:
+
+```sh
+./qa-cockpit.sh
 ```
 
 Multiple testers' workbooks can be combined in one packet:

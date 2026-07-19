@@ -1,0 +1,18 @@
+Lua 5.1.5 provenance for VOX
+================================
+
+Upstream project: Lua
+Upstream version: 5.1.5
+Upstream archive: https://www.lua.org/ftp/lua-5.1.5.tar.gz
+Archive SHA-256: 2640fc56a795f29d28ef15e13c34a47e223960b0240e8cb0a82d9b0738695333
+Imported: 2026-07-17
+License: MIT/Expat; see COPYRIGHT in this directory.
+
+This directory is an unmodified extraction of the official archive. VOX builds
+the Lua core, parser, auxiliary library, base library, table library, string
+library, and math library. VOX does not compile the standalone lua.c or luac.c
+programs, nor the upstream io, os, package, or debug libraries. The VOX host
+removes dynamic loading, bytecode dumping, process-global randomness, module
+loading, environment mutation, and allocator control from the script globals.
+Those restrictions live in engine/c89/vox_script.c; the upstream source remains
+unchanged so its checksum and provenance stay auditable.

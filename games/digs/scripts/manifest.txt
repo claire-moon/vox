@@ -1,0 +1,11 @@
+# DIGS Lua 5.1 catalog load order. Paths are relative to this manifest.
+bootstrap.lua
+../catalog/how_to.lua
+../catalog/systems.lua
+../catalog/modes.lua
+../catalog/materials.lua
+../catalog/weapons.lua
+../catalog/entities.lua
+../catalog/anatomy.lua
+../catalog/reactions.lua
+../catalog/fx_audio.lua

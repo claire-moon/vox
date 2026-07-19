@@ -5,6 +5,7 @@
 *.dSYM/
 *.user
 *.swp
+*.lock~
 __pycache__/
 *.py[cod]
 lab/**/roms/

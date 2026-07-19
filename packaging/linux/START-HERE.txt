@@ -1,4 +1,4 @@
-DIGS v0.0.1 DEMO - Linux x86_64
+DIGS v0.0.2 DEMO - Linux x86_64
 ================================
 
 1. Extract the complete archive.
@@ -16,6 +16,10 @@ Useful tester commands
   ./smoke-test.sh                 deterministic non-windowed acceptance test
   ./benchmark.sh 240              CPU Lightfield benchmark (three quality tiers)
   ./qa-cockpit.sh                 combine the included workbook and test evidence
+  ./bin/digs_script --validate share/digs/scripts/manifest.txt
+                                  validate the packaged Lua catalog
+  ./bin/digs_script --hash share/digs/scripts/manifest.txt
+                                  print packaged source and catalog hashes
   ./bin/vox_headless              minimal voxel-kernel scenario
   ./bin/digs_headless             deterministic DIGS match scenario
   ./bin/vox_render_demo out.ppm   software-renderer image test
@@ -23,6 +27,12 @@ Useful tester commands
 Smoke images, benchmark reports, and cockpit packets go to qa/out/. Open
 qa/README.md for the feedback workflow. The cockpit requires the free xleak
 command-line spreadsheet reader to inspect .xlsx feedback workbooks.
+
+Keep bin/, bin/share, share/, and libexec/ in their extracted layout. The
+bin/share link makes the executable-relative Lua path resolve to share/digs/.
+CG-README.TXT documents controller assignment, two-player controls, rope use,
+the Miner's Index, accessibility options, script reload, and the 51-point
+manual acceptance pass.
 
 The evidence/ directory contains the unmodified package-time test streams,
 exit statuses, smoke images, build profile, and an explanation of their

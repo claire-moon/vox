@@ -5,40 +5,63 @@ worlds. DIGS is its first game: a real-time, side-view steampunk-miner
 deathmatch in which terrain, projectiles, hazards, and effects share the same
 material simulation.
 
-`v0.0.1` is a focused graphical demonstration, not a claim that the complete
-cross-generation engine is finished. It establishes a strict C89 simulation
-oracle, a strict C++98 fixed-point body solver, a CPU software Lightfield
-renderer, a versioned C ABI, and an SDL2 desktop host. Ports become supported
-only after their own reproducible acceptance evidence is recorded.
+`v0.0.2` is the active development demo. It extends the frozen `v0.0.1`
+foundation with two-local-player input, hotplugged controllers, rope traversal,
+more responsive fixed-point movement, adaptive bots, anatomy and event-driven
+effects, an original eight-voice chip-sound engine, and a bounded Lua 5.1 data
+layer. It is still a vertical slice, not a claim that the complete
+cross-generation engine is finished. Ports become supported only after their
+own reproducible acceptance evidence is recorded.
 
-## Demo highlights
+The tagged `v0.0.1` release remains the first verified Linux x86-64 CPU
+baseline. Its release checklist, evidence record, hashes, and deliberate limits
+remain under `docs/releasing/` and are not retroactively changed by this work.
+
+## v0.0.2 development-demo highlights
 
 - A bounded `256 x 160 x 10` mini-voxel world: 409,600 simulated cells,
   exactly 10x the original demo volume, partitioned into 160
   `16 x 16 x 10` active/sleeping chunks.
-- Four-player Classic FFA with one local player and zero to three deterministic
-  bots, health, damage, scoring, death effects, respawns, and match results.
+- Four match slots with one or two independent local humans and zero to two
+  deterministic bots. Free-for-All and Miners vs Machines expose team and
+  friendly-fire rules without giving bots hidden physics advantages.
 - Coal Ridge, Deepworks, and Furnace Yard maps generated from a visible seed.
 - Ten steampunk tools and weapons: Pick, Blast Charge, Smoke Pot, Cinder Flask,
   Pressure Hose, Sledge, Nail Gun, Boiler Shotgun, Concussion Grenade, and Nail
   Bomb.
-- Fixed-pool projectiles and voxel effects, destructible terrain, rising lava,
-  water/lava cooling, steam and smoke, burning biomass/coal, and firedamp
-  ignition.
+- Accelerated/coyote/buffered movement, a momentum-preserving rope with
+  reel/break rules, steam traversal, fixed-pool projectiles, destructible and
+  collapsing terrain, rising lava, cooling, fire, smoke, and firedamp.
+- Fifteen-part miner anatomy, bleeding/cautery/severing state, five-second
+  attack-cancelled spawn shields, deterministic event variants, and selectable
+  `768`/`1536`/`3072` simulated FX-voxel budgets. The selected budget is an
+  explicit deterministic match profile, not a presentation-only switch.
+- SDL GameController hotplug and deterministic claims for up to two pads,
+  runtime keyboard/controller rebinding, shared dynamic camera framing,
+  hardware-pointer-correct mouse aim, rumble, local-only flashes, and damage
+  number/accessibility controls.
+- A sandboxed Lua 5.1 catalog containing 79 materials, weapons, entities,
+  reactions, anatomy parts, modes, AI states, and system entries. The in-game
+  Miner's Index displays six entries at a time; F5 uses transactional reload.
+- An original allocation-free, dual-bank, eight-voice stereo synth with
+  square/polynomial-noise timbres and deterministic event patches. No sampled
+  sound asset or music file is required.
 - A CPU RGB Lightfield with Compatibility, Balanced, and Showcase quality
   tiers. Rendering and frame pacing never change the authoritative 60 Hz
   simulation.
 - An opt-in Linux System V x86-64 NASM FNV-1a leaf with a strict C89 fallback
   and exhaustive scalar/assembly parity over the acceptance vectors. It is a
   dispatch contract probe, not a renderer or simulation speed claim.
-- A title screen, match setup, Foundry Lab sandbox, pause/results screens,
-  frame caps (`30`, `60`, `90`, `120`, `144`, and `Unlimited`), fullscreen,
-  a debug overlay, and procedural queued audio generated without sound assets.
+- A DIGS-only title screen, setup, Foundry Lab, How To Play, Miner's Index,
+  Controls, Options, QA, pause/results screens, all requested frame caps,
+  fullscreen, and a debug overlay.
 
 The demo renders the simulation through a software framebuffer and asks SDL2
 only for the window, texture presentation, input, timing, and audio device. It
 does not yet contain a GPU renderer, networking, a general rigid-body solver,
 or the historical platform adapters described by [ROADMAP.txt](ROADMAP.txt).
+See [the v0.0.2 quick-start and test guide](CG-README.TXT) for exact controls,
+rope, controller assignment, script-runtime, and manual acceptance behavior.
 
 ## Build the portable core
 
@@ -101,13 +124,15 @@ For a complete plain-text walkthrough written for the first local test pass,
 open [CG-README.TXT](CG-README.TXT).
 
 ```sh
-tar -xzf vox-digs-v0.0.1-linux-x86_64.tar.gz
-cd vox-digs-v0.0.1-linux-x86_64
+tar -xzf vox-digs-v0.0.2-linux-x86_64.tar.gz
+cd vox-digs-v0.0.2-linux-x86_64
 ./run-digs.sh
 ```
 
-`smoke-test.sh`, `benchmark.sh`, and both headless proof binaries are included
-beside the game. The matching GPL Corresponding Source archive and
+`smoke-test.sh`, `benchmark.sh`, the `digs_script` validator, and both headless
+proof binaries are included beside the game. The packaged runtime data lives
+under `share/digs/`; keep that directory with the executable. The matching GPL
+Corresponding Source archive and
 `SHA256SUMS` ship next to the binary archive. Both archives contain an SPDX
 2.3 JSON SBOM. The binary bundle also preserves the package-time CTest, Rust,
 headless, smoke, renderer, and benchmark streams under `evidence/` so its
@@ -125,7 +150,8 @@ the planned Windows, macOS, historical, or GPU adapters.
 ## Playtest feedback
 
 The title screen's **QA Feedback** entry points testers to the versioned
-workbook and cockpit. Fill `qa/VOX_QA_FEEDBACK.xlsx`, then combine one or more
+51-checkpoint workbook and cockpit. Fill `qa/VOX_QA_FEEDBACK.xlsx`, then combine
+one or more
 tester workbooks with xleak and optionally exercise the exact demo binary:
 
 ```sh
@@ -157,7 +183,7 @@ scene. The optional argument is the number of frames per tier:
 ```
 
 `tools/vox-verify.sh` configures strict `-std=c89`/`-std=c++98` builds out of
-tree, runs all native determinism tests and the Rust workspace, executes both
+tree, runs the native determinism tests and the Rust workspace, executes both
 headless proofs, and runs the graphical host's non-windowed smoke scenario.
 It expects the SDL2 development package because it deliberately verifies the
 opt-in demo as well as the default core. On Linux x86-64 it enables the NASM
@@ -166,19 +192,25 @@ exercise the identical scalar fallback explicitly.
 
 ## Controls
 
-- Menus: arrow keys change the selection/value, `Enter` confirms, and `Esc`
-  goes back. On the seed row, `R` generates another deterministic seed.
-- Movement: `A`/`D` or left/right arrows run; `W`, up arrow, or `Space` jumps;
-  left or right `Shift` engages the rechargeable steam jet.
-- Combat: aim with the mouse and fire with the left mouse button. Number keys
-  `1` through `0` select the ten weapons. The mouse wheel zooms the
-  player-locked camera; Shift+wheel cycles the active arsenal.
-- Match: `Esc` pauses and `R` restarts the current map and mode.
-- Diagnostics: `F1` toggles the live FPS/tick/hash/material overlay and `F11`
-  toggles desktop fullscreen.
+- Menus: arrow keys or controller D-pad/left stick move; `Enter`, controller
+  A, or Start confirms; `Esc` or controller B goes back.
+- Player 1 keyboard/mouse: `A`/`D` run, `Space` jumps, left `Shift` uses the
+  steam pack, `Q` holds the rope, `W`/`S` reel an attached rope, mouse aims,
+  and `E` or left mouse fires. Number keys `1` through `0` select tools.
+- Player 2 keyboard: left/right run, up jumps, right `Shift` uses steam, `/`
+  holds the rope, right `Ctrl` fires, `I`/`J`/`K`/`L` aims, and `,`/`.` cycles
+  tools.
+- Xbox-style controller: left stick moves/reels, right stick aims, A jumps, X
+  uses steam, left bumper holds the rope, right bumper or right trigger fires,
+  Y/B cycles tools during play, and Start pauses.
+- Match/global: the mouse wheel biases camera zoom, Shift+wheel cycles P1's
+  arsenal, `Esc` pauses, `R` restarts, `F1` toggles diagnostics, `F5` reloads
+  validated Lua data transactionally, and `F11` toggles fullscreen.
 
-See [docs/DEMO.md](docs/DEMO.md) for the arsenal, material interactions,
-menus, and acceptance procedure.
+The Controls screen supports run-local action rebinding and conflict swaps.
+See [CG-README.TXT](CG-README.TXT) for controller assignment, rope behavior,
+script validation, the arsenal, and the complete v0.0.2 acceptance procedure.
+[docs/DEMO.md](docs/DEMO.md) remains the historical v0.0.1 demo guide.
 
 ## Architecture and portability policy
 

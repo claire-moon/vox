@@ -6,8 +6,10 @@
 
 #include <SDL.h>
 
+#include "vox/vox_audio.h"
 #include "vox/vox_game.h"
 #include "vox/vox_render.h"
+#include "vox/vox_script.h"
 #include "vox_sdl_ui.h"
 
 #define DEMO_WIDTH 320U
@@ -19,8 +21,12 @@
 #define DEMO_CAMERA_ZOOM_MIN 1
 #define DEMO_CAMERA_ZOOM_MAX 4
 #define DEMO_CAMERA_ZOOM_DEFAULT 2
-#define DEMO_AUDIO_RATE 22050
-#define DEMO_AUDIO_MAX_SAMPLES 3087
+#define DEMO_AUDIO_RATE 44100
+#define DEMO_AUDIO_FRAMES 512U
+#define DEMO_LOCAL_MAX 2U
+#define DEMO_CONTROLLER_MAX 2U
+#define DEMO_DAMAGE_POPUP_MAX 16U
+#define DEMO_CONTROLLER_DEADZONE 8000
 
 #define DEMO_SOUND_MOVE 0
 #define DEMO_SOUND_SELECT 1
@@ -52,7 +58,11 @@ typedef enum demo_screen {
     DEMO_PLAY = 3,
     DEMO_PAUSE = 4,
     DEMO_RESULTS = 5,
-    DEMO_FEEDBACK = 6
+    DEMO_FEEDBACK = 6,
+    DEMO_HOW_TO = 7,
+    DEMO_INDEX = 8,
+    DEMO_CONTROLS = 9,
+    DEMO_SCRIPT_ERROR = 10
 } demo_screen;
 
 typedef struct demo_options {
@@ -60,7 +70,46 @@ typedef struct demo_options {
     int gi_quality;
     int debug;
     int fullscreen;
+    int flash_mode;
+    int gore_level;
+    int camera_shake;
+    int damage_numbers;
+    int damage_number_size;
+    int damage_number_color;
+    int fx_profile;
 } demo_options;
+
+typedef struct demo_controller {
+    SDL_GameController *handle;
+    SDL_JoystickID instance_id;
+    int claimed_player;
+} demo_controller;
+
+typedef struct demo_damage_popup {
+    vox_i32 world_x_q16;
+    vox_i32 world_y_q16;
+    vox_u16 amount;
+    vox_u16 ttl;
+    vox_u16 target;
+    vox_u16 active;
+} demo_damage_popup;
+
+typedef struct demo_bindings {
+    SDL_Scancode keyboard_left[DEMO_LOCAL_MAX];
+    SDL_Scancode keyboard_right[DEMO_LOCAL_MAX];
+    SDL_Scancode keyboard_jump[DEMO_LOCAL_MAX];
+    SDL_Scancode keyboard_steam[DEMO_LOCAL_MAX];
+    SDL_Scancode keyboard_rope[DEMO_LOCAL_MAX];
+    SDL_Scancode keyboard_fire[DEMO_LOCAL_MAX];
+    SDL_Scancode keyboard_previous[DEMO_LOCAL_MAX];
+    SDL_Scancode keyboard_next[DEMO_LOCAL_MAX];
+    SDL_GameControllerButton pad_jump;
+    SDL_GameControllerButton pad_steam;
+    SDL_GameControllerButton pad_rope;
+    SDL_GameControllerButton pad_fire;
+    SDL_GameControllerButton pad_previous;
+    SDL_GameControllerButton pad_next;
+} demo_bindings;
 
 typedef struct demo_app {
     int running;
@@ -70,13 +119,41 @@ typedef struct demo_app {
     int map_style;
     int arsenal;
     vox_u32 seed;
-    int selected_tool;
+    int local_players;
+    int game_mode;
+    int friendly_fire;
+    int selected_tool[DEMO_LOCAL_MAX];
+    vox_u32 aim_world_x[DEMO_LOCAL_MAX];
+    vox_u32 aim_world_y[DEMO_LOCAL_MAX];
     int mouse_x;
     int mouse_y;
     int mouse_inside;
     int camera_zoom;
     double camera_world_x;
     double camera_world_y;
+    double camera_velocity_x;
+    double camera_velocity_y;
+    double camera_scale;
+    double camera_scale_velocity;
+    double camera_shake_x;
+    double camera_shake_y;
+    double camera_trauma;
+    double flash_strength;
+    int flash_kind;
+    double render_alpha;
+    double frame_seconds;
+    vox_i32 previous_player_x[VOX_DIGS_MAX_SLOTS];
+    vox_i32 previous_player_y[VOX_DIGS_MAX_SLOTS];
+    vox_u32 last_event_sequence;
+    vox_u16 index_selection;
+    vox_u16 index_scroll;
+    double index_visual_row;
+    int binding_capture;
+    int binding_player;
+    int keyboard_previous_down[DEMO_LOCAL_MAX];
+    int keyboard_next_down[DEMO_LOCAL_MAX];
+    int controller_disconnected;
+    vox_u32 controller_nav_stamp;
     int foundry;
     double measured_fps;
     vox_u32 rendered_frames;
@@ -86,7 +163,15 @@ typedef struct demo_app {
     SDL_Renderer *renderer;
     SDL_Texture *texture;
     SDL_AudioDeviceID audio_device;
-    vox_u32 audio_noise;
+    vox_audio_engine audio;
+    vox_u32 audio_event_id;
+    demo_controller controllers[DEMO_CONTROLLER_MAX];
+    demo_bindings bindings;
+    demo_damage_popup damage_popups[DEMO_DAMAGE_POPUP_MAX];
+    vox_u16 bot_health_ttl[VOX_DIGS_MAX_SLOTS];
+    vox_script_runtime scripts;
+    int scripts_ready;
+    char script_manifest[512];
 } demo_app;
 
 static vox_u8 demo_pixels[DEMO_WIDTH * DEMO_HEIGHT * VOX_SOFTWARE_RGB_BYTES];
@@ -102,6 +187,12 @@ static const int demo_frame_caps[6] = {30, 60, 90, 120, 144, 0};
 static const char *demo_frame_names[6] = {"30", "60", "90", "120", "144", "UNLIMITED"};
 static const char *demo_map_names[3] = {"COAL RIDGE", "DEEPWORKS", "FURNACE YARD"};
 static const char *demo_gi_names[3] = {"COMPATIBILITY", "BALANCED", "SHOWCASE"};
+static const char *demo_mode_names[2] = {"FREE FOR ALL", "MINERS VS MACHINES"};
+static const char *demo_toggle_names[2] = {"OFF", "ON"};
+static const char *demo_flash_names[3] = {"OFF", "REDUCED", "FULL"};
+static const char *demo_gore_names[3] = {"OFF", "REDUCED", "FULL"};
+static const char *demo_fx_names[3] = {"RETRO 768", "STANDARD 1536", "CARNAGE 3072"};
+static const char *demo_number_color_names[2] = {"CLASSIC", "HIGH CONTRAST"};
 static const char *demo_arsenal_names[DEMO_ARSENAL_COUNT] = {
     "FULL WORKS", "MINER KIT", "POWDER KEG"
 };
@@ -109,78 +200,60 @@ static const vox_u16 demo_arsenal_masks[DEMO_ARSENAL_COUNT] = {
     0x03FFU, 0x00F1U, 0x030EU
 };
 
-static void demo_audio_play(demo_app *app, int sound)
+static demo_controller *demo_controller_for_player(demo_app *app,
+                                                   int player);
+
+static void demo_audio_emit(demo_app *app, vox_u16 preset,
+                            vox_u16 variant, vox_i16 pan_q15)
 {
-    Sint16 samples[DEMO_AUDIO_MAX_SAMPLES];
-    int count;
-    int frequency;
-    int volume;
-    int noise_mix;
-    int phase;
-    int index;
-    vox_u32 noise;
+    vox_audio_event event;
     if (app == 0 || app->audio_device == 0U) {
         return;
     }
-    count = DEMO_AUDIO_RATE * 45 / 1000;
-    frequency = 420;
-    volume = 3500;
-    noise_mix = 0;
+    vox_audio_event_init(&event, preset);
+    event.variant = variant;
+    event.pan_q15 = pan_q15;
+    event.event_id = ++app->audio_event_id;
+    (void)vox_audio_emit(&app->audio, &event);
+}
+
+static void demo_audio_play(demo_app *app, int sound)
+{
+    vox_u16 preset = VOX_AUDIO_PRESET_UI_MOVE;
     if (sound == DEMO_SOUND_SELECT) {
-        count = DEMO_AUDIO_RATE * 70 / 1000;
-        frequency = 720;
-        volume = 4700;
+        preset = VOX_AUDIO_PRESET_UI_ACCEPT;
     } else if (sound == DEMO_SOUND_FIRE) {
-        count = DEMO_AUDIO_RATE * 110 / 1000;
-        frequency = 95;
-        volume = 9000;
-        noise_mix = 3;
+        preset = VOX_AUDIO_PRESET_FIRE;
     } else if (sound == DEMO_SOUND_START) {
-        count = DEMO_AUDIO_RATE * 140 / 1000;
-        frequency = 235;
-        volume = 6500;
+        preset = VOX_AUDIO_PRESET_SPAWN;
     } else if (sound == DEMO_SOUND_PAUSE) {
-        count = DEMO_AUDIO_RATE * 85 / 1000;
-        frequency = 165;
-        volume = 5000;
+        preset = VOX_AUDIO_PRESET_UI_BACK;
     }
-    if (count > DEMO_AUDIO_MAX_SAMPLES) {
-        count = DEMO_AUDIO_MAX_SAMPLES;
+    demo_audio_emit(app, preset, 0U, VOX_AUDIO_PAN_CENTER);
+}
+
+static void demo_audio_pump(demo_app *app)
+{
+    vox_i16 samples[DEMO_AUDIO_FRAMES * VOX_AUDIO_OUTPUT_CHANNELS];
+    Uint32 chunk_bytes = (Uint32)sizeof(samples);
+    Uint32 queued;
+    int chunk;
+    if (app == 0 || app->audio_device == 0U) {
+        return;
     }
-    phase = 0;
-    noise = app->audio_noise;
-    for (index = 0; index < count; ++index) {
-        int tone;
-        int random_value;
-        int envelope;
-        long mixed;
-        int pitch = frequency;
-        if (sound == DEMO_SOUND_START) {
-            pitch += index * 260 / count;
-        } else if (sound == DEMO_SOUND_FIRE) {
-            pitch += index * 35 / count;
+    queued = SDL_GetQueuedAudioSize(app->audio_device);
+    for (chunk = 0; chunk < 3 && queued < chunk_bytes * 2U; ++chunk) {
+        if (vox_audio_active_voice_count(&app->audio) == 0U && queued != 0U) {
+            break;
         }
-        phase += pitch;
-        while (phase >= DEMO_AUDIO_RATE) {
-            phase -= DEMO_AUDIO_RATE;
+        if (vox_audio_render(&app->audio, samples,
+                             DEMO_AUDIO_FRAMES) != VOX_OK ||
+            SDL_QueueAudio(app->audio_device, samples, chunk_bytes) != 0) {
+            SDL_ClearQueuedAudio(app->audio_device);
+            break;
         }
-        tone = phase < DEMO_AUDIO_RATE / 2 ? volume : -volume;
-        noise = noise * 1664525U + 1013904223U;
-        random_value = (int)((noise >> 17) & 0x7FFFU) - 16384;
-        if (noise_mix != 0) {
-            tone = (tone + random_value * noise_mix) / (noise_mix + 1);
-        }
-        envelope = count - index;
-        mixed = (long)tone * (long)envelope / (long)count;
-        samples[index] = (Sint16)mixed;
+        queued += chunk_bytes;
     }
-    app->audio_noise = noise;
-    if (SDL_GetQueuedAudioSize(app->audio_device) >
-        (Uint32)(DEMO_AUDIO_RATE * (int)sizeof(Sint16) / 3)) {
-        SDL_ClearQueuedAudio(app->audio_device);
-    }
-    (void)SDL_QueueAudio(app->audio_device, samples,
-                         (Uint32)(count * (int)sizeof(Sint16)));
 }
 
 static void demo_audio_open(demo_app *app)
@@ -194,15 +267,23 @@ static void demo_audio_open(demo_app *app)
     memset(&obtained, 0, sizeof(obtained));
     desired.freq = DEMO_AUDIO_RATE;
     desired.format = AUDIO_S16SYS;
-    desired.channels = 1U;
+    desired.channels = VOX_AUDIO_OUTPUT_CHANNELS;
     desired.samples = 512U;
     desired.callback = 0;
-    app->audio_device = SDL_OpenAudioDevice(0, 0, &desired, &obtained, 0);
+    app->audio_device = SDL_OpenAudioDevice(0, 0, &desired, &obtained,
+                                             SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
     if (app->audio_device == 0U) {
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
         return;
     }
-    app->audio_noise = 0xD1655EEDU;
+    if (obtained.format != AUDIO_S16SYS || obtained.channels != 2U ||
+        vox_audio_init(&app->audio, (vox_u32)obtained.freq,
+                       0xD1655EEDU) != VOX_OK) {
+        SDL_CloseAudioDevice(app->audio_device);
+        app->audio_device = 0U;
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        return;
+    }
     SDL_PauseAudioDevice(app->audio_device, 0);
 }
 
@@ -210,9 +291,69 @@ static void demo_audio_close(demo_app *app)
 {
     if (app != 0 && app->audio_device != 0U) {
         SDL_ClearQueuedAudio(app->audio_device);
+        vox_audio_stop_all(&app->audio);
         SDL_CloseAudioDevice(app->audio_device);
         app->audio_device = 0U;
     }
+}
+
+static int demo_scripts_open(demo_app *app)
+{
+    static const char suffix[] = "share/digs/scripts/manifest.txt";
+    static const char source_path[] = "games/digs/scripts/manifest.txt";
+    vox_script_report report;
+    char *base;
+    vox_result status;
+    if (vox_script_runtime_init(&app->scripts, 0) != VOX_OK) {
+        return 0;
+    }
+    app->script_manifest[0] = '\0';
+    base = SDL_GetBasePath();
+    if (base != 0 && strlen(base) + sizeof(suffix) <
+        sizeof(app->script_manifest)) {
+        strcpy(app->script_manifest, base);
+        strcat(app->script_manifest, suffix);
+    }
+    if (base != 0) SDL_free(base);
+    status = app->script_manifest[0] == '\0' ? VOX_SCRIPT_ERR_IO :
+             vox_script_reload_manifest(&app->scripts,
+                                         app->script_manifest, &report);
+    if (status != VOX_OK) {
+        strcpy(app->script_manifest, source_path);
+        status = vox_script_reload_manifest(&app->scripts,
+                                             app->script_manifest, &report);
+    }
+    if (status != VOX_OK) {
+        fprintf(stderr, "DIGS script load failed: %s\n",
+                vox_script_last_error(&app->scripts));
+        return 0;
+    }
+    app->scripts_ready = 1;
+    return 1;
+}
+
+static int demo_scripts_reload(demo_app *app)
+{
+    vox_script_report report;
+    vox_result status;
+    if (!app->scripts_ready) return demo_scripts_open(app);
+    status = vox_script_reload_manifest(&app->scripts,
+                                         app->script_manifest, &report);
+    if (status != VOX_OK) {
+        fprintf(stderr, "DIGS F5 reload rejected: %s\n",
+                vox_script_last_error(&app->scripts));
+        return 0;
+    }
+    fprintf(stdout, "DIGS scripts reloaded source=%08lx catalog=%08lx\n",
+            (unsigned long)report.source_hash,
+            (unsigned long)report.catalog_hash);
+    return 1;
+}
+
+static void demo_scripts_close(demo_app *app)
+{
+    vox_script_runtime_shutdown(&app->scripts);
+    app->scripts_ready = 0;
 }
 
 static int demo_q16_to_screen(vox_i32 value, vox_u32 screen_size,
@@ -242,17 +383,20 @@ static int demo_first_weapon(vox_u16 mask)
     return VOX_DIGS_TOOL_PICK;
 }
 
-static void demo_cycle_weapon(demo_app *app, int direction)
+static void demo_cycle_weapon(demo_app *app, int player, int direction)
 {
     int step;
+    if (player < 0 || player >= (int)DEMO_LOCAL_MAX) {
+        return;
+    }
     for (step = 1; step <= (int)VOX_DIGS_TOOL_COUNT; ++step) {
-        int weapon = app->selected_tool + direction * step;
+        int weapon = app->selected_tool[player] + direction * step;
         while (weapon < 0) {
             weapon += (int)VOX_DIGS_TOOL_COUNT;
         }
         weapon %= (int)VOX_DIGS_TOOL_COUNT;
         if (demo_weapon_is_allowed(demo_match.rules.weapon_mask, weapon)) {
-            app->selected_tool = weapon;
+            app->selected_tool[player] = weapon;
             return;
         }
     }
@@ -267,6 +411,154 @@ static int demo_key_weapon(SDL_Keycode key)
         return 9;
     }
     return -1;
+}
+
+static void demo_bindings_default(demo_app *app)
+{
+    app->bindings.keyboard_left[0] = SDL_SCANCODE_A;
+    app->bindings.keyboard_right[0] = SDL_SCANCODE_D;
+    app->bindings.keyboard_jump[0] = SDL_SCANCODE_SPACE;
+    app->bindings.keyboard_steam[0] = SDL_SCANCODE_LSHIFT;
+    app->bindings.keyboard_rope[0] = SDL_SCANCODE_Q;
+    app->bindings.keyboard_fire[0] = SDL_SCANCODE_E;
+    app->bindings.keyboard_previous[0] = SDL_SCANCODE_Z;
+    app->bindings.keyboard_next[0] = SDL_SCANCODE_X;
+    app->bindings.keyboard_left[1] = SDL_SCANCODE_LEFT;
+    app->bindings.keyboard_right[1] = SDL_SCANCODE_RIGHT;
+    app->bindings.keyboard_jump[1] = SDL_SCANCODE_UP;
+    app->bindings.keyboard_steam[1] = SDL_SCANCODE_RSHIFT;
+    app->bindings.keyboard_rope[1] = SDL_SCANCODE_SLASH;
+    app->bindings.keyboard_fire[1] = SDL_SCANCODE_RCTRL;
+    app->bindings.keyboard_previous[1] = SDL_SCANCODE_COMMA;
+    app->bindings.keyboard_next[1] = SDL_SCANCODE_PERIOD;
+    app->bindings.pad_jump = SDL_CONTROLLER_BUTTON_A;
+    app->bindings.pad_steam = SDL_CONTROLLER_BUTTON_X;
+    app->bindings.pad_rope = SDL_CONTROLLER_BUTTON_LEFTSHOULDER;
+    app->bindings.pad_fire = SDL_CONTROLLER_BUTTON_RIGHTSHOULDER;
+    app->bindings.pad_previous = SDL_CONTROLLER_BUTTON_Y;
+    app->bindings.pad_next = SDL_CONTROLLER_BUTTON_B;
+}
+
+static void demo_refresh_controller_claims(demo_app *app)
+{
+    int connected;
+    int total;
+    int index;
+    total = 0;
+    for (index = 0; index < (int)DEMO_CONTROLLER_MAX; ++index) {
+        if (app->controllers[index].handle != 0) {
+            ++total;
+        }
+    }
+    connected = 0;
+    for (index = 0; index < (int)DEMO_CONTROLLER_MAX; ++index) {
+        if (app->controllers[index].handle != 0) {
+            if (app->local_players >= 2) {
+                app->controllers[index].claimed_player =
+                    connected >= 2 ? -1 : (total == 1 ? 1 : connected);
+            } else {
+                app->controllers[index].claimed_player =
+                    connected == 0 ? 0 : -1;
+            }
+            ++connected;
+        } else {
+            app->controllers[index].claimed_player = -1;
+        }
+    }
+}
+
+static int demo_open_controller(demo_app *app, int device_index)
+{
+    SDL_GameController *controller;
+    SDL_Joystick *joystick;
+    SDL_JoystickID instance;
+    int slot;
+    if (!SDL_IsGameController(device_index)) {
+        return 0;
+    }
+    controller = SDL_GameControllerOpen(device_index);
+    if (controller == 0) {
+        return 0;
+    }
+    joystick = SDL_GameControllerGetJoystick(controller);
+    instance = SDL_JoystickInstanceID(joystick);
+    /* SDL can queue DEVICEADDED while startup enumeration is opening the
+     * same pad.  Never let one physical controller occupy both local slots. */
+    for (slot = 0; slot < (int)DEMO_CONTROLLER_MAX; ++slot) {
+        if (app->controllers[slot].handle != 0 &&
+            app->controllers[slot].instance_id == instance) {
+            SDL_GameControllerClose(controller);
+            return 1;
+        }
+    }
+    for (slot = 0; slot < (int)DEMO_CONTROLLER_MAX; ++slot) {
+        if (app->controllers[slot].handle == 0) {
+            app->controllers[slot].handle = controller;
+            app->controllers[slot].instance_id = instance;
+            app->controllers[slot].claimed_player = -1;
+            demo_refresh_controller_claims(app);
+            return 1;
+        }
+    }
+    SDL_GameControllerClose(controller);
+    return 0;
+}
+
+static void demo_close_controller(demo_app *app, SDL_JoystickID instance)
+{
+    int slot;
+    for (slot = 0; slot < (int)DEMO_CONTROLLER_MAX; ++slot) {
+        if (app->controllers[slot].handle != 0 &&
+            app->controllers[slot].instance_id == instance) {
+            int claimed_player = app->controllers[slot].claimed_player;
+            SDL_GameControllerClose(app->controllers[slot].handle);
+            app->controllers[slot].handle = 0;
+            app->controllers[slot].instance_id = -1;
+            app->controllers[slot].claimed_player = -1;
+            if (app->screen == DEMO_PLAY && claimed_player >= 0) {
+                app->screen = DEMO_PAUSE;
+                app->selection = 0;
+                app->controller_disconnected = 1;
+            }
+        }
+    }
+    demo_refresh_controller_claims(app);
+}
+
+static demo_controller *demo_controller_by_instance(
+                                      demo_app *app,
+                                      SDL_JoystickID instance)
+{
+    int slot;
+    for (slot = 0; slot < (int)DEMO_CONTROLLER_MAX; ++slot) {
+        if (app->controllers[slot].handle != 0 &&
+            app->controllers[slot].instance_id == instance) {
+            return &app->controllers[slot];
+        }
+    }
+    return 0;
+}
+
+static void demo_close_controllers(demo_app *app)
+{
+    int slot;
+    for (slot = 0; slot < (int)DEMO_CONTROLLER_MAX; ++slot) {
+        if (app->controllers[slot].handle != 0) {
+            SDL_GameControllerClose(app->controllers[slot].handle);
+            app->controllers[slot].handle = 0;
+        }
+        app->controllers[slot].instance_id = -1;
+        app->controllers[slot].claimed_player = -1;
+    }
+}
+
+static Sint16 demo_deadzone_axis(Sint16 value)
+{
+    if (value > -DEMO_CONTROLLER_DEADZONE &&
+        value < DEMO_CONTROLLER_DEADZONE) {
+        return 0;
+    }
+    return value;
 }
 
 static void demo_prepare_targets(void)
@@ -325,18 +617,21 @@ static void demo_draw_title(demo_app *app)
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
-    demo_dark_panel(62, 18, 196, 164);
-    vox_ui_text_center_shadow(&demo_ui, 160, 35, 4, "DIGS",
+    demo_dark_panel(62, 10, 196, 180);
+    vox_ui_text_center_shadow(&demo_ui, 160, 21, 4, "DIGS",
                               DEMO_VGA_YELLOW);
-    vox_ui_rect(&demo_ui, 82, 84, 156, 1, DEMO_VGA_DARK_GRAY);
-    vox_ui_rect(&demo_ui, 82, 85, 156, 1, DEMO_VGA_BROWN);
-    demo_menu_item(94, "START MATCH", app->selection == 0);
-    demo_menu_item(110, "FOUNDRY LAB", app->selection == 1);
-    demo_menu_item(126, "OPTIONS", app->selection == 2);
-    demo_menu_item(142, "QA FEEDBACK", app->selection == 3);
-    demo_menu_item(158, "QUIT", app->selection == 4);
-    vox_ui_text_center(&demo_ui, 160, 171, 1,
-                       "GPL-3.0-OR-LATER  V0.0.1 DEMO",
+    vox_ui_rect(&demo_ui, 82, 65, 156, 1, DEMO_VGA_DARK_GRAY);
+    vox_ui_rect(&demo_ui, 82, 66, 156, 1, DEMO_VGA_BROWN);
+    demo_menu_item(73, "START MATCH", app->selection == 0);
+    demo_menu_item(87, "FOUNDRY LAB", app->selection == 1);
+    demo_menu_item(101, "HOW TO PLAY", app->selection == 2);
+    demo_menu_item(115, "MINER'S INDEX", app->selection == 3);
+    demo_menu_item(129, "CONTROLS", app->selection == 4);
+    demo_menu_item(143, "OPTIONS", app->selection == 5);
+    demo_menu_item(157, "QA FEEDBACK", app->selection == 6);
+    demo_menu_item(171, "QUIT", app->selection == 7);
+    vox_ui_text_center(&demo_ui, 160, 181, 1,
+                       "GPL-3.0-OR-LATER  V0.0.2",
                        DEMO_VGA_DARK_GRAY);
 }
 
@@ -360,43 +655,65 @@ static void demo_draw_setup(demo_app *app)
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
-    demo_dark_panel(32, 18, 256, 166);
-    vox_ui_text_center_shadow(&demo_ui, 160, 28, 2, "MATCH SETUP",
+    demo_dark_panel(28, 8, 264, 184);
+    vox_ui_text_center_shadow(&demo_ui, 160, 16, 2, "MATCH SETUP",
                               DEMO_VGA_YELLOW);
+    sprintf(value, "%d", app->local_players);
+    demo_value_line(43, "LOCAL PLAYERS", value, app->selection == 0);
     sprintf(value, "%d", app->bots);
-    demo_value_line(61, "BOTS", value, app->selection == 0);
-    demo_value_line(79, "MAP", demo_map_names[app->map_style],
-                    app->selection == 1);
-    sprintf(value, "%08lX", (unsigned long)app->seed);
-    demo_value_line(97, "SEED", value, app->selection == 2);
-    demo_value_line(115, "ARSENAL", demo_arsenal_names[app->arsenal],
+    demo_value_line(57, "BOTS", value, app->selection == 1);
+    demo_value_line(71, "MODE", demo_mode_names[app->game_mode],
+                    app->selection == 2);
+    demo_value_line(85, "FRIENDLY FIRE", demo_toggle_names[app->friendly_fire],
                     app->selection == 3);
-    demo_menu_item(140, "START DEATHMATCH", app->selection == 4);
-    demo_menu_item(157, "BACK", app->selection == 5);
-    vox_ui_text_center(&demo_ui, 160, 174, 1,
+    demo_value_line(99, "MAP", demo_map_names[app->map_style],
+                    app->selection == 4);
+    sprintf(value, "%08lX", (unsigned long)app->seed);
+    demo_value_line(113, "SEED", value, app->selection == 5);
+    demo_value_line(127, "ARSENAL", demo_arsenal_names[app->arsenal],
+                    app->selection == 6);
+    demo_menu_item(148, "START MATCH", app->selection == 7);
+    demo_menu_item(164, "BACK", app->selection == 8);
+    vox_ui_text_center(&demo_ui, 160, 180, 1,
                        "ARROWS CHANGE  ENTER SELECTS", DEMO_VGA_DARK_GRAY);
 }
 
 static void demo_draw_options(demo_app *app)
 {
-    const char *toggle;
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
-    demo_dark_panel(32, 18, 256, 166);
-    vox_ui_text_center_shadow(&demo_ui, 160, 28, 2, "OPTIONS",
+    demo_dark_panel(28, 8, 264, 184);
+    vox_ui_text_center_shadow(&demo_ui, 160, 14, 2, "OPTIONS",
                               DEMO_VGA_YELLOW);
-    demo_value_line(62, "FRAME CAP", demo_frame_names[app->options.frame_cap_index],
+    demo_value_line(38, "FRAME CAP", demo_frame_names[app->options.frame_cap_index],
                     app->selection == 0);
-    demo_value_line(82, "VOX LIGHTFIELD", demo_gi_names[app->options.gi_quality],
+    demo_value_line(51, "LIGHTFIELD", demo_gi_names[app->options.gi_quality],
                     app->selection == 1);
-    toggle = app->options.debug ? "ON" : "OFF";
-    demo_value_line(102, "DEBUG OVERLAY", toggle, app->selection == 2);
-    toggle = app->options.fullscreen ? "ON" : "OFF";
-    demo_value_line(122, "FULLSCREEN", toggle, app->selection == 3);
-    demo_menu_item(151, "BACK", app->selection == 4);
-    vox_ui_text_center(&demo_ui, 160, 174, 1,
-                       "SIMULATION REMAINS FIXED AT 60 HZ",
+    demo_value_line(64, "FX PROFILE", demo_fx_names[app->options.fx_profile],
+                    app->selection == 2);
+    demo_value_line(77, "FLASHES", demo_flash_names[app->options.flash_mode],
+                    app->selection == 3);
+    demo_value_line(90, "GORE", demo_gore_names[app->options.gore_level],
+                    app->selection == 4);
+    demo_value_line(103, "CAMERA SHAKE",
+                    demo_toggle_names[app->options.camera_shake],
+                    app->selection == 5);
+    demo_value_line(116, "DAMAGE NUMBERS",
+                    demo_toggle_names[app->options.damage_numbers],
+                    app->selection == 6);
+    demo_value_line(129, "NUMBER SIZE",
+                    app->options.damage_number_size ? "LARGE" : "SMALL",
+                    app->selection == 7);
+    demo_value_line(142, "NUMBER COLOR",
+                    demo_number_color_names[app->options.damage_number_color],
+                    app->selection == 8);
+    demo_value_line(155, "FULLSCREEN",
+                    demo_toggle_names[app->options.fullscreen],
+                    app->selection == 9);
+    demo_menu_item(174, "BACK", app->selection == 10);
+    vox_ui_text_center(&demo_ui, 160, 185, 1,
+                       "FIXED 60 HZ SIM",
                        DEMO_VGA_DARK_GRAY);
 }
 
@@ -421,6 +738,255 @@ static void demo_draw_feedback(demo_app *app)
                        DEMO_VGA_LIGHT_CYAN);
     vox_ui_text_center(&demo_ui, 160, 158, 1,
                        "ENTER OR ESC RETURNS", DEMO_VGA_YELLOW);
+}
+
+static void demo_short_label(char *destination, int capacity,
+                             const char *source, int max_characters)
+{
+    int length;
+    if (destination == 0 || capacity <= 0) {
+        return;
+    }
+    if (source == 0) {
+        destination[0] = '\0';
+        return;
+    }
+    length = 0;
+    while (source[length] != '\0' && length < max_characters &&
+           length + 1 < capacity) {
+        destination[length] = source[length];
+        ++length;
+    }
+    destination[length] = '\0';
+}
+
+static void demo_draw_how_to(demo_app *app)
+{
+    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
+    (void)vox_software_render_ex(&demo_title_world, &demo_target,
+                                 &demo_render_config);
+    demo_dark_panel(10, 8, 300, 184);
+    vox_ui_text_center_shadow(&demo_ui, 160, 15, 2, "HOW TO PLAY",
+                              DEMO_VGA_YELLOW);
+    vox_ui_text(&demo_ui, 20, 40, 1, "MOVE", DEMO_VGA_LIGHT_CYAN);
+    vox_ui_text(&demo_ui, 72, 40, 1, "A D OR LEFT STICK", DEMO_VGA_WHITE);
+    vox_ui_text(&demo_ui, 20, 52, 1, "JUMP", DEMO_VGA_LIGHT_CYAN);
+    vox_ui_text(&demo_ui, 72, 52, 1, "SPACE OR PAD A", DEMO_VGA_WHITE);
+    vox_ui_text(&demo_ui, 20, 64, 1, "ROPE", DEMO_VGA_LIGHT_CYAN);
+    vox_ui_text(&demo_ui, 72, 64, 1, "HOLD Q OR LB  RELEASE LAUNCHES",
+                DEMO_VGA_WHITE);
+    vox_ui_text(&demo_ui, 20, 76, 1, "AIM", DEMO_VGA_LIGHT_CYAN);
+    vox_ui_text(&demo_ui, 72, 76, 1, "MOUSE OR RIGHT STICK", DEMO_VGA_WHITE);
+    vox_ui_text(&demo_ui, 20, 88, 1, "FIRE", DEMO_VGA_LIGHT_CYAN);
+    vox_ui_text(&demo_ui, 72, 88, 1, "LMB E OR RB", DEMO_VGA_WHITE);
+    vox_ui_text(&demo_ui, 20, 100, 1, "STEAM", DEMO_VGA_LIGHT_CYAN);
+    vox_ui_text(&demo_ui, 72, 100, 1, "SHIFT OR PAD X", DEMO_VGA_WHITE);
+    vox_ui_text_wrap(&demo_ui, 20, 119, 280, 5, 1,
+        "DESTROY TERRAIN OUTSMART RIVALS AND STAY ABOVE THE RISING LAVA. "
+        "SPAWNS HAVE A FIVE SECOND SHIELD THAT ENDS WHEN YOU ATTACK. "
+        "ROPE TO SOLID BEAMS OR ROCK AND USE TOOLS TO BUILD YOUR OWN ROUTE.",
+        170U, 170U, 170U);
+    vox_ui_text_center(&demo_ui, 160, 178, 1, "ESC OR PAD B RETURNS",
+                       DEMO_VGA_YELLOW);
+}
+
+static void demo_draw_index(demo_app *app)
+{
+    const vox_script_catalog *catalog;
+    const vox_script_entry *entry;
+    vox_u16 count;
+    vox_u16 row;
+    double target_row;
+    double factor;
+    int highlight_y;
+    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
+    (void)vox_software_render_ex(&demo_title_world, &demo_target,
+                                 &demo_render_config);
+    demo_dark_panel(6, 6, 308, 188);
+    vox_ui_text_center_shadow(&demo_ui, 160, 12, 2, "MINER'S INDEX",
+                              DEMO_VGA_YELLOW);
+    catalog = app->scripts_ready ? vox_script_catalog_get(&app->scripts) : 0;
+    count = catalog == 0 ? 0U : catalog->entry_count;
+    if (count == 0U) {
+        vox_ui_text_center(&demo_ui, 160, 92, 1,
+                           "CATALOG UNAVAILABLE", DEMO_VGA_LIGHT_RED);
+        return;
+    }
+    if (app->index_selection >= count) {
+        app->index_selection = (vox_u16)(count - 1U);
+    }
+    target_row = (double)(app->index_selection - app->index_scroll);
+    factor = app->frame_seconds * 18.0;
+    if (factor < 0.05) factor = 0.05;
+    if (factor > 1.0) factor = 1.0;
+    app->index_visual_row += (target_row - app->index_visual_row) * factor;
+    highlight_y = 39 + (int)(app->index_visual_row * 20.0);
+    vox_ui_rect(&demo_ui, 11, highlight_y - 2, 111, 12, DEMO_VGA_BLUE);
+    vox_ui_frame(&demo_ui, 11, highlight_y - 2, 111, 12,
+                 DEMO_VGA_LIGHT_CYAN);
+    if (app->index_scroll > 0U) {
+        vox_ui_text_center(&demo_ui, 66, 28, 1, "^ MORE ^",
+                           DEMO_VGA_LIGHT_CYAN);
+    }
+    for (row = 0U; row < VOX_SCRIPT_INDEX_VISIBLE_ROWS; ++row) {
+        vox_u16 ordinal = (vox_u16)(app->index_scroll + row);
+        if (ordinal < count) {
+            char label[20];
+            const vox_script_entry *listed =
+                vox_script_catalog_entry(catalog, ordinal);
+            demo_short_label(label, (int)sizeof(label),
+                             listed == 0 ? "UNKNOWN" : listed->title, 17);
+            vox_ui_text(&demo_ui, 15, 39 + (int)row * 20, 1, label,
+                        ordinal == app->index_selection ? 255U : 170U,
+                        ordinal == app->index_selection ? 255U : 170U,
+                        ordinal == app->index_selection ? 85U : 170U);
+        }
+    }
+    if ((vox_u16)(app->index_scroll + VOX_SCRIPT_INDEX_VISIBLE_ROWS) <
+        count) {
+        vox_ui_text_center(&demo_ui, 66, 163, 1, "V MORE V",
+                           DEMO_VGA_LIGHT_CYAN);
+    }
+    vox_ui_frame(&demo_ui, 128, 31, 180, 140, DEMO_VGA_BROWN);
+    entry = vox_script_catalog_entry(catalog, app->index_selection);
+    if (entry != 0) {
+        char heading[30];
+        demo_short_label(heading, (int)sizeof(heading), entry->title, 27);
+        vox_ui_text(&demo_ui, 134, 38, 1, heading, DEMO_VGA_YELLOW);
+        vox_ui_text(&demo_ui, 134, 49, 1, entry->category,
+                    DEMO_VGA_LIGHT_CYAN);
+        (void)vox_ui_text_wrap(&demo_ui, 134, 63, 168, 4, 1,
+                               entry->summary, 255U, 255U, 255U);
+        (void)vox_ui_text_wrap(&demo_ui, 134, 101, 168, 7, 1,
+                               entry->detail, 170U, 170U, 170U);
+    }
+    vox_ui_text_center(&demo_ui, 160, 180, 1,
+                       "UP DOWN BROWSE  ESC OR B BACK", DEMO_VGA_DARK_GRAY);
+}
+
+static const char *demo_scancode_label(SDL_Scancode code)
+{
+    const char *name = SDL_GetScancodeName(code);
+    return name == 0 || *name == '\0' ? "UNBOUND" : name;
+}
+
+static SDL_Scancode *demo_keyboard_binding(demo_app *app, int player,
+                                           int action)
+{
+    if (player < 0 || player >= (int)DEMO_LOCAL_MAX) return 0;
+    if (action == 0) return &app->bindings.keyboard_left[player];
+    if (action == 1) return &app->bindings.keyboard_right[player];
+    if (action == 2) return &app->bindings.keyboard_jump[player];
+    if (action == 3) return &app->bindings.keyboard_steam[player];
+    if (action == 4) return &app->bindings.keyboard_rope[player];
+    if (action == 5) return &app->bindings.keyboard_fire[player];
+    if (action == 6) return &app->bindings.keyboard_previous[player];
+    if (action == 7) return &app->bindings.keyboard_next[player];
+    return 0;
+}
+
+static SDL_GameControllerButton *demo_pad_binding(demo_app *app, int action)
+{
+    if (action == 2) return &app->bindings.pad_jump;
+    if (action == 3) return &app->bindings.pad_steam;
+    if (action == 4) return &app->bindings.pad_rope;
+    if (action == 5) return &app->bindings.pad_fire;
+    if (action == 6) return &app->bindings.pad_previous;
+    if (action == 7) return &app->bindings.pad_next;
+    return 0;
+}
+
+static void demo_assign_keyboard_binding(demo_app *app, int player,
+                                         int action, SDL_Scancode code)
+{
+    SDL_Scancode *destination;
+    int other;
+    destination = demo_keyboard_binding(app, player, action);
+    if (destination == 0 || code == SDL_SCANCODE_UNKNOWN) return;
+    for (other = 0; other < 8; ++other) {
+        SDL_Scancode *candidate = demo_keyboard_binding(app, player, other);
+        if (candidate != 0 && candidate != destination &&
+            *candidate == code) {
+            *candidate = *destination;
+        }
+    }
+    *destination = code;
+}
+
+static void demo_assign_pad_binding(demo_app *app, int action,
+                                    SDL_GameControllerButton button)
+{
+    SDL_GameControllerButton *destination;
+    int other;
+    destination = demo_pad_binding(app, action);
+    if (destination == 0 || button == SDL_CONTROLLER_BUTTON_INVALID) return;
+    for (other = 2; other < 8; ++other) {
+        SDL_GameControllerButton *candidate = demo_pad_binding(app, other);
+        if (candidate != 0 && candidate != destination &&
+            *candidate == button) {
+            *candidate = *destination;
+        }
+    }
+    *destination = button;
+}
+
+static void demo_draw_controls(demo_app *app)
+{
+    static const char *actions[8] = {
+        "MOVE LEFT", "MOVE RIGHT", "JUMP", "STEAM", "ROPE", "FIRE",
+        "PREV WEAPON", "NEXT WEAPON"
+    };
+    char line[80];
+    int action;
+    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
+    (void)vox_software_render_ex(&demo_title_world, &demo_target,
+                                 &demo_render_config);
+    demo_dark_panel(18, 8, 284, 184);
+    vox_ui_text_center_shadow(&demo_ui, 160, 15, 2, "CONTROLS",
+                              DEMO_VGA_YELLOW);
+    demo_value_line(36, "DEVICE",
+        app->binding_player == 0 ? "P1 KEYBOARD" :
+        (app->binding_player == 1 ? "P2 KEYBOARD" : "CONTROLLER"),
+        app->selection == 0);
+    for (action = 0; action < 8; ++action) {
+        const char *binding_name;
+        if (app->binding_player < 2) {
+            SDL_Scancode *binding = demo_keyboard_binding(
+                app, app->binding_player, action);
+            binding_name = binding == 0 ? "UNBOUND" :
+                           demo_scancode_label(*binding);
+        } else if (action < 2) {
+            binding_name = "STICK OR DPAD";
+        } else {
+            SDL_GameControllerButton *binding = demo_pad_binding(app, action);
+            const char *pad_name = binding == 0 ? 0 :
+                SDL_GameControllerGetStringForButton(*binding);
+            binding_name = pad_name == 0 ? "UNBOUND" : pad_name;
+        }
+        sprintf(line, "%s", binding_name);
+        demo_value_line(48 + action * 12, actions[action], line,
+                        app->selection == action + 1);
+    }
+    demo_menu_item(150, "RESTORE DEFAULTS", app->selection == 9);
+    demo_menu_item(164, "BACK", app->selection == 10);
+    vox_ui_text_center(&demo_ui, 160, 180, 1,
+        app->binding_capture ? "PRESS A NEW KEY  ESC CANCELS" :
+        "ENTER REBINDS  LEFT RIGHT DEVICE", DEMO_VGA_LIGHT_CYAN);
+}
+
+static void demo_draw_script_error(demo_app *app)
+{
+    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
+    (void)vox_software_render_ex(&demo_title_world, &demo_target,
+                                 &demo_render_config);
+    demo_dark_panel(18, 24, 284, 152);
+    vox_ui_text_center_shadow(&demo_ui, 160, 35, 2, "SCRIPT ERROR",
+                              DEMO_VGA_LIGHT_RED);
+    (void)vox_ui_text_wrap(&demo_ui, 32, 68, 256, 8, 1,
+                           vox_script_last_error(&app->scripts),
+                           255U, 255U, 255U);
+    vox_ui_text_center(&demo_ui, 160, 154, 1,
+                       "F5 RETRIES  ESC QUITS", DEMO_VGA_YELLOW);
 }
 
 static vox_i32 demo_material_temperature(vox_u16 material)
@@ -469,32 +1035,93 @@ static void demo_voxelize_miner(vox_u16 player)
     int lamp_x = demo_match.facing_right[player] ? x + 4 : x - 4;
     int row;
     int column;
-    for (column = -1; column <= 1; ++column) {
-        demo_render_miner_voxel(x + column * 2, y - 8, VOX_MAT_METAL);
-        demo_render_miner_voxel(x + column * 2, y - 6, VOX_MAT_FLESH);
+    if (!(demo_match.anatomy[player][VOX_DIGS_PART_HEAD].flags &
+          VOX_DIGS_PART_SEVERED)) {
+        for (column = -1; column <= 1; ++column) {
+            demo_render_miner_voxel(x + column * 2, y - 8, VOX_MAT_METAL);
+            demo_render_miner_voxel(x + column * 2, y - 6, VOX_MAT_FLESH);
+        }
+        demo_render_miner_voxel(lamp_x, y - 8, VOX_MAT_LAVA);
     }
-    demo_render_miner_voxel(lamp_x, y - 8, VOX_MAT_LAVA);
     for (row = -2; row <= 0; ++row) {
         for (column = -1; column <= 1; ++column) {
             demo_render_miner_voxel(x + column * 2, y + row * 2,
                                     coats[player]);
         }
     }
-    demo_render_miner_voxel(x - 4, y - 2, coats[player]);
-    demo_render_miner_voxel(x + 4, y - 2, coats[player]);
-    demo_render_miner_voxel(x - 2, y + 2, VOX_MAT_METAL);
-    demo_render_miner_voxel(x + 2, y + 2, VOX_MAT_METAL);
-    demo_render_miner_voxel(x - 2, y + 4, VOX_MAT_COAL);
-    demo_render_miner_voxel(x + 2, y + 4, VOX_MAT_COAL);
+    if (!(demo_match.anatomy[player][VOX_DIGS_PART_LEFT_UPPER_ARM].flags &
+          VOX_DIGS_PART_SEVERED)) {
+        demo_render_miner_voxel(x - 4, y - 2, coats[player]);
+    }
+    if (!(demo_match.anatomy[player][VOX_DIGS_PART_RIGHT_UPPER_ARM].flags &
+          VOX_DIGS_PART_SEVERED)) {
+        demo_render_miner_voxel(x + 4, y - 2, coats[player]);
+    }
+    if (!(demo_match.anatomy[player][VOX_DIGS_PART_LEFT_THIGH].flags &
+          VOX_DIGS_PART_SEVERED)) {
+        demo_render_miner_voxel(x - 2, y + 2, VOX_MAT_METAL);
+    }
+    if (!(demo_match.anatomy[player][VOX_DIGS_PART_RIGHT_THIGH].flags &
+          VOX_DIGS_PART_SEVERED)) {
+        demo_render_miner_voxel(x + 2, y + 2, VOX_MAT_METAL);
+    }
+    if (!(demo_match.anatomy[player][VOX_DIGS_PART_LEFT_FOOT].flags &
+          VOX_DIGS_PART_SEVERED)) {
+        demo_render_miner_voxel(x - 2, y + 4, VOX_MAT_COAL);
+    }
+    if (!(demo_match.anatomy[player][VOX_DIGS_PART_RIGHT_FOOT].flags &
+          VOX_DIGS_PART_SEVERED)) {
+        demo_render_miner_voxel(x + 2, y + 4, VOX_MAT_COAL);
+    }
 }
 
-static void demo_build_render_world(void)
+static void demo_voxelize_rope(vox_u16 player)
+{
+    const vox_digs_rope *rope = &demo_match.ropes[player];
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+    int dx;
+    int dy;
+    int sx;
+    int sy;
+    int error;
+    if (!rope->active) return;
+    x0 = (int)(demo_match.players[player].position_x.value_q16 / 65536L);
+    y0 = (int)(demo_match.players[player].position_y.value_q16 / 65536L);
+    x1 = (int)(rope->anchor_x_q16 / 65536L);
+    y1 = (int)(rope->anchor_y_q16 / 65536L);
+    dx = x1 >= x0 ? x1 - x0 : x0 - x1;
+    dy = y1 >= y0 ? y1 - y0 : y0 - y1;
+    sx = x0 < x1 ? 1 : -1;
+    sy = y0 < y1 ? 1 : -1;
+    error = dx - dy;
+    for (;;) {
+        demo_render_voxel(x0, y0, VOX_MAT_METAL);
+        if (x0 == x1 && y0 == y1) break;
+        {
+            int twice = error * 2;
+            if (twice > -dy) {
+                error -= dy;
+                x0 += sx;
+            }
+            if (twice < dx) {
+                error += dx;
+                y0 += sy;
+            }
+        }
+    }
+}
+
+static void demo_build_render_world(demo_app *app)
 {
     vox_u16 player;
     vox_u16 index;
     memcpy(&demo_render_world, &demo_match.world, sizeof(demo_render_world));
     for (player = 0U; player < VOX_DIGS_MAX_SLOTS; ++player) {
         if (demo_match.alive[player]) {
+            demo_voxelize_rope(player);
             demo_voxelize_miner(player);
         }
     }
@@ -510,14 +1137,19 @@ static void demo_build_render_world(void)
             demo_render_voxel(x, y, material);
         }
     }
-    for (index = 0U; index < VOX_DIGS_MAX_EFFECTS; ++index) {
+    for (index = 0U; index < demo_match.rules.fx_budget; ++index) {
         const vox_digs_effect *effect = &demo_match.effects[index];
         if (effect->active) {
             int x = demo_q16_to_screen(effect->position_x_q16,
                                        VOX_WORLD_WIDTH, VOX_WORLD_WIDTH);
             int y = demo_q16_to_screen(effect->position_y_q16,
                                        VOX_WORLD_HEIGHT, VOX_WORLD_HEIGHT);
-            demo_render_voxel(x, y, effect->material);
+            int gore = effect->material == VOX_MAT_FLESH ||
+                       effect->material == VOX_MAT_BLOOD;
+            if (!gore || app->options.gore_level == 2 ||
+                (app->options.gore_level == 1 && (index % 3U) == 0U)) {
+                demo_render_voxel(x, y, effect->material);
+            }
         }
     }
 }
@@ -533,23 +1165,121 @@ static int demo_normalize_camera_zoom(demo_app *app)
 
 static void demo_apply_player_camera(demo_app *app)
 {
-    const vox_physics_body *player = &demo_match.players[0];
+    double minimum_x;
+    double maximum_x;
+    double minimum_y;
+    double maximum_y;
+    double target_x;
+    double target_y;
+    double target_scale;
+    double target_sum_x;
+    double fit_x;
+    double fit_y;
+    double dt;
+    double damping;
+    double shake_x;
+    double shake_y;
+    int active;
+    int player;
     int center_x;
     int center_y;
     int x;
     int y;
-    int zoom = demo_normalize_camera_zoom(app);
-    app->camera_world_x = (double)player->position_x.value_q16 / 65536.0;
-    app->camera_world_y = (double)player->position_y.value_q16 / 65536.0;
-    center_x = (int)(app->camera_world_x *
+    int user_zoom = demo_normalize_camera_zoom(app);
+    minimum_x = (double)VOX_WORLD_WIDTH;
+    maximum_x = 0.0;
+    minimum_y = (double)VOX_WORLD_HEIGHT;
+    maximum_y = 0.0;
+    active = 0;
+    target_sum_x = 0.0;
+    for (player = 0; player < app->local_players; ++player) {
+        if (demo_match.alive[player]) {
+            double previous_x = (double)app->previous_player_x[player] /
+                                65536.0;
+            double previous_y = (double)app->previous_player_y[player] /
+                                65536.0;
+            double current_x = (double)demo_match.players[player].
+                               position_x.value_q16 / 65536.0;
+            double current_y = (double)demo_match.players[player].
+                               position_y.value_q16 / 65536.0;
+            double interpolated_x = previous_x +
+                                    (current_x - previous_x) *
+                                    app->render_alpha;
+            double interpolated_y = previous_y +
+                                    (current_y - previous_y) *
+                                    app->render_alpha;
+            double look_x = (double)demo_match.players[player].
+                            velocity_x.value_q16 / 65536.0 * 2.5;
+            if (interpolated_x < minimum_x) minimum_x = interpolated_x;
+            if (interpolated_x > maximum_x) maximum_x = interpolated_x;
+            if (interpolated_y < minimum_y) minimum_y = interpolated_y;
+            if (interpolated_y > maximum_y) maximum_y = interpolated_y;
+            target_sum_x += interpolated_x + look_x;
+            ++active;
+        }
+    }
+    if (active == 0) {
+        target_x = app->camera_world_x;
+        target_y = app->camera_world_y;
+        minimum_x = maximum_x = target_x;
+        minimum_y = maximum_y = target_y;
+    } else {
+        target_x = target_sum_x / (double)active;
+        target_y = (minimum_y + maximum_y) * 0.5 - 5.0;
+    }
+    fit_x = (double)VOX_WORLD_WIDTH /
+            ((maximum_x - minimum_x) + 54.0);
+    fit_y = (double)VOX_WORLD_HEIGHT /
+            ((maximum_y - minimum_y) + 40.0);
+    target_scale = fit_x < fit_y ? fit_x : fit_y;
+    if (target_scale > (double)user_zoom) target_scale = (double)user_zoom;
+    if (target_scale < 0.75) target_scale = 0.75;
+    if (app->camera_trauma > 0.0) {
+        target_scale *= 1.0 + app->camera_trauma * 0.06;
+    }
+    dt = app->frame_seconds;
+    if (dt <= 0.0) dt = 1.0 / 60.0;
+    if (dt > 0.05) dt = 0.05;
+    damping = 1.0 / (1.0 + 10.0 * dt);
+    app->camera_velocity_x += (target_x - app->camera_world_x) *
+                              30.0 * dt;
+    app->camera_velocity_y += (target_y - app->camera_world_y) *
+                              30.0 * dt;
+    app->camera_velocity_x *= damping;
+    app->camera_velocity_y *= damping;
+    app->camera_world_x += app->camera_velocity_x * dt;
+    app->camera_world_y += app->camera_velocity_y * dt;
+    app->camera_scale_velocity += (target_scale - app->camera_scale) *
+                                  26.0 * dt;
+    app->camera_scale_velocity *= damping;
+    app->camera_scale += app->camera_scale_velocity * dt;
+    if (app->camera_scale < 0.70) app->camera_scale = 0.70;
+    if (app->camera_scale > 4.25) app->camera_scale = 4.25;
+    shake_x = 0.0;
+    shake_y = 0.0;
+    if (app->options.camera_shake && app->camera_trauma > 0.0) {
+        vox_u32 noise = demo_match.tick * 1664525U +
+                        app->last_event_sequence * 1013904223U;
+        shake_x = ((double)((int)((noise >> 16) & 255U) - 128) / 128.0) *
+                  app->camera_trauma * 2.0;
+        shake_y = ((double)((int)((noise >> 24) & 255U) - 128) / 128.0) *
+                  app->camera_trauma * 1.5;
+    }
+    app->camera_shake_x = shake_x;
+    app->camera_shake_y = shake_y;
+    app->camera_trauma -= dt * 1.8;
+    if (app->camera_trauma < 0.0) app->camera_trauma = 0.0;
+    center_x = (int)((app->camera_world_x + app->camera_shake_x) *
                      (double)DEMO_WIDTH / (double)VOX_WORLD_WIDTH);
-    center_y = (int)(app->camera_world_y *
+    center_y = (int)((app->camera_world_y + app->camera_shake_y) *
                      (double)DEMO_HEIGHT / (double)VOX_WORLD_HEIGHT);
     memcpy(demo_camera_pixels, demo_pixels, sizeof(demo_pixels));
     for (y = 0; y < (int)DEMO_HEIGHT; ++y) {
         for (x = 0; x < (int)DEMO_WIDTH; ++x) {
-            int source_x = center_x + (x - (int)DEMO_WIDTH / 2) / zoom;
-            int source_y = center_y + (y - (int)DEMO_HEIGHT / 2) / zoom;
+            int source_x = center_x + (int)((double)(x -
+                           (int)DEMO_WIDTH / 2) / app->camera_scale);
+            int source_y = center_y + (int)((double)(y -
+                           (int)DEMO_HEIGHT / 2) / app->camera_scale);
             vox_u8 *destination = &demo_pixels[(y * (int)DEMO_WIDTH + x) *
                                                VOX_SOFTWARE_RGB_BYTES];
             if (source_x >= 0 && source_y >= 0 &&
@@ -572,15 +1302,14 @@ static void demo_apply_player_camera(demo_app *app)
 static void demo_mouse_world(demo_app *app, vox_u32 *world_x,
                              vox_u32 *world_y)
 {
-    int zoom = demo_normalize_camera_zoom(app);
     double offset_x = (double)(app->mouse_x - (int)DEMO_WIDTH / 2) /
-                      ((double)zoom *
+                      (app->camera_scale *
                        ((double)DEMO_WIDTH / (double)VOX_WORLD_WIDTH));
     double offset_y = (double)(app->mouse_y - (int)DEMO_HEIGHT / 2) /
-                      ((double)zoom *
+                      (app->camera_scale *
                        ((double)DEMO_HEIGHT / (double)VOX_WORLD_HEIGHT));
-    long x = (long)(app->camera_world_x + offset_x);
-    long y = (long)(app->camera_world_y + offset_y);
+    long x = (long)(app->camera_world_x + app->camera_shake_x + offset_x);
+    long y = (long)(app->camera_world_y + app->camera_shake_y + offset_y);
     if (x < 0L) x = 0L;
     if (y < 0L) y = 0L;
     if (x >= (long)VOX_WORLD_WIDTH) x = (long)VOX_WORLD_WIDTH - 1L;
@@ -593,7 +1322,7 @@ static void demo_draw_hud(demo_app *app)
 {
     char text[96];
     const vox_digs_weapon_properties *weapon =
-        vox_digs_weapon_get((vox_u16)app->selected_tool);
+        vox_digs_weapon_get((vox_u16)app->selected_tool[0]);
     vox_u32 remaining = demo_match.tick < demo_match.rules.match_ticks ?
                         demo_match.rules.match_ticks - demo_match.tick : 0U;
     vox_u32 seconds = remaining /
@@ -626,6 +1355,28 @@ static void demo_draw_hud(demo_app *app)
     vox_ui_text(&demo_ui, 179, 15, 1, text, DEMO_VGA_LIGHT_GRAY);
     vox_ui_text(&demo_ui, 179, 23, 1, "1-0 WEAPON  WHEEL ZOOM",
                 DEMO_VGA_DARK_GRAY);
+    if (app->local_players > 1) {
+        const vox_digs_weapon_properties *p2_weapon =
+            vox_digs_weapon_get((vox_u16)app->selected_tool[1]);
+        int p2_health = (int)((vox_u32)demo_match.health[1] * 56U /
+                              VOX_DIGS_MAX_HEALTH);
+        vox_ui_rect(&demo_ui, 3, 35, 166, 21, DEMO_VGA_BLACK);
+        vox_ui_frame(&demo_ui, 3, 35, 166, 21, DEMO_VGA_CYAN);
+        sprintf(text, "P2 K%u D%u HP%u",
+                (unsigned int)demo_match.scores[1],
+                (unsigned int)demo_match.deaths[1],
+                (unsigned int)demo_match.health[1]);
+        vox_ui_text(&demo_ui, 7, 39, 1, text, DEMO_VGA_LIGHT_CYAN);
+        vox_ui_rect(&demo_ui, 105, 40, 58, 5, DEMO_VGA_BLUE);
+        vox_ui_rect(&demo_ui, 106, 41, p2_health, 3, DEMO_VGA_LIGHT_RED);
+        vox_ui_rect(&demo_ui, 174, 35, 143, 21, DEMO_VGA_BLACK);
+        vox_ui_frame(&demo_ui, 174, 35, 143, 21, DEMO_VGA_CYAN);
+        vox_ui_text(&demo_ui, 179, 39, 1,
+                    p2_weapon == 0 ? "UNKNOWN" : p2_weapon->name,
+                    DEMO_VGA_LIGHT_CYAN);
+        vox_ui_text(&demo_ui, 179, 48, 1, "PAD 2 OR P2 KEYS",
+                    DEMO_VGA_DARK_GRAY);
+    }
 }
 
 static void demo_draw_debug(demo_app *app)
@@ -665,28 +1416,157 @@ static void demo_draw_debug(demo_app *app)
     vox_ui_text(&demo_ui, 7, 187, 1, text, DEMO_VGA_LIGHT_GRAY);
 }
 
+static void demo_world_to_screen(demo_app *app, vox_i32 world_x_q16,
+                                 vox_i32 world_y_q16, int *screen_x,
+                                 int *screen_y)
+{
+    double world_x = (double)world_x_q16 / 65536.0;
+    double world_y = (double)world_y_q16 / 65536.0;
+    *screen_x = (int)DEMO_WIDTH / 2 +
+        (int)((world_x - app->camera_world_x - app->camera_shake_x) *
+              app->camera_scale *
+              (double)DEMO_WIDTH / (double)VOX_WORLD_WIDTH);
+    *screen_y = (int)DEMO_HEIGHT / 2 +
+        (int)((world_y - app->camera_world_y - app->camera_shake_y) *
+              app->camera_scale *
+              (double)DEMO_HEIGHT / (double)VOX_WORLD_HEIGHT);
+}
+
+static void demo_draw_world_feedback(demo_app *app)
+{
+    static const char *ai_names[4] = {
+        "ROAM", "SEARCH", "ATTACK", "RETREAT"
+    };
+    int player;
+    int slot;
+    for (player = 0; player < (int)demo_match.rules.player_count; ++player) {
+        int x;
+        int y;
+        demo_world_to_screen(app,
+            demo_match.players[player].position_x.value_q16,
+            demo_match.players[player].position_y.value_q16, &x, &y);
+        if (demo_match.spawn_shield_ticks[player] > 0U &&
+            ((demo_match.tick / 4U) & 1U) == 0U) {
+            vox_ui_frame(&demo_ui, x - 6, y - 12, 13, 19,
+                         DEMO_VGA_LIGHT_CYAN);
+        }
+        if (player >= app->local_players &&
+            app->bot_health_ttl[player] > 0U && demo_match.alive[player]) {
+            int width = (int)((vox_u32)demo_match.health[player] * 18U /
+                              VOX_DIGS_MAX_HEALTH);
+            vox_ui_rect(&demo_ui, x - 10, y - 15, 20, 4, DEMO_VGA_BLACK);
+            vox_ui_rect(&demo_ui, x - 9, y - 14, width, 2,
+                        DEMO_VGA_LIGHT_RED);
+        }
+        if (app->options.debug && vox_digs_player_is_bot(&demo_match,
+                                                         (vox_u16)player)) {
+            vox_u16 mode = demo_match.bots[player].mode;
+            const char *name = mode < 4U ? ai_names[mode] : "AI";
+            vox_ui_text_center(&demo_ui, x, y - 24, 1, name,
+                               DEMO_VGA_LIGHT_CYAN);
+        }
+    }
+    for (player = 0; player < app->local_players; ++player) {
+        int x;
+        int y;
+        demo_world_to_screen(app,
+            (vox_i32)app->aim_world_x[player] << 16,
+            (vox_i32)app->aim_world_y[player] << 16, &x, &y);
+        vox_ui_frame(&demo_ui, x - 3, y - 3, 7, 7,
+                     player == 0 ? 255U : 85U,
+                     player == 0 ? 255U : 255U,
+                     player == 0 ? 85U : 255U);
+    }
+    for (slot = 0; slot < (int)DEMO_DAMAGE_POPUP_MAX; ++slot) {
+        const demo_damage_popup *popup = &app->damage_popups[slot];
+        if (popup->active) {
+            char amount[16];
+            int x;
+            int y;
+            int scale = app->options.damage_number_size ? 2 : 1;
+            vox_u8 red;
+            vox_u8 green;
+            vox_u8 blue;
+            sprintf(amount, "%u", (unsigned int)popup->amount);
+            demo_world_to_screen(app, popup->world_x_q16,
+                                 popup->world_y_q16, &x, &y);
+            if (app->options.damage_number_color) {
+                red = 255U;
+                green = 255U;
+                blue = popup->target < (vox_u16)app->local_players ?
+                       255U : 85U;
+            } else {
+                red = 255U;
+                green = popup->target < (vox_u16)app->local_players ?
+                        85U : 255U;
+                blue = 85U;
+            }
+            vox_ui_text_center_shadow(&demo_ui, x, y, scale, amount,
+                                      red, green, blue);
+        }
+    }
+}
+
+static void demo_apply_flash(demo_app *app)
+{
+    vox_u32 pixel;
+    double strength;
+    int target_red;
+    int target_green;
+    int target_blue;
+    if (app->flash_strength <= 0.0) return;
+    strength = app->flash_strength;
+    if (strength > 0.85) strength = 0.85;
+    target_red = 255;
+    target_green = app->flash_kind == 1 ? 0 : 255;
+    target_blue = app->flash_kind == 1 ? 0 : 255;
+    for (pixel = 0U; pixel < DEMO_WIDTH * DEMO_HEIGHT; ++pixel) {
+        vox_u8 *destination = &demo_pixels[pixel * VOX_SOFTWARE_RGB_BYTES];
+        destination[0] = (vox_u8)((double)destination[0] +
+            ((double)target_red - destination[0]) * strength);
+        destination[1] = (vox_u8)((double)destination[1] +
+            ((double)target_green - destination[1]) * strength);
+        destination[2] = (vox_u8)((double)destination[2] +
+            ((double)target_blue - destination[2]) * strength);
+    }
+    app->flash_strength -= app->frame_seconds * 3.8;
+    if (app->flash_strength < 0.0) app->flash_strength = 0.0;
+}
+
 static void demo_draw_play(demo_app *app)
 {
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
-    demo_build_render_world();
+    demo_build_render_world(app);
     (void)vox_software_render_ex(&demo_render_world, &demo_target,
                                  &demo_render_config);
     demo_apply_player_camera(app);
+    /* Keep the mouse player's authoritative aim synchronized to the camera
+     * transform that is actually being presented this frame. */
+    if (app->mouse_inside && demo_controller_for_player(app, 0) == 0) {
+        demo_mouse_world(app, &app->aim_world_x[0], &app->aim_world_y[0]);
+    }
     if (app->mouse_inside) {
         vox_ui_frame(&demo_ui, app->mouse_x - 3, app->mouse_y - 3,
                      7, 7, DEMO_VGA_YELLOW);
         vox_ui_rect(&demo_ui, app->mouse_x, app->mouse_y, 1, 1,
                     DEMO_VGA_WHITE);
     }
+    demo_draw_world_feedback(app);
     demo_draw_hud(app);
     demo_draw_debug(app);
     if (app->screen == DEMO_PAUSE) {
         demo_dark_panel(88, 65, 144, 70);
         vox_ui_text_center_shadow(&demo_ui, 160, 76, 2, "PAUSED",
                                   DEMO_VGA_YELLOW);
+        if (app->controller_disconnected) {
+            vox_ui_text_center(&demo_ui, 160, 94, 1,
+                               "CONTROLLER LOST  RECONNECT OR RECLAIM",
+                               DEMO_VGA_LIGHT_RED);
+        }
         demo_menu_item(105, "RESUME", app->selection == 0);
         demo_menu_item(120, "EXIT TO TITLE", app->selection == 1);
     }
+    demo_apply_flash(app);
 }
 
 static void demo_draw_results(demo_app *app)
@@ -715,6 +1595,14 @@ static void demo_render(demo_app *app)
         demo_draw_options(app);
     } else if (app->screen == DEMO_FEEDBACK) {
         demo_draw_feedback(app);
+    } else if (app->screen == DEMO_HOW_TO) {
+        demo_draw_how_to(app);
+    } else if (app->screen == DEMO_INDEX) {
+        demo_draw_index(app);
+    } else if (app->screen == DEMO_CONTROLS) {
+        demo_draw_controls(app);
+    } else if (app->screen == DEMO_SCRIPT_ERROR) {
+        demo_draw_script_error(app);
     } else if (app->screen == DEMO_RESULTS) {
         demo_draw_results(app);
     } else {
@@ -756,8 +1644,22 @@ static void demo_prepare_foundry_world(void)
 static int demo_start_match(demo_app *app, int foundry)
 {
     vox_digs_rules rules;
+    vox_u16 player;
     vox_digs_rules_classic(&rules);
-    rules.bot_count = (vox_u16)(foundry ? 0 : app->bots);
+    rules.player_count = (vox_u16)(foundry ? 1 :
+                         app->local_players + app->bots);
+    rules.bot_mask = 0U;
+    for (player = (vox_u16)(foundry ? 1 : app->local_players);
+         player < rules.player_count; ++player) {
+        rules.bot_mask = (vox_u16)(rules.bot_mask |
+                                   (vox_u16)(1U << player));
+    }
+    rules.team_mode = (vox_u16)(foundry ? VOX_DIGS_MODE_FFA :
+                                app->game_mode);
+    rules.friendly_fire = (vox_u16)app->friendly_fire;
+    rules.fx_budget = app->options.fx_profile == 0 ? VOX_DIGS_FX_RETRO :
+                      (app->options.fx_profile == 2 ? VOX_DIGS_FX_CARNAGE :
+                       VOX_DIGS_FX_STANDARD);
     rules.map_style = (vox_u16)app->map_style;
     rules.weapon_mask = foundry ? demo_arsenal_masks[DEMO_ARSENAL_FULL] :
                         demo_arsenal_masks[app->arsenal];
@@ -780,35 +1682,364 @@ static int demo_start_match(demo_app *app, int foundry)
     }
     app->foundry = foundry;
     (void)demo_normalize_camera_zoom(app);
-    app->selected_tool = demo_first_weapon(rules.weapon_mask);
+    app->selected_tool[0] = demo_first_weapon(rules.weapon_mask);
+    app->selected_tool[1] = app->selected_tool[0];
+    app->last_event_sequence = 0U;
+    app->camera_velocity_x = 0.0;
+    app->camera_velocity_y = 0.0;
+    app->camera_scale_velocity = 0.0;
+    app->camera_trauma = 0.0;
+    app->camera_world_x = (double)demo_match.players[0].
+                          position_x.value_q16 / 65536.0;
+    app->camera_world_y = (double)demo_match.players[0].
+                          position_y.value_q16 / 65536.0;
+    app->camera_scale = (double)app->camera_zoom;
+    for (player = 0U; player < VOX_DIGS_MAX_SLOTS; ++player) {
+        app->previous_player_x[player] =
+            demo_match.players[player].position_x.value_q16;
+        app->previous_player_y[player] =
+            demo_match.players[player].position_y.value_q16;
+        if (player < DEMO_LOCAL_MAX) {
+            vox_i32 aim_x = demo_match.players[player].position_x.value_q16 /
+                             65536L + (player == 0U ? 28L : -28L);
+            vox_i32 aim_y = demo_match.players[player].position_y.value_q16 /
+                             65536L;
+            if (aim_x < 0L) aim_x = 0L;
+            if (aim_x >= (vox_i32)VOX_WORLD_WIDTH) {
+                aim_x = (vox_i32)VOX_WORLD_WIDTH - 1L;
+            }
+            if (aim_y < 0L) aim_y = 0L;
+            if (aim_y >= (vox_i32)VOX_WORLD_HEIGHT) {
+                aim_y = (vox_i32)VOX_WORLD_HEIGHT - 1L;
+            }
+            app->aim_world_x[player] = (vox_u32)aim_x;
+            app->aim_world_y[player] = (vox_u32)aim_y;
+        }
+    }
     app->screen = DEMO_PLAY;
     app->selection = 0;
     demo_audio_play(app, DEMO_SOUND_START);
     return 1;
 }
 
-static void demo_submit_human_input(void)
+static demo_controller *demo_controller_for_player(demo_app *app,
+                                                   int player)
+{
+    int index;
+    for (index = 0; index < (int)DEMO_CONTROLLER_MAX; ++index) {
+        if (app->controllers[index].handle != 0 &&
+            app->controllers[index].claimed_player == player) {
+            return &app->controllers[index];
+        }
+    }
+    return 0;
+}
+
+static void demo_clamp_aim(demo_app *app, int player)
+{
+    if (app->aim_world_x[player] >= VOX_WORLD_WIDTH) {
+        app->aim_world_x[player] = VOX_WORLD_WIDTH - 1U;
+    }
+    if (app->aim_world_y[player] >= VOX_WORLD_HEIGHT) {
+        app->aim_world_y[player] = VOX_WORLD_HEIGHT - 1U;
+    }
+}
+
+static void demo_fire_player(demo_app *app, int player)
+{
+    if (player < 0 || player >= app->local_players ||
+        !demo_match.alive[player]) {
+        return;
+    }
+    demo_clamp_aim(app, player);
+    if (vox_digs_fire_weapon(&demo_match, (vox_u16)player,
+                             (vox_u16)app->selected_tool[player],
+                             app->aim_world_x[player],
+                             app->aim_world_y[player]) == VOX_OK) {
+        vox_i16 pan = (vox_i16)((long)app->aim_world_x[player] * 65534L /
+                                (long)(VOX_WORLD_WIDTH - 1U) - 32767L);
+        demo_audio_emit(app, VOX_AUDIO_PRESET_FIRE,
+                        (vox_u16)app->selected_tool[player], pan);
+    }
+}
+
+static void demo_submit_human_input(demo_app *app)
 {
     const vox_u8 *keys = SDL_GetKeyboardState(0);
-    vox_digs_input input;
-    input.abi_version = VOX_ABI_VERSION;
-    input.struct_size = (vox_u32)sizeof(input);
-    input.player = 0U;
-    input.actions = 0U;
-    if (keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_LEFT]) {
-        input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_LEFT);
+    int player;
+    for (player = 0; player < app->local_players; ++player) {
+        vox_digs_input input;
+        demo_controller *controller = demo_controller_for_player(app, player);
+        Sint16 move_x = 0;
+        Sint16 move_y = 0;
+        Sint16 aim_x = 0;
+        Sint16 aim_y = 0;
+        int fire = 0;
+        SDL_Scancode *left = demo_keyboard_binding(app, player, 0);
+        SDL_Scancode *right = demo_keyboard_binding(app, player, 1);
+        SDL_Scancode *jump = demo_keyboard_binding(app, player, 2);
+        SDL_Scancode *steam = demo_keyboard_binding(app, player, 3);
+        SDL_Scancode *rope = demo_keyboard_binding(app, player, 4);
+        SDL_Scancode *fire_key = demo_keyboard_binding(app, player, 5);
+        SDL_Scancode *previous_key = demo_keyboard_binding(app, player, 6);
+        SDL_Scancode *next_key = demo_keyboard_binding(app, player, 7);
+        int previous_down = previous_key != 0 && keys[*previous_key];
+        int next_down = next_key != 0 && keys[*next_key];
+        if (player == 0 && app->mouse_inside && controller == 0) {
+            demo_mouse_world(app, &app->aim_world_x[0],
+                             &app->aim_world_y[0]);
+        }
+        memset(&input, 0, sizeof(input));
+        input.abi_version = VOX_ABI_VERSION;
+        input.struct_size = (vox_u32)sizeof(input);
+        input.player = (vox_u16)player;
+        if (left != 0 && keys[*left]) move_x = -32767;
+        if (right != 0 && keys[*right]) move_x = 32767;
+        if (jump != 0 && keys[*jump]) {
+            input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_JUMP);
+        }
+        if (steam != 0 && keys[*steam]) {
+            input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_STEAM);
+        }
+        if (rope != 0 && keys[*rope]) {
+            input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_ROPE);
+        }
+        if (fire_key != 0 && keys[*fire_key]) fire = 1;
+        if (player == 0) {
+            if (keys[SDL_SCANCODE_W]) move_y = -32767;
+            if (keys[SDL_SCANCODE_S]) move_y = 32767;
+        } else {
+            if (keys[SDL_SCANCODE_I]) {
+                if (app->aim_world_y[player] > 0U) --app->aim_world_y[player];
+            }
+            if (keys[SDL_SCANCODE_K]) ++app->aim_world_y[player];
+            if (keys[SDL_SCANCODE_J] && app->aim_world_x[player] > 0U) {
+                --app->aim_world_x[player];
+            }
+            if (keys[SDL_SCANCODE_L]) ++app->aim_world_x[player];
+        }
+        if (controller != 0) {
+            move_x = demo_deadzone_axis(SDL_GameControllerGetAxis(
+                controller->handle, SDL_CONTROLLER_AXIS_LEFTX));
+            move_y = demo_deadzone_axis(SDL_GameControllerGetAxis(
+                controller->handle, SDL_CONTROLLER_AXIS_LEFTY));
+            aim_x = demo_deadzone_axis(SDL_GameControllerGetAxis(
+                controller->handle, SDL_CONTROLLER_AXIS_RIGHTX));
+            aim_y = demo_deadzone_axis(SDL_GameControllerGetAxis(
+                controller->handle, SDL_CONTROLLER_AXIS_RIGHTY));
+            if (SDL_GameControllerGetButton(controller->handle,
+                                            SDL_CONTROLLER_BUTTON_DPAD_LEFT)) {
+                move_x = -32767;
+            } else if (SDL_GameControllerGetButton(
+                           controller->handle,
+                           SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) {
+                move_x = 32767;
+            }
+            if (SDL_GameControllerGetButton(controller->handle,
+                                            SDL_CONTROLLER_BUTTON_DPAD_UP)) {
+                move_y = -32767;
+            } else if (SDL_GameControllerGetButton(
+                           controller->handle,
+                           SDL_CONTROLLER_BUTTON_DPAD_DOWN)) {
+                move_y = 32767;
+            }
+            if (SDL_GameControllerGetButton(controller->handle,
+                                            app->bindings.pad_jump)) {
+                input.actions = (vox_u16)(input.actions |
+                                          VOX_DIGS_ACTION_JUMP);
+            }
+            if (SDL_GameControllerGetButton(controller->handle,
+                                            app->bindings.pad_steam)) {
+                input.actions = (vox_u16)(input.actions |
+                                          VOX_DIGS_ACTION_STEAM);
+            }
+            if (SDL_GameControllerGetButton(controller->handle,
+                                            app->bindings.pad_rope)) {
+                input.actions = (vox_u16)(input.actions |
+                                          VOX_DIGS_ACTION_ROPE);
+            }
+            if (SDL_GameControllerGetButton(controller->handle,
+                                            app->bindings.pad_fire) ||
+                SDL_GameControllerGetAxis(controller->handle,
+                    SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16000) {
+                fire = 1;
+            }
+            if (aim_x != 0 || aim_y != 0) {
+                vox_i32 body_x = demo_match.players[player].position_x.value_q16;
+                vox_i32 body_y = demo_match.players[player].position_y.value_q16;
+                vox_i32 world_x = body_x / 65536L +
+                                  (vox_i32)aim_x * 52L / 32767L;
+                vox_i32 world_y = body_y / 65536L +
+                                  (vox_i32)aim_y * 52L / 32767L;
+                if (world_x < 0L) world_x = 0L;
+                if (world_y < 0L) world_y = 0L;
+                app->aim_world_x[player] = (vox_u32)world_x;
+                app->aim_world_y[player] = (vox_u32)world_y;
+            }
+        }
+        if (move_x < 0) {
+            input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_LEFT);
+        } else if (move_x > 0) {
+            input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_RIGHT);
+        }
+        input.move_x_q15 = (vox_i16)move_x;
+        input.move_y_q15 = (vox_i16)move_y;
+        demo_clamp_aim(app, player);
+        input.aim_x = (vox_u16)app->aim_world_x[player];
+        input.aim_y = (vox_u16)app->aim_world_y[player];
+        (void)vox_digs_submit_input(&demo_match, &input);
+        if (player < (int)DEMO_LOCAL_MAX) {
+            if (previous_down && !app->keyboard_previous_down[player]) {
+                demo_cycle_weapon(app, player, -1);
+            }
+            if (next_down && !app->keyboard_next_down[player]) {
+                demo_cycle_weapon(app, player, 1);
+            }
+            app->keyboard_previous_down[player] = previous_down;
+            app->keyboard_next_down[player] = next_down;
+        }
+        if (fire) demo_fire_player(app, player);
     }
-    if (keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT]) {
-        input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_RIGHT);
+}
+
+static int demo_event_is_local(const demo_app *app,
+                               const vox_digs_event *event)
+{
+    return (event->source < (vox_u16)app->local_players) ||
+           (event->target < (vox_u16)app->local_players);
+}
+
+static void demo_add_damage_popup(demo_app *app,
+                                  const vox_digs_event *event)
+{
+    int slot;
+    int free_slot;
+    if (!app->options.damage_numbers || !demo_event_is_local(app, event)) {
+        return;
     }
-    if (keys[SDL_SCANCODE_SPACE] || keys[SDL_SCANCODE_W] ||
-        keys[SDL_SCANCODE_UP]) {
-        input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_JUMP);
+    free_slot = -1;
+    for (slot = 0; slot < (int)DEMO_DAMAGE_POPUP_MAX; ++slot) {
+        demo_damage_popup *popup = &app->damage_popups[slot];
+        if (popup->active && popup->target == event->target &&
+            popup->ttl > 84U) {
+            popup->amount = (vox_u16)(popup->amount + event->magnitude);
+            popup->ttl = 90U;
+            popup->world_x_q16 = event->position_x_q16;
+            popup->world_y_q16 = event->position_y_q16;
+            return;
+        }
+        if (!popup->active && free_slot < 0) free_slot = slot;
     }
-    if (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT]) {
-        input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_STEAM);
+    if (free_slot < 0) free_slot = (int)(event->sequence %
+                                          DEMO_DAMAGE_POPUP_MAX);
+    app->damage_popups[free_slot].active = 1U;
+    app->damage_popups[free_slot].amount = event->magnitude;
+    app->damage_popups[free_slot].ttl = 90U;
+    app->damage_popups[free_slot].target = event->target;
+    app->damage_popups[free_slot].world_x_q16 = event->position_x_q16;
+    app->damage_popups[free_slot].world_y_q16 = event->position_y_q16;
+}
+
+static void demo_rumble_player(demo_app *app, vox_u16 player,
+                               vox_u16 magnitude)
+{
+    demo_controller *controller;
+    vox_u16 strength;
+    if (player >= (vox_u16)app->local_players) return;
+    controller = demo_controller_for_player(app, (int)player);
+    if (controller == 0) return;
+    strength = (vox_u16)(magnitude >= 100U ? 65535U :
+                         10000U + (vox_u32)magnitude * 500U);
+    (void)SDL_GameControllerRumble(controller->handle,
+                                   strength, strength,
+                                   magnitude >= 100U ? 240U : 90U);
+}
+
+static void demo_process_events(demo_app *app)
+{
+    vox_u16 ordinal;
+    for (ordinal = 0U; ordinal < demo_match.event_count; ++ordinal) {
+        const vox_digs_event *event = vox_digs_event_get(&demo_match, ordinal);
+        vox_i16 pan;
+        if (event == 0 || event->sequence <= app->last_event_sequence) {
+            continue;
+        }
+        app->last_event_sequence = event->sequence;
+        pan = (vox_i16)((long)(event->position_x_q16 / 65536L) * 65534L /
+                        (long)(VOX_WORLD_WIDTH - 1U) - 32767L);
+        if (event->type == VOX_DIGS_EVENT_DAMAGE) {
+            demo_add_damage_popup(app, event);
+            if (event->target < VOX_DIGS_MAX_SLOTS) {
+                app->bot_health_ttl[event->target] = 180U;
+            }
+            demo_audio_emit(app, VOX_AUDIO_PRESET_HIT,
+                            event->variant, pan);
+            if (event->target < (vox_u16)app->local_players) {
+                app->camera_trauma += (double)event->magnitude / 180.0;
+                app->flash_kind = 1;
+                app->flash_strength = app->options.flash_mode == 2 ? 0.48 :
+                                      (app->options.flash_mode == 1 ? 0.20 : 0.0);
+                demo_rumble_player(app, event->target, event->magnitude);
+            }
+        } else if (event->type == VOX_DIGS_EVENT_EXPLOSION) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_EXPLOSION,
+                            event->variant, pan);
+            if (demo_event_is_local(app, event)) {
+                app->camera_trauma += 0.55;
+                app->flash_kind = 2;
+                app->flash_strength = app->options.flash_mode == 2 ? 0.62 :
+                                      (app->options.flash_mode == 1 ? 0.24 : 0.0);
+            }
+        } else if (event->type == VOX_DIGS_EVENT_KILL) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_KILL,
+                            event->variant, pan);
+            if (demo_event_is_local(app, event)) {
+                app->camera_trauma += 0.9;
+                app->flash_kind = 1;
+                app->flash_strength = app->options.flash_mode == 2 ? 0.75 :
+                                      (app->options.flash_mode == 1 ? 0.30 : 0.0);
+            }
+            demo_rumble_player(app, event->target, 100U);
+        } else if (event->type == VOX_DIGS_EVENT_SPAWN) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_SPAWN,
+                            event->variant, pan);
+        } else if (event->type == VOX_DIGS_EVENT_ROPE_ATTACH) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_ROPE_ATTACH,
+                            event->variant, pan);
+        } else if (event->type == VOX_DIGS_EVENT_ROPE_DETACH ||
+                   event->type == VOX_DIGS_EVENT_ROPE_BREAK) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_ROPE_BREAK,
+                            event->variant, pan);
+        } else if (event->type == VOX_DIGS_EVENT_AI_BARK) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_BARK_ALERT,
+                            event->variant, pan);
+        } else if (event->type == VOX_DIGS_EVENT_WEAPON_FIRE &&
+                   event->source >= (vox_u16)app->local_players) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_FIRE,
+                            event->variant, pan);
+        }
+        if (app->camera_trauma > 1.0) app->camera_trauma = 1.0;
     }
-    (void)vox_digs_submit_input(&demo_match, &input);
+}
+
+static void demo_tick_presentation(demo_app *app)
+{
+    int slot;
+    for (slot = 0; slot < (int)DEMO_DAMAGE_POPUP_MAX; ++slot) {
+        if (app->damage_popups[slot].active) {
+            if (app->damage_popups[slot].ttl > 0U) {
+                --app->damage_popups[slot].ttl;
+                app->damage_popups[slot].world_y_q16 -= 9000L;
+            } else {
+                app->damage_popups[slot].active = 0U;
+            }
+        }
+    }
+    for (slot = 0; slot < (int)VOX_DIGS_MAX_SLOTS; ++slot) {
+        if (app->bot_health_ttl[slot] > 0U) {
+            --app->bot_health_ttl[slot];
+        }
+    }
 }
 
 static void demo_tick(demo_app *app)
@@ -816,11 +2047,22 @@ static void demo_tick(demo_app *app)
     if (app->screen != DEMO_PLAY) {
         return;
     }
-    demo_submit_human_input();
+    {
+        vox_u16 player;
+        for (player = 0U; player < VOX_DIGS_MAX_SLOTS; ++player) {
+            app->previous_player_x[player] =
+                demo_match.players[player].position_x.value_q16;
+            app->previous_player_y[player] =
+                demo_match.players[player].position_y.value_q16;
+        }
+    }
+    demo_submit_human_input(app);
     if (vox_digs_match_step(&demo_match) != VOX_OK) {
         app->screen = DEMO_RESULTS;
         return;
     }
+    demo_process_events(app);
+    demo_tick_presentation(app);
     if (demo_match.phase == VOX_DIGS_RESULTS) {
         app->screen = DEMO_RESULTS;
     }
@@ -855,6 +2097,8 @@ static int demo_sync_hardware_mouse(demo_app *app)
     int window_y;
     int window_width;
     int window_height;
+    int output_width;
+    int output_height;
     int view_width;
     int view_height;
     int view_x;
@@ -864,14 +2108,26 @@ static int demo_sync_hardware_mouse(demo_app *app)
     double scale_x;
     double scale_y;
     double scale;
+    double output_x;
+    double output_y;
     (void)SDL_GetMouseState(&window_x, &window_y);
     SDL_GetWindowSize(app->window, &window_width, &window_height);
     if (window_width <= 0 || window_height <= 0) {
         app->mouse_inside = 0;
         return 0;
     }
-    scale_x = (double)window_width / (double)DEMO_WIDTH;
-    scale_y = (double)window_height / (double)DEMO_HEIGHT;
+    if (SDL_GetRendererOutputSize(app->renderer, &output_width,
+                                  &output_height) != 0 ||
+        output_width <= 0 || output_height <= 0) {
+        output_width = window_width;
+        output_height = window_height;
+    }
+    output_x = (double)window_x * (double)output_width /
+               (double)window_width;
+    output_y = (double)window_y * (double)output_height /
+               (double)window_height;
+    scale_x = (double)output_width / (double)DEMO_WIDTH;
+    scale_y = (double)output_height / (double)DEMO_HEIGHT;
     scale = scale_x < scale_y ? scale_x : scale_y;
     if (scale >= 1.0) {
         scale = (double)(int)scale;
@@ -882,13 +2138,14 @@ static int demo_sync_hardware_mouse(demo_app *app)
         app->mouse_inside = 0;
         return 0;
     }
-    view_x = (window_width - view_width) / 2;
-    view_y = (window_height - view_height) / 2;
-    app->mouse_inside = window_x >= view_x && window_y >= view_y &&
-                        window_x < view_x + view_width &&
-                        window_y < view_y + view_height;
-    logical_x = (int)((double)(window_x - view_x) / scale);
-    logical_y = (int)((double)(window_y - view_y) / scale);
+    view_x = (output_width - view_width) / 2;
+    view_y = (output_height - view_height) / 2;
+    app->mouse_inside = output_x >= (double)view_x &&
+                        output_y >= (double)view_y &&
+                        output_x < (double)(view_x + view_width) &&
+                        output_y < (double)(view_y + view_height);
+    logical_x = (int)((output_x - (double)view_x) / scale);
+    logical_y = (int)((output_y - (double)view_y) / scale);
     demo_set_mouse_logical(app, logical_x, logical_y);
     return app->mouse_inside;
 }
@@ -904,20 +2161,18 @@ static void demo_fire_at_mouse(demo_app *app)
     if (world_y >= VOX_WORLD_HEIGHT) {
         world_y = VOX_WORLD_HEIGHT - 1U;
     }
-    if (vox_digs_fire_weapon(&demo_match, 0U,
-                             (vox_u16)app->selected_tool,
-                             world_x, world_y) == VOX_OK) {
-        demo_audio_play(app, DEMO_SOUND_FIRE);
-    }
+    app->aim_world_x[0] = world_x;
+    app->aim_world_y[0] = world_y;
+    demo_fire_player(app, 0);
 }
 
 static void demo_handle_title_key(demo_app *app, SDL_Keycode key)
 {
     if (key == SDLK_UP) {
-        app->selection = (app->selection + 4) % 5;
+        app->selection = (app->selection + 7) % 8;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 5;
+        app->selection = (app->selection + 1) % 8;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
         demo_audio_play(app, DEMO_SOUND_SELECT);
@@ -927,9 +2182,21 @@ static void demo_handle_title_key(demo_app *app, SDL_Keycode key)
         } else if (app->selection == 1) {
             (void)demo_start_match(app, 1);
         } else if (app->selection == 2) {
-            app->screen = DEMO_OPTIONS;
+            app->screen = DEMO_HOW_TO;
             app->selection = 0;
         } else if (app->selection == 3) {
+            app->screen = DEMO_INDEX;
+            app->selection = 0;
+            app->index_selection = 0U;
+            app->index_scroll = 0U;
+            app->index_visual_row = 0.0;
+        } else if (app->selection == 4) {
+            app->screen = DEMO_CONTROLS;
+            app->selection = 0;
+        } else if (app->selection == 5) {
+            app->screen = DEMO_OPTIONS;
+            app->selection = 0;
+        } else if (app->selection == 6) {
             app->screen = DEMO_FEEDBACK;
             app->selection = 0;
         } else {
@@ -945,31 +2212,41 @@ static void demo_handle_setup_key(demo_app *app, SDL_Keycode key)
         app->screen = DEMO_TITLE;
         app->selection = 0;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 5) % 6;
+        app->selection = (app->selection + 8) % 9;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 6;
+        app->selection = (app->selection + 1) % 9;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (direction != 0) {
         demo_audio_play(app, DEMO_SOUND_MOVE);
         if (app->selection == 0) {
-            app->bots = (app->bots + direction + 4) % 4;
+            app->local_players = app->local_players == 1 ? 2 : 1;
+            if (app->local_players + app->bots > 4) {
+                app->bots = 4 - app->local_players;
+            }
+            demo_refresh_controller_claims(app);
         } else if (app->selection == 1) {
-            app->map_style = (app->map_style + direction + 3) % 3;
+            app->bots = (app->bots + direction + 3) % 3;
         } else if (app->selection == 2) {
-            app->seed += direction > 0 ? 1U : (vox_u32)-1;
+            app->game_mode = 1 - app->game_mode;
         } else if (app->selection == 3) {
+            app->friendly_fire = !app->friendly_fire;
+        } else if (app->selection == 4) {
+            app->map_style = (app->map_style + direction + 3) % 3;
+        } else if (app->selection == 5) {
+            app->seed += direction > 0 ? 1U : (vox_u32)-1;
+        } else if (app->selection == 6) {
             app->arsenal = (app->arsenal + direction +
                             DEMO_ARSENAL_COUNT) % DEMO_ARSENAL_COUNT;
         }
-    } else if (key == SDLK_r && app->selection == 2) {
+    } else if (key == SDLK_r && app->selection == 5) {
         app->seed = app->seed * 1664525U + 1013904223U;
         demo_audio_play(app, DEMO_SOUND_SELECT);
     } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
         demo_audio_play(app, DEMO_SOUND_SELECT);
-        if (app->selection == 4) {
+        if (app->selection == 7) {
             (void)demo_start_match(app, 0);
-        } else if (app->selection == 5) {
+        } else if (app->selection == 8) {
             app->screen = DEMO_TITLE;
             app->selection = 0;
         }
@@ -979,33 +2256,197 @@ static void demo_handle_setup_key(demo_app *app, SDL_Keycode key)
 static void demo_handle_options_key(demo_app *app, SDL_Keycode key)
 {
     int direction = key == SDLK_LEFT ? -1 : (key == SDLK_RIGHT ? 1 : 0);
+    int change = direction == 0 ? 1 : direction;
     if (key == SDLK_ESCAPE) {
         app->screen = DEMO_TITLE;
         app->selection = 0;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 4) % 5;
+        app->selection = (app->selection + 10) % 11;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 5;
+        app->selection = (app->selection + 1) % 11;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (direction != 0 || key == SDLK_RETURN || key == SDLK_KP_ENTER) {
         demo_audio_play(app, direction == 0 ? DEMO_SOUND_SELECT :
                         DEMO_SOUND_MOVE);
-        if (app->selection == 0 && direction != 0) {
+        if (app->selection == 0) {
             app->options.frame_cap_index =
-                (app->options.frame_cap_index + direction + 6) % 6;
-        } else if (app->selection == 1 && direction != 0) {
+                (app->options.frame_cap_index + change + 6) % 6;
+        } else if (app->selection == 1) {
             app->options.gi_quality =
-                (app->options.gi_quality + direction + 3) % 3;
+                (app->options.gi_quality + change + 3) % 3;
         } else if (app->selection == 2) {
-            app->options.debug = !app->options.debug;
+            app->options.fx_profile =
+                (app->options.fx_profile + change + 3) % 3;
         } else if (app->selection == 3) {
+            app->options.flash_mode =
+                (app->options.flash_mode + change + 3) % 3;
+        } else if (app->selection == 4) {
+            app->options.gore_level =
+                (app->options.gore_level + change + 3) % 3;
+        } else if (app->selection == 5) {
+            app->options.camera_shake = !app->options.camera_shake;
+        } else if (app->selection == 6) {
+            app->options.damage_numbers = !app->options.damage_numbers;
+        } else if (app->selection == 7) {
+            app->options.damage_number_size =
+                !app->options.damage_number_size;
+        } else if (app->selection == 8) {
+            app->options.damage_number_color =
+                !app->options.damage_number_color;
+        } else if (app->selection == 9) {
             app->options.fullscreen = !app->options.fullscreen;
             demo_apply_fullscreen(app);
-        } else if (app->selection == 4 && direction == 0) {
+        } else if (app->selection == 10 && direction == 0) {
             app->screen = DEMO_TITLE;
             app->selection = 0;
         }
+    }
+}
+
+static void demo_handle_index_key(demo_app *app, SDL_Keycode key)
+{
+    const vox_script_catalog *catalog = app->scripts_ready ?
+        vox_script_catalog_get(&app->scripts) : 0;
+    vox_u16 count = catalog == 0 ? 0U : catalog->entry_count;
+    if (key == SDLK_ESCAPE) {
+        app->screen = DEMO_TITLE;
+        app->selection = 0;
+        demo_audio_play(app, DEMO_SOUND_PAUSE);
+    } else if (count > 0U && key == SDLK_UP) {
+        if (app->index_selection > 0U) --app->index_selection;
+        if (app->index_selection < app->index_scroll) {
+            app->index_scroll = app->index_selection;
+        }
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (count > 0U && key == SDLK_DOWN) {
+        if (app->index_selection + 1U < count) ++app->index_selection;
+        if (app->index_selection >= app->index_scroll +
+                                    VOX_SCRIPT_INDEX_VISIBLE_ROWS) {
+            app->index_scroll = (vox_u16)(app->index_selection -
+                                VOX_SCRIPT_INDEX_VISIBLE_ROWS + 1U);
+        }
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    }
+}
+
+static void demo_handle_controls_key(demo_app *app, SDL_Keycode key,
+                                     SDL_Scancode scancode)
+{
+    if (app->binding_capture) {
+        if (key == SDLK_ESCAPE) {
+            app->binding_capture = 0;
+        } else if (app->binding_player < 2) {
+            demo_assign_keyboard_binding(app, app->binding_player,
+                                         app->binding_capture - 1,
+                                         scancode);
+            app->binding_capture = 0;
+            demo_audio_play(app, DEMO_SOUND_SELECT);
+        }
+        return;
+    }
+    if (key == SDLK_ESCAPE) {
+        app->screen = DEMO_TITLE;
+        app->selection = 0;
+    } else if (key == SDLK_UP) {
+        app->selection = (app->selection + 10) % 11;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_DOWN) {
+        app->selection = (app->selection + 1) % 11;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (app->selection == 0 &&
+               (key == SDLK_LEFT || key == SDLK_RIGHT)) {
+        int direction = key == SDLK_LEFT ? -1 : 1;
+        app->binding_player = (app->binding_player + direction + 3) % 3;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+        if (app->selection >= 1 && app->selection <= 8) {
+            int action = app->selection - 1;
+            if (app->binding_player < 2 || action >= 2) {
+                app->binding_capture = action + 1;
+                demo_audio_play(app, DEMO_SOUND_SELECT);
+            }
+        } else if (app->selection == 9) {
+            demo_bindings_default(app);
+            demo_audio_play(app, DEMO_SOUND_SELECT);
+        } else if (app->selection == 10) {
+            app->screen = DEMO_TITLE;
+            app->selection = 0;
+        }
+    }
+}
+
+static void demo_handle_key(demo_app *app, SDL_Keycode key,
+                            SDL_Scancode scancode)
+{
+    int weapon_key = demo_key_weapon(key);
+    if (app->screen == DEMO_CONTROLS && app->binding_capture) {
+        demo_handle_controls_key(app, key, scancode);
+        return;
+    }
+    if (key == SDLK_F1) {
+        app->options.debug = !app->options.debug;
+    } else if (key == SDLK_F5) {
+        if (demo_scripts_reload(app) && app->screen == DEMO_SCRIPT_ERROR) {
+            app->screen = DEMO_TITLE;
+            app->selection = 0;
+        }
+    } else if (key == SDLK_F11) {
+        app->options.fullscreen = !app->options.fullscreen;
+        demo_apply_fullscreen(app);
+    } else if (app->screen == DEMO_SCRIPT_ERROR) {
+        if (key == SDLK_ESCAPE) app->running = 0;
+    } else if (app->screen == DEMO_TITLE) {
+        demo_handle_title_key(app, key);
+    } else if (app->screen == DEMO_SETUP) {
+        demo_handle_setup_key(app, key);
+    } else if (app->screen == DEMO_OPTIONS) {
+        demo_handle_options_key(app, key);
+    } else if (app->screen == DEMO_INDEX) {
+        demo_handle_index_key(app, key);
+    } else if (app->screen == DEMO_CONTROLS) {
+        demo_handle_controls_key(app, key, scancode);
+    } else if ((app->screen == DEMO_HOW_TO ||
+                app->screen == DEMO_FEEDBACK) &&
+               (key == SDLK_RETURN || key == SDLK_KP_ENTER ||
+                key == SDLK_ESCAPE)) {
+        app->screen = DEMO_TITLE;
+        app->selection = 0;
+        demo_audio_play(app, DEMO_SOUND_SELECT);
+    } else if (app->screen == DEMO_PLAY && key == SDLK_ESCAPE) {
+        app->screen = DEMO_PAUSE;
+        app->selection = 0;
+        demo_audio_play(app, DEMO_SOUND_PAUSE);
+    } else if (app->screen == DEMO_PAUSE) {
+        if (key == SDLK_UP || key == SDLK_DOWN) {
+            app->selection = 1 - app->selection;
+            demo_audio_play(app, DEMO_SOUND_MOVE);
+        } else if (key == SDLK_ESCAPE ||
+                   ((key == SDLK_RETURN || key == SDLK_KP_ENTER) &&
+                    app->selection == 0)) {
+            app->screen = DEMO_PLAY;
+            app->controller_disconnected = 0;
+            demo_audio_play(app, DEMO_SOUND_SELECT);
+        } else if ((key == SDLK_RETURN || key == SDLK_KP_ENTER) &&
+                   app->selection == 1) {
+            app->screen = DEMO_TITLE;
+            app->selection = 0;
+            demo_audio_play(app, DEMO_SOUND_SELECT);
+        }
+    } else if (app->screen == DEMO_RESULTS &&
+               (key == SDLK_RETURN || key == SDLK_KP_ENTER ||
+                key == SDLK_ESCAPE)) {
+        app->screen = DEMO_TITLE;
+        app->selection = 0;
+        demo_audio_play(app, DEMO_SOUND_SELECT);
+    } else if (app->screen == DEMO_PLAY && weapon_key >= 0) {
+        if (demo_weapon_is_allowed(demo_match.rules.weapon_mask,
+                                   weapon_key)) {
+            app->selected_tool[0] = weapon_key;
+            demo_audio_play(app, DEMO_SOUND_MOVE);
+        }
+    } else if (app->screen == DEMO_PLAY && key == SDLK_r) {
+        (void)demo_start_match(app, app->foundry);
     }
 }
 
@@ -1030,7 +2471,7 @@ static void demo_handle_event(demo_app *app, const SDL_Event *event)
                 direction = -direction;
             }
             if ((SDL_GetModState() & KMOD_SHIFT) != 0) {
-                demo_cycle_weapon(app, direction);
+                demo_cycle_weapon(app, 0, direction);
             } else {
                 app->camera_zoom += direction;
                 if (app->camera_zoom < DEMO_CAMERA_ZOOM_MIN) {
@@ -1041,60 +2482,63 @@ static void demo_handle_event(demo_app *app, const SDL_Event *event)
             }
             demo_audio_play(app, DEMO_SOUND_MOVE);
         }
-    } else if (event->type == SDL_KEYDOWN && !event->key.repeat) {
-        SDL_Keycode key = event->key.keysym.sym;
-        int weapon_key = demo_key_weapon(key);
-        if (key == SDLK_F1) {
-            app->options.debug = !app->options.debug;
-        } else if (key == SDLK_F11) {
-            app->options.fullscreen = !app->options.fullscreen;
-            demo_apply_fullscreen(app);
-        } else if (app->screen == DEMO_TITLE) {
-            demo_handle_title_key(app, key);
-        } else if (app->screen == DEMO_SETUP) {
-            demo_handle_setup_key(app, key);
-        } else if (app->screen == DEMO_OPTIONS) {
-            demo_handle_options_key(app, key);
-        } else if (app->screen == DEMO_FEEDBACK &&
-                   (key == SDLK_RETURN || key == SDLK_KP_ENTER ||
-                    key == SDLK_ESCAPE)) {
-            app->screen = DEMO_TITLE;
-            app->selection = 0;
-            demo_audio_play(app, DEMO_SOUND_SELECT);
-        } else if (app->screen == DEMO_PLAY && key == SDLK_ESCAPE) {
-            app->screen = DEMO_PAUSE;
-            app->selection = 0;
-            demo_audio_play(app, DEMO_SOUND_PAUSE);
-        } else if (app->screen == DEMO_PAUSE) {
-            if (key == SDLK_UP || key == SDLK_DOWN) {
-                app->selection = 1 - app->selection;
-                demo_audio_play(app, DEMO_SOUND_MOVE);
-            } else if (key == SDLK_ESCAPE ||
-                       ((key == SDLK_RETURN || key == SDLK_KP_ENTER) &&
-                        app->selection == 0)) {
-                app->screen = DEMO_PLAY;
-                demo_audio_play(app, DEMO_SOUND_SELECT);
-            } else if ((key == SDLK_RETURN || key == SDLK_KP_ENTER) &&
-                       app->selection == 1) {
-                app->screen = DEMO_TITLE;
-                app->selection = 0;
-                demo_audio_play(app, DEMO_SOUND_SELECT);
-            }
-        } else if (app->screen == DEMO_RESULTS &&
-                   (key == SDLK_RETURN || key == SDLK_KP_ENTER ||
-                    key == SDLK_ESCAPE)) {
-            app->screen = DEMO_TITLE;
-            app->selection = 0;
-            demo_audio_play(app, DEMO_SOUND_SELECT);
-        } else if (app->screen == DEMO_PLAY && weapon_key >= 0) {
-            if (demo_weapon_is_allowed(demo_match.rules.weapon_mask,
-                                       weapon_key)) {
-                app->selected_tool = weapon_key;
-                demo_audio_play(app, DEMO_SOUND_MOVE);
-            }
-        } else if (app->screen == DEMO_PLAY && key == SDLK_r) {
-            (void)demo_start_match(app, app->foundry);
+    } else if (event->type == SDL_CONTROLLERDEVICEADDED) {
+        (void)demo_open_controller(app, event->cdevice.which);
+    } else if (event->type == SDL_CONTROLLERDEVICEREMOVED) {
+        demo_close_controller(app, event->cdevice.which);
+    } else if (event->type == SDL_CONTROLLERAXISMOTION &&
+               app->screen != DEMO_PLAY &&
+               SDL_GetTicks() >= app->controller_nav_stamp) {
+        SDL_Keycode key = SDLK_UNKNOWN;
+        if (event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTX &&
+            event->caxis.value < -24000) key = SDLK_LEFT;
+        else if (event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTX &&
+                 event->caxis.value > 24000) key = SDLK_RIGHT;
+        else if (event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTY &&
+                 event->caxis.value < -24000) key = SDLK_UP;
+        else if (event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTY &&
+                 event->caxis.value > 24000) key = SDLK_DOWN;
+        if (key != SDLK_UNKNOWN) {
+            app->controller_nav_stamp = SDL_GetTicks() + 180U;
+            demo_handle_key(app, key, SDL_SCANCODE_UNKNOWN);
         }
+    } else if (event->type == SDL_CONTROLLERBUTTONDOWN) {
+        demo_controller *controller = demo_controller_by_instance(
+            app, event->cbutton.which);
+        SDL_GameControllerButton button =
+            (SDL_GameControllerButton)event->cbutton.button;
+        if (app->screen == DEMO_CONTROLS && app->binding_capture &&
+            app->binding_player == 2) {
+            demo_assign_pad_binding(app, app->binding_capture - 1, button);
+            app->binding_capture = 0;
+            demo_audio_play(app, DEMO_SOUND_SELECT);
+        } else if (app->screen == DEMO_PLAY && controller != 0) {
+            int player = controller->claimed_player;
+            if (button == SDL_CONTROLLER_BUTTON_START) {
+                demo_handle_key(app, SDLK_ESCAPE, SDL_SCANCODE_UNKNOWN);
+            } else if (player >= 0 &&
+                       button == app->bindings.pad_previous) {
+                demo_cycle_weapon(app, player, -1);
+            } else if (player >= 0 &&
+                       button == app->bindings.pad_next) {
+                demo_cycle_weapon(app, player, 1);
+            }
+        } else {
+            SDL_Keycode key = SDLK_UNKNOWN;
+            if (button == SDL_CONTROLLER_BUTTON_DPAD_UP) key = SDLK_UP;
+            else if (button == SDL_CONTROLLER_BUTTON_DPAD_DOWN) key = SDLK_DOWN;
+            else if (button == SDL_CONTROLLER_BUTTON_DPAD_LEFT) key = SDLK_LEFT;
+            else if (button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) key = SDLK_RIGHT;
+            else if (button == SDL_CONTROLLER_BUTTON_A ||
+                     button == SDL_CONTROLLER_BUTTON_START) key = SDLK_RETURN;
+            else if (button == SDL_CONTROLLER_BUTTON_B) key = SDLK_ESCAPE;
+            if (key != SDLK_UNKNOWN) {
+                demo_handle_key(app, key, SDL_SCANCODE_UNKNOWN);
+            }
+        }
+    } else if (event->type == SDL_KEYDOWN && !event->key.repeat) {
+        demo_handle_key(app, event->key.keysym.sym,
+                        event->key.keysym.scancode);
     }
 }
 
@@ -1135,16 +2579,20 @@ static int demo_smoke_test(const char *path)
     vox_u16 death_total = 0U;
     memset(&app, 0, sizeof(app));
     app.bots = 1;
+    app.local_players = 1;
     app.map_style = VOX_DIGS_MAP_FURNACE_YARD;
     app.arsenal = DEMO_ARSENAL_FULL;
     app.seed = 0xD1655EEDU;
     app.options.gi_quality = VOX_GI_BALANCED;
+    app.options.gore_level = 2;
+    app.options.fx_profile = 1;
     demo_prepare_targets();
     vox_digs_rules_classic(&rules);
     rules.match_ticks = 1200U;
     rules.score_limit = 100U;
     rules.lava_start_tick = 600U;
-    rules.bot_count = 1U;
+    rules.player_count = 2U;
+    rules.bot_mask = 2U;
     rules.map_style = VOX_DIGS_MAP_FURNACE_YARD;
     rules.weapon_mask = demo_arsenal_masks[DEMO_ARSENAL_FULL];
     rules.seed = app.seed;
@@ -1154,12 +2602,15 @@ static int demo_smoke_test(const char *path)
     min_lava_y = demo_match.lava_surface_y;
     for (tick = 0U; tick < 750U; ++tick) {
         vox_digs_input input;
+        memset(&input, 0, sizeof(input));
         input.abi_version = VOX_ABI_VERSION;
         input.struct_size = (vox_u32)sizeof(input);
         input.player = 0U;
         input.actions = tick < 120U ? VOX_DIGS_ACTION_RIGHT :
                         (tick < 200U ? (VOX_DIGS_ACTION_RIGHT |
                                         VOX_DIGS_ACTION_STEAM) : 0U);
+        input.move_x_q15 = (input.actions & VOX_DIGS_ACTION_RIGHT) ?
+                           32767 : 0;
         if (demo_match.alive[0]) {
             (void)vox_digs_submit_input(&demo_match, &input);
         }
@@ -1182,7 +2633,7 @@ static int demo_smoke_test(const char *path)
                                      target_x, target_y) == VOX_OK) {
                 fired_mask = (vox_u16)(fired_mask |
                               (vox_u16)(1U << weapon));
-                app.selected_tool = weapon;
+                app.selected_tool[0] = weapon;
                 script_index++;
             }
         }
@@ -1212,6 +2663,8 @@ static int demo_smoke_test(const char *path)
     app.mouse_x = 160;
     app.mouse_y = 100;
     app.camera_zoom = 0;
+    app.camera_scale = 2.0;
+    app.frame_seconds = 1.0 / 60.0;
     app.options.debug = 1;
     app.measured_fps = 60.0;
     demo_render(&app);
@@ -1328,6 +2781,7 @@ int main(int argc, char **argv)
     double accumulator = 0.0;
     Uint64 present_deadline = 0U;
     int last_frame_cap = -1;
+    int controller_index;
     if (argc >= 2 && strcmp(argv[1], "--smoke-test") == 0) {
         const char *path = argc >= 3 ? argv[2] : "/tmp/digs-demo-smoke.ppm";
         demo_prepare_targets();
@@ -1351,21 +2805,44 @@ int main(int argc, char **argv)
     app.running = 1;
     app.screen = DEMO_TITLE;
     app.bots = 1;
+    app.local_players = 1;
+    app.game_mode = VOX_DIGS_MODE_FFA;
+    app.friendly_fire = 0;
     app.map_style = VOX_DIGS_MAP_COAL_RIDGE;
     app.arsenal = DEMO_ARSENAL_FULL;
     app.seed = 0x564F5831U;
     app.mouse_x = 160;
     app.mouse_y = 100;
     app.camera_zoom = DEMO_CAMERA_ZOOM_DEFAULT;
+    app.camera_scale = (double)DEMO_CAMERA_ZOOM_DEFAULT;
+    app.frame_seconds = 1.0 / 60.0;
     app.options.frame_cap_index = 1;
     app.options.gi_quality = VOX_GI_BALANCED;
+    app.options.flash_mode = 2;
+    app.options.gore_level = 2;
+    app.options.camera_shake = 1;
+    app.options.damage_numbers = 1;
+    app.options.damage_number_size = 0;
+    app.options.fx_profile = 1;
+    demo_bindings_default(&app);
+    for (controller_index = 0;
+         controller_index < (int)DEMO_CONTROLLER_MAX;
+         ++controller_index) {
+        app.controllers[controller_index].instance_id = -1;
+        app.controllers[controller_index].claimed_player = -1;
+    }
     SDL_SetMainReady();
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_TIMER) != 0) {
         fprintf(stderr, "SDL init failed: %s\n", SDL_GetError());
         return 2;
     }
+    /* Keyboard play must remain available even when an SDL platform backend
+     * cannot initialize optional controller or haptic services. */
+    (void)SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
+    (void)SDL_InitSubSystem(SDL_INIT_HAPTIC);
     (void)SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
-    app.window = SDL_CreateWindow("DIGS v0.0.1 Demo",
+    (void)SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+    app.window = SDL_CreateWindow("DIGS v0.0.2 Demo",
                                   SDL_WINDOWPOS_CENTERED,
                                   SDL_WINDOWPOS_CENTERED,
                                   DEMO_WINDOW_WIDTH, DEMO_WINDOW_HEIGHT,
@@ -1408,9 +2885,20 @@ int main(int argc, char **argv)
     demo_audio_open(&app);
     demo_prepare_targets();
     demo_build_title_world();
+    if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) != 0U) {
+        for (controller_index = 0;
+             controller_index < SDL_NumJoysticks(); ++controller_index) {
+            (void)demo_open_controller(&app, controller_index);
+        }
+    }
+    if (!demo_scripts_open(&app)) {
+        app.screen = DEMO_SCRIPT_ERROR;
+    }
     frequency = SDL_GetPerformanceFrequency();
     if (frequency == 0U) {
         fprintf(stderr, "performance timer unavailable: %s\n", SDL_GetError());
+        demo_scripts_close(&app);
+        demo_close_controllers(&app);
         demo_audio_close(&app);
         SDL_DestroyTexture(app.texture);
         SDL_DestroyRenderer(app.renderer);
@@ -1430,6 +2918,7 @@ int main(int argc, char **argv)
         if (elapsed > 0.25) {
             elapsed = 0.25;
         }
+        app.frame_seconds = elapsed;
         accumulator += elapsed;
         while (SDL_PollEvent(&event)) {
             demo_handle_event(&app, &event);
@@ -1444,7 +2933,11 @@ int main(int argc, char **argv)
         if (catchup == DEMO_MAX_CATCHUP) {
             accumulator = 0.0;
         }
+        app.render_alpha = accumulator * (double)DEMO_SIM_HZ;
+        if (app.render_alpha < 0.0) app.render_alpha = 0.0;
+        if (app.render_alpha > 1.0) app.render_alpha = 1.0;
         demo_render(&app);
+        demo_audio_pump(&app);
         if (SDL_UpdateTexture(app.texture, 0, demo_pixels,
                               (int)demo_ui.stride) != 0 ||
             SDL_RenderClear(app.renderer) != 0 ||
@@ -1466,6 +2959,8 @@ int main(int argc, char **argv)
         demo_wait_for_frame(frequency, frame_cap, &last_frame_cap,
                             &present_deadline);
     }
+    demo_scripts_close(&app);
+    demo_close_controllers(&app);
     demo_audio_close(&app);
     SDL_DestroyTexture(app.texture);
     SDL_DestroyRenderer(app.renderer);

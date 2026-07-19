@@ -103,6 +103,27 @@ static vox_u8 vox_ui_glyph_row(char character, int row)
                row == 3 ? 4U : row == 4 ? 8U :
                (row == 5 || row == 6 ? 17U : 0U);
     }
+    if (character == '\'') {
+        return row < 2 ? 4U : 0U;
+    }
+    if (character == '(') {
+        return row == 0 || row == 6 ? 2U :
+               (row == 1 || row == 5 ? 4U : 8U);
+    }
+    if (character == ')') {
+        return row == 0 || row == 6 ? 8U :
+               (row == 1 || row == 5 ? 4U : 2U);
+    }
+    if (character == '[') {
+        return row == 0 || row == 6 ? 14U : 8U;
+    }
+    if (character == ']') {
+        return row == 0 || row == 6 ? 14U : 2U;
+    }
+    if (character == '&') {
+        return row == 0 ? 12U : row == 1 ? 18U : row == 2 ? 20U :
+               row == 3 ? 8U : row == 4 ? 21U : row == 5 ? 18U : 13U;
+    }
     return 0U;
 }
 
@@ -237,4 +258,76 @@ void vox_ui_text_center_shadow(vox_ui_surface *surface, int center_x, int y,
     vox_ui_text_shadow(surface,
                        center_x - vox_ui_text_width(text, scale) / 2,
                        y, scale, text, red, green, blue);
+}
+
+int vox_ui_text_wrap(vox_ui_surface *surface, int x, int y, int width,
+                     int max_lines, int scale, const char *text,
+                     vox_u8 red, vox_u8 green, vox_u8 blue)
+{
+    char line[96];
+    int line_length;
+    int line_count;
+    int max_characters;
+    const char *cursor;
+    if (surface == 0 || text == 0 || width <= 0 || max_lines <= 0 ||
+        scale <= 0) {
+        return 0;
+    }
+    max_characters = (width + scale) / (6 * scale);
+    if (max_characters < 1) {
+        return 0;
+    }
+    if (max_characters > (int)sizeof(line) - 1) {
+        max_characters = (int)sizeof(line) - 1;
+    }
+    cursor = text;
+    line_count = 0;
+    while (*cursor != '\0' && line_count < max_lines) {
+        int candidate_length;
+        int last_space;
+        int consumed;
+        line_length = 0;
+        last_space = -1;
+        while (cursor[line_length] != '\0' &&
+               cursor[line_length] != '\n' &&
+               line_length < max_characters) {
+            if (cursor[line_length] == ' ') {
+                last_space = line_length;
+            }
+            ++line_length;
+        }
+        candidate_length = line_length;
+        if (cursor[line_length] != '\0' && cursor[line_length] != '\n' &&
+            last_space > 0) {
+            candidate_length = last_space;
+        }
+        while (candidate_length > 0 && cursor[candidate_length - 1] == ' ') {
+            --candidate_length;
+        }
+        if (candidate_length > 0) {
+            int index;
+            for (index = 0; index < candidate_length; ++index) {
+                line[index] = cursor[index];
+            }
+            line[candidate_length] = '\0';
+            vox_ui_text(surface, x, y + line_count * 9 * scale, scale,
+                        line, red, green, blue);
+        }
+        consumed = line_length;
+        if (last_space > 0 && candidate_length == last_space) {
+            consumed = last_space;
+        }
+        if (cursor[consumed] == '\n') {
+            ++consumed;
+        }
+        while (cursor[consumed] == ' ') {
+            ++consumed;
+        }
+        if (consumed <= 0) {
+            consumed = 1;
+        }
+        cursor += consumed;
+        ++line_count;
+    }
+    return line_count;
 }

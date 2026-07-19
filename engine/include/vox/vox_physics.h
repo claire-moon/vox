@@ -37,6 +37,7 @@ typedef struct vox_physics_step_config {
     vox_u32 struct_size;
     vox_i32 gravity_q16;
     vox_i32 max_speed_q16;
+    vox_i32 max_step_q16;
     vox_u16 max_substeps;
     vox_u16 reserved;
 } vox_physics_step_config;
@@ -47,6 +48,18 @@ vox_result vox_physics_step(vox_physics_body *body, vox_i32 gravity_q16);
 vox_result vox_physics_step_world(vox_physics_body *body,
                                   const vox_world *world,
                                   const vox_physics_step_config *config);
+void vox_physics_accelerate_x(vox_physics_body *body, vox_i32 target_q16,
+                              vox_i32 acceleration_q16,
+                              vox_i32 deceleration_q16);
+vox_result vox_physics_rope_constraint(vox_physics_body *body,
+                                       const vox_world *world,
+                                       vox_i32 anchor_x_q16,
+                                       vox_i32 anchor_y_q16,
+                                       vox_i32 length_q16,
+                                       vox_i32 pull_q16,
+                                       vox_i32 break_tension_q16,
+                                       vox_i32 *tension_q16,
+                                       vox_u16 *broken);
 
 #ifdef __cplusplus
 }

@@ -155,6 +155,48 @@ static int test_rejects_embedded_body(void)
     return 0;
 }
 
+static int test_grounded_step_assist(void)
+{
+    static vox_world world;
+    vox_physics_body body;
+    vox_physics_step_config config;
+    vox_u32 x;
+    vox_u32 z;
+    vox_world_init(&world);
+    for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+        for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+            if (vox_world_set(&world, x, TEST_FLOOR_Y, z, VOX_MAT_STONE,
+                              20L << 16) != VOX_OK) {
+                return 1;
+            }
+        }
+        if (vox_world_set(&world, 20U, TEST_FLOOR_Y - 1U, z,
+                          VOX_MAT_STONE, 20L << 16) != VOX_OK) {
+            return 2;
+        }
+    }
+    if (vox_world_sleep_all(&world) != VOX_OK) {
+        return 3;
+    }
+    vox_physics_body_init(&body);
+    vox_physics_step_config_default(&config);
+    config.gravity_q16 = 0L;
+    body.position_x.value_q16 = 18L << 16;
+    body.position_y.value_q16 = (vox_i32)(TEST_FLOOR_Y << 16) -
+                                body.half_height_q16;
+    body.velocity_x.value_q16 = 2L << 16;
+    body.velocity_y.value_q16 = 0L;
+    body.flags = VOX_PHYSICS_BODY_GROUNDED;
+    if (vox_physics_step_world(&body, &world, &config) != VOX_OK ||
+        body.position_x.value_q16 <= (18L << 16) ||
+        (body.flags & VOX_PHYSICS_BODY_BLOCKED_X) ||
+        body.position_y.value_q16 >=
+            (vox_i32)(TEST_FLOOR_Y << 16) - body.half_height_q16) {
+        return 4;
+    }
+    return 0;
+}
+
 static int test_unbounded_legacy_step(void)
 {
     vox_physics_body body;
@@ -189,6 +231,11 @@ int main(void)
     if (result != 0) {
         fprintf(stderr, "physics embedded-body scenario failed: %d\n", result);
         return 4;
+    }
+    result = test_grounded_step_assist();
+    if (result != 0) {
+        fprintf(stderr, "physics step-assist scenario failed: %d\n", result);
+        return 5;
     }
     printf("physics deterministic collision proof passed\n");
     return 0;

@@ -218,7 +218,7 @@ def add_environment_sheet(workbook: Workbook) -> None:
     fields = [
         ("Tester alias", "Manual", "Use a public alias; do not enter an email address."),
         ("Build ID", "Bundle or release", "Record the exact bundle or release identifier."),
-        ("VOX version", "Bundle or release", "Expected demo version is v0.0.1."),
+        ("VOX version", "Bundle or release", "Expected demo version is v0.0.2."),
         ("Git commit", "Bundle manifest", "Use the public commit hash when supplied."),
         ("Binary SHA-256", "Cockpit or checksum file", "Identifies the exact tested executable."),
         ("Operating system", "System settings", "Name and release only."),
@@ -266,7 +266,7 @@ def build_workbook(source: Path, output: Path) -> None:
     workbook = Workbook()
     workbook.properties.creator = "VOX contributors"
     workbook.properties.lastModifiedBy = "VOX deterministic workbook generator"
-    workbook.properties.title = "VOX + DIGS v0.0.1 QA Feedback"
+    workbook.properties.title = "VOX + DIGS v0.0.2 QA Feedback"
     workbook.properties.subject = "Portable demo acceptance and issue evidence"
     workbook.properties.description = "Generated from qa/VOX_QA_CHECKPOINTS.csv"
     workbook.properties.created = FIXED_TIME

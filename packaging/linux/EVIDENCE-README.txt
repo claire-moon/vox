@@ -1,9 +1,11 @@
-DIGS v0.0.1 package-time evidence
+DIGS v0.0.2 package-time evidence
 ========================================
 
 Each named command has an unmodified stdout stream, unmodified stderr stream,
 and numeric exit status in this directory. The generated PPM images are the
-actual smoke outputs checked by the packager.
+actual smoke outputs checked by the packager. Lua validate, hash, and headless
+streams prove that the shipped catalog was accepted by the same script runtime
+included in the bundle.
 
 Archive ordering, ownership, and timestamps are normalized with
 SOURCE_DATE_EPOCH. The source archive is reproducible from the same tree.

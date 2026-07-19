@@ -2,6 +2,56 @@
 #include <stdio.h>
 #include "vox/vox_game.h"
 
+static void init_test_input(vox_digs_input *input, vox_u16 player,
+                            vox_u16 aim_x, vox_u16 aim_y)
+{
+    input->abi_version = VOX_ABI_VERSION;
+    input->struct_size = (vox_u32)sizeof(*input);
+    input->player = player;
+    input->actions = 0U;
+    input->aim_x = aim_x;
+    input->aim_y = aim_y;
+    input->move_x_q15 = 0;
+    input->move_y_q15 = 0;
+}
+
+static int event_type_seen(const vox_digs_match *match, vox_u16 type)
+{
+    vox_u16 ordinal;
+    for (ordinal = 0U; ordinal < match->event_count; ++ordinal) {
+        const vox_digs_event *event = vox_digs_event_get(match, ordinal);
+        if (event != 0 && event->type == type) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int event_mode_seen(const vox_digs_match *match, vox_u16 mode)
+{
+    vox_u16 ordinal;
+    for (ordinal = 0U; ordinal < match->event_count; ++ordinal) {
+        const vox_digs_event *event = vox_digs_event_get(match, ordinal);
+        if (event != 0 && event->type == VOX_DIGS_EVENT_AI_STATE &&
+            event->magnitude == mode) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int set_test_column(vox_world *world, vox_u32 x, vox_u32 y,
+                           vox_u16 material)
+{
+    vox_u32 z;
+    for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+        if (vox_world_set(world, x, y, z, material, 20L << 16) != VOX_OK) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int test_map_generation(void)
 {
     static vox_digs_match first;
@@ -86,6 +136,398 @@ static int test_map_generation(void)
     return 0;
 }
 
+static int test_player_layout_and_input_authority(void)
+{
+    static vox_digs_match match;
+    vox_digs_rules rules;
+    vox_digs_input first;
+    vox_digs_input second;
+    vox_u16 first_x;
+    vox_u16 first_y;
+    vox_u16 second_x;
+    vox_u16 second_y;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 4U;
+    rules.bot_mask = 0x000cU;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK ||
+        !vox_digs_player_is_active(&match, 0U) ||
+        !vox_digs_player_is_active(&match, 3U) ||
+        vox_digs_player_is_active(&match, 4U) ||
+        vox_digs_player_is_bot(&match, 0U) ||
+        vox_digs_player_is_bot(&match, 1U) ||
+        !vox_digs_player_is_bot(&match, 2U) ||
+        !vox_digs_player_is_bot(&match, 3U)) {
+        return 1;
+    }
+    first_x = (vox_u16)(match.players[0].position_x.value_q16 / 65536L);
+    first_y = (vox_u16)(match.players[0].position_y.value_q16 / 65536L);
+    second_x = (vox_u16)(match.players[1].position_x.value_q16 / 65536L);
+    second_y = (vox_u16)(match.players[1].position_y.value_q16 / 65536L);
+    init_test_input(&first, 0U, first_x, first_y);
+    init_test_input(&second, 1U, second_x, second_y);
+    first.actions = VOX_DIGS_ACTION_RIGHT;
+    first.move_x_q15 = 32767;
+    second.actions = (vox_u16)(VOX_DIGS_ACTION_LEFT |
+                                VOX_DIGS_ACTION_STEAM);
+    second.move_x_q15 = -24576;
+    second.move_y_q15 = 8192;
+    if (vox_digs_submit_input(&match, &first) != VOX_OK ||
+        vox_digs_submit_input(&match, &second) != VOX_OK ||
+        match.player_actions[0] != VOX_DIGS_ACTION_RIGHT ||
+        match.player_actions[1] != second.actions ||
+        match.move_x_q15[0] != 32767 ||
+        match.move_x_q15[1] != -24576 ||
+        match.move_y_q15[0] != 0 || match.move_y_q15[1] != 8192) {
+        return 2;
+    }
+    first.player = 2U;
+    if (vox_digs_submit_input(&match, &first) != VOX_ERR_INVALID) {
+        return 3;
+    }
+    rules.player_count = 3U;
+    rules.bot_mask = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_ERR_INVALID) {
+        return 4;
+    }
+    rules.player_count = 2U;
+    rules.bot_mask = 0x0004U;
+    if (vox_digs_match_init(&match, &rules) != VOX_ERR_INVALID) {
+        return 5;
+    }
+    rules.player_count = 4U;
+    rules.bot_mask = 0x000eU;
+    if (vox_digs_match_init(&match, &rules) != VOX_ERR_INVALID) {
+        return 6;
+    }
+    return 0;
+}
+
+static int test_spawn_shield_timing_and_attack_cancel(void)
+{
+    static vox_digs_match match;
+    vox_digs_rules rules;
+    vox_u32 tick;
+    vox_u32 target_x;
+    vox_u32 target_y;
+    vox_i32 player_x;
+    vox_i32 player_y;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK ||
+        match.spawn_shield_ticks[0] != VOX_DIGS_SPAWN_SHIELD_TICKS ||
+        vox_digs_consume_events(&match, match.event_count) != VOX_OK) {
+        return 1;
+    }
+    if (vox_digs_apply_hit(&match, 1U, 0U, VOX_DIGS_TOOL_NAIL_GUN,
+                           VOX_DIGS_PART_TORSO, 20U,
+                           VOX_DIGS_DAMAGE_BALLISTIC) != VOX_OK ||
+        match.health[0] != VOX_DIGS_MAX_HEALTH ||
+        !event_type_seen(&match, VOX_DIGS_EVENT_DAMAGE) ||
+        vox_digs_consume_events(&match, match.event_count) != VOX_OK) {
+        return 2;
+    }
+    for (tick = 0U; tick + 1U < VOX_DIGS_SPAWN_SHIELD_TICKS; ++tick) {
+        if (vox_digs_match_step(&match) != VOX_OK ||
+            match.spawn_shield_ticks[0] !=
+                (vox_u16)(VOX_DIGS_SPAWN_SHIELD_TICKS - tick - 1U) ||
+            event_type_seen(&match, VOX_DIGS_EVENT_SHIELD_END)) {
+            return 3;
+        }
+    }
+    if (match.spawn_shield_ticks[0] != 1U ||
+        vox_digs_match_step(&match) != VOX_OK ||
+        match.spawn_shield_ticks[0] != 0U ||
+        !event_type_seen(&match, VOX_DIGS_EVENT_SHIELD_END)) {
+        return 4;
+    }
+    if (vox_digs_match_init(&match, &rules) != VOX_OK ||
+        vox_digs_consume_events(&match, match.event_count) != VOX_OK) {
+        return 5;
+    }
+    player_x = match.players[0].position_x.value_q16 / 65536L;
+    player_y = match.players[0].position_y.value_q16 / 65536L;
+    target_x = (vox_u32)(player_x + 8L < (vox_i32)VOX_WORLD_WIDTH ?
+                         player_x + 8L : player_x - 8L);
+    target_y = (vox_u32)(player_y > 4L ? player_y - 4L : player_y);
+    if (vox_digs_fire_weapon(&match, 0U, VOX_DIGS_TOOL_NAIL_GUN,
+                             target_x, target_y) != VOX_OK ||
+        match.spawn_shield_ticks[0] != 0U ||
+        !event_type_seen(&match, VOX_DIGS_EVENT_SHIELD_END) ||
+        !event_type_seen(&match, VOX_DIGS_EVENT_WEAPON_FIRE)) {
+        return 6;
+    }
+    return 0;
+}
+
+static int test_rope_reel_anchor_and_events(void)
+{
+    static vox_digs_match match;
+    vox_digs_rules rules;
+    vox_digs_input input;
+    vox_i32 player_x;
+    vox_i32 player_y;
+    vox_u32 anchor_x;
+    vox_u32 anchor_y;
+    vox_u32 y;
+    vox_i32 attached_length;
+    vox_i32 reeled_length;
+    vox_u16 event_count;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK ||
+        vox_digs_consume_events(&match, match.event_count) != VOX_OK) {
+        return 1;
+    }
+    player_x = match.players[0].position_x.value_q16 / 65536L;
+    player_y = match.players[0].position_y.value_q16 / 65536L;
+    anchor_x = (vox_u32)player_x;
+    anchor_y = (vox_u32)(player_y > 14L ? player_y - 12L : 1L);
+    for (y = anchor_y + 1U; y < (vox_u32)player_y; ++y) {
+        if (!set_test_column(&match.world, anchor_x, y, VOX_MAT_AIR)) {
+            return 2;
+        }
+    }
+    if (!set_test_column(&match.world, anchor_x, anchor_y, VOX_MAT_METAL) ||
+        vox_world_sleep_all(&match.world) != VOX_OK) {
+        return 3;
+    }
+    init_test_input(&input, 0U, (vox_u16)anchor_x, (vox_u16)anchor_y);
+    input.actions = VOX_DIGS_ACTION_ROPE;
+    if (vox_digs_submit_input(&match, &input) != VOX_OK ||
+        vox_digs_match_step(&match) != VOX_OK || !match.ropes[0].active ||
+        !event_type_seen(&match, VOX_DIGS_EVENT_ROPE_ATTACH)) {
+        return 4;
+    }
+    attached_length = match.ropes[0].length_q16;
+    input.move_y_q15 = -32767;
+    if (vox_digs_submit_input(&match, &input) != VOX_OK ||
+        vox_digs_match_step(&match) != VOX_OK || !match.ropes[0].active ||
+        match.ropes[0].length_q16 >= attached_length) {
+        return 5;
+    }
+    reeled_length = match.ropes[0].length_q16;
+    input.move_y_q15 = 32767;
+    if (vox_digs_submit_input(&match, &input) != VOX_OK ||
+        vox_digs_match_step(&match) != VOX_OK || !match.ropes[0].active ||
+        match.ropes[0].length_q16 <= reeled_length) {
+        return 6;
+    }
+    if (!set_test_column(&match.world, anchor_x, anchor_y, VOX_MAT_AIR) ||
+        !set_test_column(&match.world, anchor_x, anchor_y - 1U,
+                         VOX_MAT_AIR) ||
+        vox_world_sleep_all(&match.world) != VOX_OK) {
+        return 7;
+    }
+    input.move_y_q15 = 0;
+    if (vox_digs_submit_input(&match, &input) != VOX_OK ||
+        vox_digs_match_step(&match) != VOX_OK || match.ropes[0].active ||
+        !event_type_seen(&match, VOX_DIGS_EVENT_ROPE_BREAK)) {
+        return 8;
+    }
+    event_count = match.event_count;
+    if (event_count == 0U ||
+        vox_digs_consume_events(&match, event_count) != VOX_OK ||
+        match.event_count != 0U || vox_digs_event_get(&match, 0U) != 0 ||
+        vox_digs_consume_events(&match, 1U) != VOX_ERR_INVALID) {
+        return 9;
+    }
+    return 0;
+}
+
+static int test_anatomy_bleed_cautery_and_sever(void)
+{
+    static vox_digs_match match;
+    vox_digs_rules rules;
+    vox_u16 health_after_hit;
+    vox_digs_anatomy_part *part;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) {
+        return 1;
+    }
+    match.spawn_shield_ticks[1] = 0U;
+    if (vox_digs_consume_events(&match, match.event_count) != VOX_OK ||
+        vox_digs_apply_hit(&match, 0U, 1U, VOX_DIGS_TOOL_NAIL_GUN,
+                           VOX_DIGS_PART_LEFT_THIGH, 20U,
+                           VOX_DIGS_DAMAGE_BALLISTIC) != VOX_OK) {
+        return 2;
+    }
+    part = &match.anatomy[1][VOX_DIGS_PART_LEFT_THIGH];
+    if (part->health != part->max_health - 20U ||
+        !(part->flags & VOX_DIGS_PART_BLEEDING) ||
+        (part->flags & VOX_DIGS_PART_CAUTERIZED) ||
+        part->bleed_rate_q8 == 0U ||
+        !event_type_seen(&match, VOX_DIGS_EVENT_DAMAGE)) {
+        return 3;
+    }
+    health_after_hit = match.health[1];
+    match.bleed_accumulator_q8[1] = 255U;
+    if (vox_digs_match_step(&match) != VOX_OK ||
+        match.health[1] >= health_after_hit ||
+        !event_type_seen(&match, VOX_DIGS_EVENT_BLEED)) {
+        return 4;
+    }
+    if (vox_digs_apply_hit(&match, 0U, 1U, VOX_DIGS_TOOL_CINDER_FLASK,
+                           VOX_DIGS_PART_LEFT_THIGH, 1U,
+                           VOX_DIGS_DAMAGE_HEAT) != VOX_OK ||
+        !(part->flags & VOX_DIGS_PART_CAUTERIZED) ||
+        (part->flags & VOX_DIGS_PART_BLEEDING) ||
+        part->bleed_rate_q8 != 0U) {
+        return 5;
+    }
+    part = &match.anatomy[1][VOX_DIGS_PART_RIGHT_HAND];
+    if (vox_digs_apply_hit(&match, 0U, 1U, VOX_DIGS_TOOL_NAIL_GUN,
+                           VOX_DIGS_PART_RIGHT_HAND, part->max_health,
+                           VOX_DIGS_DAMAGE_BALLISTIC) != VOX_OK ||
+        part->health != 0U || !(part->flags & VOX_DIGS_PART_SEVERED) ||
+        !event_type_seen(&match, VOX_DIGS_EVENT_LIMB_SEVER) ||
+        !match.alive[1]) {
+        return 6;
+    }
+    return 0;
+}
+
+static int test_ai_state_machine(void)
+{
+    static vox_digs_match match;
+    vox_digs_rules rules;
+    vox_i32 bot_x;
+    vox_i32 bot_y;
+    vox_u32 player_x;
+    vox_u32 wall_x;
+    vox_u32 x;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0x0002U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK ||
+        vox_digs_consume_events(&match, match.event_count) != VOX_OK) {
+        return 1;
+    }
+    bot_x = match.players[1].position_x.value_q16 / 65536L;
+    bot_y = match.players[1].position_y.value_q16 / 65536L;
+    player_x = (vox_u32)(bot_x - 8L);
+    match.players[0].position_x.value_q16 = (vox_i32)(player_x << 16);
+    match.players[0].position_y.value_q16 = bot_y << 16;
+    for (x = player_x; x <= (vox_u32)bot_x; ++x) {
+        if (!set_test_column(&match.world, x, (vox_u32)bot_y,
+                             VOX_MAT_AIR)) {
+            return 2;
+        }
+    }
+    match.weapon_cooldown[1] = 1U;
+    match.bots[1].decision_ticks = 0U;
+    if (vox_digs_bot_think(&match, 1U) != VOX_OK ||
+        match.bots[1].mode != VOX_DIGS_AI_ATTACKING ||
+        !event_mode_seen(&match, VOX_DIGS_AI_ATTACKING)) {
+        return 3;
+    }
+    match.health[1] = 20U;
+    match.bots[1].decision_ticks = 0U;
+    if (vox_digs_bot_think(&match, 1U) != VOX_OK ||
+        match.bots[1].mode != VOX_DIGS_AI_RETREATING ||
+        !event_mode_seen(&match, VOX_DIGS_AI_RETREATING)) {
+        return 4;
+    }
+    wall_x = (player_x + (vox_u32)bot_x) / 2U;
+    if (!set_test_column(&match.world, wall_x, (vox_u32)bot_y,
+                         VOX_MAT_METAL)) {
+        return 5;
+    }
+    match.health[1] = VOX_DIGS_MAX_HEALTH;
+    match.bots[1].decision_ticks = 0U;
+    if (vox_digs_bot_think(&match, 1U) != VOX_OK ||
+        match.bots[1].mode != VOX_DIGS_AI_SEARCHING ||
+        !event_mode_seen(&match, VOX_DIGS_AI_SEARCHING)) {
+        return 6;
+    }
+    match.bots[1].memory_ticks = 0U;
+    match.bots[1].decision_ticks = 0U;
+    if (vox_digs_bot_think(&match, 1U) != VOX_OK ||
+        match.bots[1].mode != VOX_DIGS_AI_ROAMING ||
+        !event_mode_seen(&match, VOX_DIGS_AI_ROAMING)) {
+        return 7;
+    }
+    return 0;
+}
+
+static int test_movement_acceleration_and_step_assist(void)
+{
+    static vox_digs_match match;
+    vox_digs_rules rules;
+    vox_digs_input input;
+    vox_u32 x;
+    vox_u32 z;
+    vox_u32 tick;
+    vox_i32 start_x;
+    vox_i32 ground_y;
+    vox_i32 min_y;
+    vox_i32 peak_velocity;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) {
+        return 1;
+    }
+    vox_world_init(&match.world);
+    for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+        for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+            if (vox_world_set(&match.world, x, 100U, z, VOX_MAT_STONE,
+                              20L << 16) != VOX_OK) {
+                return 2;
+            }
+        }
+        if (vox_world_set(&match.world, 49U, 99U, z, VOX_MAT_STONE,
+                          20L << 16) != VOX_OK) {
+            return 3;
+        }
+    }
+    if (vox_world_sleep_all(&match.world) != VOX_OK) {
+        return 4;
+    }
+    match.players[0].position_x.value_q16 = 46L << 16;
+    ground_y = (100L << 16) - match.players[0].half_height_q16;
+    match.players[0].position_y.value_q16 = ground_y;
+    match.players[0].velocity_x.value_q16 = 0L;
+    match.players[0].velocity_y.value_q16 = 0L;
+    match.players[0].flags = VOX_PHYSICS_BODY_GROUNDED;
+    init_test_input(&input, 0U, 60U, 90U);
+    input.move_x_q15 = 32767;
+    start_x = match.players[0].position_x.value_q16;
+    min_y = ground_y;
+    peak_velocity = 0L;
+    for (tick = 0U; tick < 10U; ++tick) {
+        if (vox_digs_submit_input(&match, &input) != VOX_OK ||
+            vox_digs_match_step(&match) != VOX_OK) {
+            return 5;
+        }
+        if (match.players[0].position_y.value_q16 < min_y) {
+            min_y = match.players[0].position_y.value_q16;
+        }
+        if (match.players[0].velocity_x.value_q16 > peak_velocity) {
+            peak_velocity = match.players[0].velocity_x.value_q16;
+        }
+    }
+    if (match.players[0].position_x.value_q16 <= start_x + (3L << 16) ||
+        min_y >= ground_y || peak_velocity <= 0L ||
+        (match.players[0].flags & VOX_PHYSICS_BODY_BLOCKED_X)) {
+        return 6;
+    }
+    input.move_x_q15 = 0;
+    for (tick = 0U; tick < 8U; ++tick) {
+        if (vox_digs_submit_input(&match, &input) != VOX_OK ||
+            vox_digs_match_step(&match) != VOX_OK) {
+            return 7;
+        }
+    }
+    if (match.players[0].velocity_x.value_q16 != 0L) {
+        return 8;
+    }
+    return 0;
+}
+
 static int run_match(vox_u32 *hash_out)
 {
     vox_digs_rules rules;
@@ -93,7 +535,8 @@ static int run_match(vox_u32 *hash_out)
     vox_u32 i;
     vox_digs_rules_classic(&rules);
     rules.seed = 0xA11CE001U;
-    rules.bot_count = 3U;
+    rules.player_count = 4U;
+    rules.bot_mask = 0x000cU;
     rules.match_ticks = 600U;
     rules.lava_start_tick = 420U;
     if (vox_digs_match_init(&match, &rules) != VOX_OK) {
@@ -127,7 +570,8 @@ static int test_player_physics(void)
     vox_u32 occupied_before;
     vox_u32 terrain_hash;
     vox_digs_rules_classic(&rules);
-    rules.bot_count = 0U;
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
     for (map_style = VOX_DIGS_MAP_COAL_RIDGE;
          map_style < VOX_DIGS_MAP_COUNT; ++map_style) {
         rules.map_style = map_style;
@@ -145,7 +589,7 @@ static int test_player_physics(void)
             match.world.awake_cells != 0U || match.terrain_hash != terrain_hash) {
             return 3;
         }
-        for (player = 0U; player <= rules.bot_count; ++player) {
+        for (player = 0U; player < rules.player_count; ++player) {
             const vox_physics_body *body = &match.players[player];
             if (!match.alive[player] || body->abi_version != VOX_ABI_VERSION ||
                 body->struct_size < (vox_u32)sizeof(*body) ||
@@ -196,7 +640,8 @@ static int test_tools(void)
     vox_u32 y;
     vox_u32 initial_hash;
     vox_digs_rules_classic(&rules);
-    rules.bot_count = 0U;
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
     if (vox_digs_match_init(&match, &rules) != VOX_OK ||
         !find_tool_target(&match.world, 0, &x, &y)) {
         return 1;
@@ -249,7 +694,8 @@ static int test_player_controls(void)
     vox_u16 steam_before;
     vox_u32 tick;
     vox_digs_rules_classic(&rules);
-    rules.bot_count = 0U;
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
     if (vox_digs_match_init(&match, &rules) != VOX_OK) {
         return 1;
     }
@@ -264,6 +710,10 @@ static int test_player_controls(void)
     input.abi_version = VOX_ABI_VERSION;
     input.struct_size = (vox_u32)sizeof(input);
     input.player = 0U;
+    input.aim_x = (vox_u16)(match.players[0].position_x.value_q16 / 65536L);
+    input.aim_y = (vox_u16)(match.players[0].position_y.value_q16 / 65536L);
+    input.move_x_q15 = 0;
+    input.move_y_q15 = 0;
     start_x = match.players[0].position_x.value_q16;
     input.actions = VOX_DIGS_ACTION_RIGHT;
     if (vox_digs_submit_input(&match, &input) != VOX_OK ||
@@ -308,7 +758,7 @@ static int test_player_controls(void)
         match.players[0].position_y.value_q16 >= start_y) {
         return 11;
     }
-    input.actions = (vox_u16)(VOX_DIGS_ACTION_MASK | 16U);
+    input.actions = (vox_u16)(VOX_DIGS_ACTION_MASK | 32U);
     if (vox_digs_submit_input(&match, &input) != VOX_ERR_INVALID) {
         return 12;
     }
@@ -323,12 +773,15 @@ static int test_combat_and_respawn(void)
     vox_u16 effect;
     int found_flesh = 0;
     vox_digs_rules_classic(&rules);
-    rules.bot_count = 1U;
+    rules.player_count = 2U;
+    rules.bot_mask = 0x0002U;
     if (vox_digs_match_init(&match, &rules) != VOX_OK ||
         match.health[0] != VOX_DIGS_MAX_HEALTH ||
-        match.health[1] != VOX_DIGS_MAX_HEALTH) {
+        match.health[1] != VOX_DIGS_MAX_HEALTH ||
+        match.spawn_shield_ticks[1] != VOX_DIGS_SPAWN_SHIELD_TICKS) {
         return 1;
     }
+    match.spawn_shield_ticks[1] = 0U;
     if (vox_digs_apply_damage(&match, 0U, 1U, 25U) != VOX_OK ||
         match.health[1] != 75U || match.last_attacker[1] != 0U ||
         match.effect_count == 0U) {
@@ -358,13 +811,18 @@ static int test_combat_and_respawn(void)
         match.respawn_ticks[1] != 0U) {
         return 6;
     }
+    match.spawn_shield_ticks[1] = 0U;
     if (vox_digs_apply_damage(&match, 0U, 1U, 1U) != VOX_OK ||
         vox_digs_apply_damage(&match, VOX_DIGS_NO_PLAYER, 1U, 200U) !=
         VOX_OK || match.alive[1] || match.scores[0] != 2U ||
         match.deaths[1] != 2U) {
         return 7;
     }
-    if (vox_digs_match_init(&match, &rules) != VOX_OK ||
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) {
+        return 8;
+    }
+    match.spawn_shield_ticks[1] = 0U;
+    if (
         vox_digs_apply_damage(&match, VOX_DIGS_NO_PLAYER, 1U, 200U) !=
             VOX_OK || match.alive[1] || match.scores[0] != 0U) {
         return 8;
@@ -395,7 +853,8 @@ static int test_weapon_table_and_pool(void)
         return 2;
     }
     vox_digs_rules_classic(&rules);
-    rules.bot_count = 0U;
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
     if (rules.weapon_mask != 0x03ffU) {
         return 3;
     }
@@ -490,7 +949,8 @@ static int test_bot_authority(void)
     vox_u32 z;
     vox_u32 tick;
     vox_digs_rules_classic(&rules);
-    rules.bot_count = 1U;
+    rules.player_count = 2U;
+    rules.bot_mask = 0x0002U;
     if (vox_digs_match_init(&match, &rules) != VOX_OK) {
         return 1;
     }
@@ -502,6 +962,7 @@ static int test_bot_authority(void)
     match.players[0].velocity_x.value_q16 = 0L;
     match.players[0].velocity_y.value_q16 = 0L;
     match.health[0] = 10U;
+    match.spawn_shield_ticks[0] = 0U;
     for (y = (vox_u32)(bot_y - 2L); y <= (vox_u32)(bot_y + 1L); ++y) {
         for (x = (vox_u32)(bot_x - 4L); x <= (vox_u32)(bot_x + 1L); ++x) {
             for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
@@ -511,9 +972,10 @@ static int test_bot_authority(void)
         }
     }
     match.tick = 7U;
+    match.bots[1].decision_ticks = 0U;
     if (vox_digs_bot_think(&match, 1U) != VOX_OK ||
-        !(match.player_actions[1] & VOX_DIGS_ACTION_LEFT) ||
-        match.projectile_count == 0U) {
+        match.move_x_q15[1] == 0 ||
+        (match.projectile_count == 0U && match.health[0] == 10U)) {
         return 2;
     }
     for (tick = 0U; tick < 6U && match.scores[1] == 0U; ++tick) {
@@ -539,7 +1001,8 @@ static int test_rising_lava(void)
     vox_u32 carve_x;
     int lava_found = 0;
     vox_digs_rules_classic(&rules);
-    rules.bot_count = 0U;
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
     rules.match_ticks = 180U;
     rules.lava_start_tick = 60U;
     if (vox_digs_match_init(&match, &rules) != VOX_OK) {
@@ -584,6 +1047,7 @@ static int test_rising_lava(void)
     match.players[0].velocity_x.value_q16 = 0L;
     match.players[0].velocity_y.value_q16 = 0L;
     match.health[0] = VOX_DIGS_MAX_HEALTH;
+    match.spawn_shield_ticks[0] = 0U;
     if (vox_digs_match_step(&match) != VOX_OK ||
         match.health[0] >= VOX_DIGS_MAX_HEALTH) {
         return 5;
@@ -602,7 +1066,8 @@ static int test_rule_bounds_and_long_lava(void)
         return 1;
     }
     rules.score_limit = 10U;
-    rules.bot_count = 0U;
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
     rules.match_ticks = 100000U;
     rules.lava_start_tick = 1U;
     if (vox_digs_match_init(&match, &rules) != VOX_OK) {
@@ -628,7 +1093,8 @@ static int test_bot_score_limit_step(void)
     vox_i32 bot_x;
     vox_i32 bot_y;
     vox_digs_rules_classic(&rules);
-    rules.bot_count = 2U;
+    rules.player_count = 3U;
+    rules.bot_mask = 0x0006U;
     rules.score_limit = 1U;
     if (vox_digs_match_init(&match, &rules) != VOX_OK) {
         return 1;
@@ -640,6 +1106,9 @@ static int test_bot_score_limit_step(void)
     match.players[0].velocity_x.value_q16 = 0L;
     match.players[0].velocity_y.value_q16 = 0L;
     match.health[0] = 1U;
+    match.spawn_shield_ticks[0] = 0U;
+    match.bots[1].decision_ticks = 0U;
+    match.bots[2].decision_ticks = 0U;
     match.tick = 847U;
     if (vox_digs_match_step(&match) != VOX_OK ||
         match.phase != VOX_DIGS_RESULTS || match.scores[1] != 1U) {
@@ -669,6 +1138,67 @@ int main(void)
         fprintf(stderr, "DIGS map generation mismatch\n");
         return 4;
     }
+    if (test_player_layout_and_input_authority() != 0) {
+        fprintf(stderr, "DIGS player layout/input authority mismatch\n");
+        return 14;
+    }
+    if (test_spawn_shield_timing_and_attack_cancel() != 0) {
+        fprintf(stderr, "DIGS spawn shield mismatch\n");
+        return 15;
+    }
+    if (test_rope_reel_anchor_and_events() != 0) {
+        fprintf(stderr, "DIGS rope/event mismatch\n");
+        return 16;
+    }
+    if (test_anatomy_bleed_cautery_and_sever() != 0) {
+        fprintf(stderr, "DIGS anatomy mismatch\n");
+        return 17;
+    }
+    if (test_ai_state_machine() != 0) {
+        fprintf(stderr, "DIGS AI state mismatch\n");
+        return 18;
+    }
+    if (test_movement_acceleration_and_step_assist() != 0) {
+        fprintf(stderr, "DIGS movement/step mismatch\n");
+        return 19;
+    }
+    {
+        int shield_result = test_spawn_shield_timing_and_attack_cancel();
+        if (shield_result != 0) {
+            fprintf(stderr, "DIGS spawn shield mismatch (%d)\n",
+                    shield_result);
+            return 15;
+        }
+    }
+    {
+        int rope_result = test_rope_reel_anchor_and_events();
+        if (rope_result != 0) {
+            fprintf(stderr, "DIGS rope/event mismatch (%d)\n", rope_result);
+            return 16;
+        }
+    }
+    {
+        int anatomy_result = test_anatomy_bleed_cautery_and_sever();
+        if (anatomy_result != 0) {
+            fprintf(stderr, "DIGS anatomy mismatch (%d)\n", anatomy_result);
+            return 17;
+        }
+    }
+    {
+        int ai_result = test_ai_state_machine();
+        if (ai_result != 0) {
+            fprintf(stderr, "DIGS AI state mismatch (%d)\n", ai_result);
+            return 18;
+        }
+    }
+    {
+        int movement_result = test_movement_acceleration_and_step_assist();
+        if (movement_result != 0) {
+            fprintf(stderr, "DIGS movement mismatch (%d)\n",
+                    movement_result);
+            return 19;
+        }
+    }
     if (test_player_physics() != 0) {
         fprintf(stderr, "DIGS player physics mismatch\n");
         return 5;
@@ -689,9 +1219,13 @@ int main(void)
         fprintf(stderr, "DIGS weapon/pool mismatch\n");
         return 9;
     }
-    if (test_bot_authority() != 0) {
-        fprintf(stderr, "DIGS bot authority mismatch\n");
-        return 10;
+    {
+        int bot_result = test_bot_authority();
+        if (bot_result != 0) {
+            fprintf(stderr, "DIGS bot authority mismatch (%d)\n",
+                    bot_result);
+            return 10;
+        }
     }
     {
         int lava_result = test_rising_lava();
