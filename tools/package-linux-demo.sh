@@ -16,6 +16,8 @@ CHECKSUMS="$DIST_DIR/SHA256SUMS"
 ALLOW_DIRTY=${VOX_PACKAGE_ALLOW_DIRTY:-0}
 NASM_ACCEL=${VOX_PACKAGE_NASM:-AUTO}
 BENCHMARK_FRAMES=${VOX_PACKAGE_BENCHMARK_FRAMES:-120}
+CONTROLLER_DB="$ROOT/third_party/SDL_GameControllerDB/gamecontrollerdb.txt"
+CONTROLLER_DB_SHA256=dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0
 WORK_DIR=
 
 die()
@@ -112,6 +114,14 @@ need_command find
 need_command touch
 need_command python3
 need_command tee
+need_command awk
+need_command cmp
+
+[[ -r "$CONTROLLER_DB" ]] || \
+    die 'the pinned SDL GameControllerDB data file is missing'
+CONTROLLER_DB_ACTUAL_SHA256=$(sha256sum "$CONTROLLER_DB" | awk '{print $1}')
+[[ "$CONTROLLER_DB_ACTUAL_SHA256" == "$CONTROLLER_DB_SHA256" ]] || \
+    die "SDL GameControllerDB checksum mismatch: $CONTROLLER_DB_ACTUAL_SHA256"
 
 [[ $(uname -s) == Linux ]] || die 'this packager targets Linux only'
 case "$(uname -m)" in
@@ -194,6 +204,16 @@ capture_evidence vox-headless "$EVIDENCE_DIR" "$BUILD_DIR/vox_headless"
 capture_evidence digs-headless "$EVIDENCE_DIR" "$BUILD_DIR/digs_headless"
 [[ -f "$BUILD_DIR/share/digs/scripts/manifest.txt" ]] || \
     die 'the build did not stage the DIGS Lua manifest'
+[[ -f "$BUILD_DIR/share/digs/controllers/gamecontrollerdb.txt" ]] || \
+    die 'the build did not stage the SDL GameControllerDB data'
+[[ -f "$BUILD_DIR/share/digs/icons/digs-miner.xpm" ]] || \
+    die 'the build did not stage the canonical DIGS miner icon'
+(cd "$BUILD_DIR/share/digs/icons" && sha256sum -c SHA256SUMS) || \
+    die 'the staged canonical DIGS miner icon checksum failed'
+BUILD_CONTROLLER_DB_SHA256=$(sha256sum \
+    "$BUILD_DIR/share/digs/controllers/gamecontrollerdb.txt" | awk '{print $1}')
+[[ "$BUILD_CONTROLLER_DB_SHA256" == "$CONTROLLER_DB_SHA256" ]] || \
+    die 'the staged SDL GameControllerDB data does not match the reviewed pin'
 capture_evidence digs-script-validate "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_script" --validate \
         "$BUILD_DIR/share/digs/scripts/manifest.txt"
@@ -203,6 +223,14 @@ capture_evidence digs-script-hash "$EVIDENCE_DIR" \
 capture_evidence digs-script-headless "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_script" --headless \
         "$BUILD_DIR/share/digs/scripts/manifest.txt"
+capture_evidence digs-input-self-test "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --input-self-test
+capture_evidence digs-miner-icon "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --render-miner-icon-xpm \
+        digs-miner-generated.xpm
+cmp "$EVIDENCE_DIR/digs-miner-generated.xpm" \
+    "$BUILD_DIR/share/digs/icons/digs-miner.xpm" || \
+    die 'the generated miner icon differs from the reviewed canonical asset'
 capture_evidence digs-demo-smoke "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --smoke-test digs-demo-smoke.ppm
 [[ -s "$EVIDENCE_DIR/digs-demo-smoke.ppm" ]] || \
@@ -225,6 +253,10 @@ copy_tree "$BUILD_DIR/share" "$STAGE_DIR/share"
 ln -s ../share "$STAGE_DIR/bin/share"
 [[ -r "$STAGE_DIR/bin/share/digs/scripts/manifest.txt" ]] || \
     die 'the executable-relative DIGS Lua manifest path is broken'
+[[ -r "$STAGE_DIR/bin/share/digs/controllers/gamecontrollerdb.txt" ]] || \
+    die 'the executable-relative controller database path is broken'
+[[ -r "$STAGE_DIR/bin/share/digs/icons/digs-miner.xpm" ]] || \
+    die 'the executable-relative canonical miner icon path is broken'
 install -m 0755 -- "$ROOT/packaging/linux/run-digs.sh" \
     "$STAGE_DIR/run-digs.sh"
 install -m 0755 -- "$ROOT/packaging/linux/smoke-test.sh" \
@@ -247,6 +279,8 @@ copy_file "$ROOT/SECURITY.md" "$STAGE_DIR/SECURITY.md"
 copy_file "$ROOT/ROADMAP.txt" "$STAGE_DIR/ROADMAP.txt"
 copy_tree "$ROOT/LICENSES" "$STAGE_DIR/LICENSES"
 copy_tree "$ROOT/docs" "$STAGE_DIR/docs"
+[[ -r "$STAGE_DIR/LICENSES/SDL_GameControllerDB.txt" ]] || \
+    die 'the controller database license notice was not packaged'
 
 if [[ -d "$ROOT/qa" ]]; then
     copy_tree "$ROOT/qa" "$STAGE_DIR/qa"
@@ -292,6 +326,10 @@ fi
     printf 'C compiler: %s\n' "${CC:-CMake default}"
     printf 'C++ compiler: %s\n' "${CXX:-CMake default}"
     printf 'NASM acceleration: %s\n' "$NASM_ACCEL"
+    printf 'SDL GameControllerDB commit: %s\n' \
+        '8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5'
+    printf 'SDL GameControllerDB SHA-256: %s\n' \
+        "$CONTROLLER_DB_SHA256"
     if command -v nasm >/dev/null 2>&1; then
         printf 'NASM: %s\n' "$(nasm -v)"
     fi

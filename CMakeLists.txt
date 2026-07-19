@@ -166,6 +166,21 @@ if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vox_software PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
+add_library(digs_miner_art STATIC
+    ports/software/digs_miner_art.c
+)
+target_link_libraries(digs_miner_art PUBLIC vox_software)
+target_include_directories(digs_miner_art PUBLIC
+    engine/include
+    ports/software
+)
+set_property(TARGET digs_miner_art PROPERTY C_STANDARD 90)
+set_property(TARGET digs_miner_art PROPERTY C_STANDARD_REQUIRED ON)
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(digs_miner_art PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+endif()
+
 add_executable(vox_headless tools/vox_headless.c)
 target_link_libraries(vox_headless PRIVATE vox_kernel)
 target_include_directories(vox_headless PRIVATE engine/include)
@@ -193,6 +208,13 @@ endif()
 
 file(COPY games/digs/scripts DESTINATION "${CMAKE_BINARY_DIR}/share/digs")
 file(COPY games/digs/catalog DESTINATION "${CMAKE_BINARY_DIR}/share/digs")
+file(COPY games/digs/icons DESTINATION "${CMAKE_BINARY_DIR}/share/digs")
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/share/digs/controllers")
+configure_file(
+    "${CMAKE_SOURCE_DIR}/third_party/SDL_GameControllerDB/gamecontrollerdb.txt"
+    "${CMAKE_BINARY_DIR}/share/digs/controllers/gamecontrollerdb.txt"
+    COPYONLY
+)
 
 add_executable(vox_render_demo tools/vox_render_demo.c)
 target_link_libraries(vox_render_demo PRIVATE digs_game vox_software)
@@ -208,7 +230,7 @@ if (VOX_BUILD_SDL2_DEMO)
         ports/sdl2/digs_sdl2.c
         ports/sdl2/vox_sdl_ui.c
     )
-    target_link_libraries(digs_demo PRIVATE digs_game vox_software vox_audio vox_script SDL2::SDL2)
+    target_link_libraries(digs_demo PRIVATE digs_game digs_miner_art vox_audio vox_script SDL2::SDL2)
     target_include_directories(digs_demo PRIVATE engine/include ports/sdl2)
     target_compile_definitions(digs_demo PRIVATE SDL_MAIN_HANDLED)
     set_property(TARGET digs_demo PROPERTY C_STANDARD 90)
@@ -285,6 +307,22 @@ if (VOX_BUILD_TESTS)
     target_link_libraries(vox_software_test PRIVATE vox_software)
     target_include_directories(vox_software_test PRIVATE engine/include)
     add_test(NAME vox_software_determinism COMMAND vox_software_test)
+    add_executable(digs_miner_art_test
+        tests/headless/digs_miner_art_test.c)
+    target_link_libraries(digs_miner_art_test PRIVATE digs_miner_art)
+    target_include_directories(digs_miner_art_test PRIVATE
+        engine/include
+        ports/software
+    )
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(digs_miner_art_test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME digs_miner_icon_determinism COMMAND digs_miner_art_test)
+    if (TARGET digs_demo)
+        add_test(NAME digs_input_normalization
+            COMMAND digs_demo --input-self-test)
+    endif()
     add_test(NAME vox_headless_scenario COMMAND vox_headless)
     add_test(NAME digs_headless_scenario COMMAND digs_headless)
 endif()

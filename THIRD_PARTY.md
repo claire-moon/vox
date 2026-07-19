@@ -10,6 +10,7 @@ traceable provenance, and an explicit distribution decision before merge.
 | Component | Use | License | Supported/tested version | Source | Intake and modifications |
 |---|---|---|---|---|---|
 | SDL2 | Optional desktop window, RGB texture presentation, input, timing, and queued audio | [zlib](https://github.com/libsdl-org/SDL/blob/SDL2/LICENSE.txt) | Floor: 2.0.10; tested: 2.30.0 | [upstream SDL2 branch](https://github.com/libsdl-org/SDL/tree/SDL2) | Found through CMake and linked from the host system; not vendored or modified |
+| SDL GameControllerDB | Normalize known gamepads before SDL2 controller enumeration | [zlib](https://github.com/mdqinc/SDL_GameControllerDB/blob/8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5/LICENSE) | Commit `8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5`; database SHA-256 `dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0` | [pinned upstream tree](https://github.com/mdqinc/SDL_GameControllerDB/tree/8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5) | The reviewed database is vendored under `third_party/SDL_GameControllerDB` and distributed at `share/digs/controllers/gamecontrollerdb.txt`; mapping data is unmodified and its license/provenance are preserved |
 | Lua | Deterministic high-level DIGS data and bounded catalog runtime | [MIT](https://www.lua.org/license.html) | 5.1.5; archive SHA-256 `2640fc56a795f29d28ef15e13c34a47e223960b0240e8cb0a82d9b0738695333` | [official Lua 5.1.5 archive](https://www.lua.org/ftp/lua-5.1.5.tar.gz) | Complete upstream source is vendored under `third_party/lua-5.1.5`; the build omits the standalone interpreters and nondeterministic `io`, `os`, `package`, and `debug` libraries; no upstream source is locally patched |
 
 The Free Software Foundation lists the
@@ -18,6 +19,16 @@ This repository does not distribute an SDL2 source tree or binary. A
 downstream binary bundle that includes SDL2 must retain SDL's own copyright and
 license notice and satisfy all applicable GPL Corresponding Source obligations
 for VOX + DIGS.
+
+The controller database is data, not an SDL2 binary. DIGS loads the packaged
+copy before enumerating devices, so known pads use consistent logical names and
+bindings without changing the authoritative simulation. The pinned snapshot
+contains Logitech F310 mappings for Windows, macOS, Linux, and Android. Unknown
+or DirectInput-mode devices still require the frontend's raw-joystick fallback
+and must be physically accepted rather than inferred from this database alone.
+The complete intake record is
+`third_party/SDL_GameControllerDB/VOX-PROVENANCE.txt`; its license notice is
+also reproduced in `LICENSES/SDL_GameControllerDB.txt`.
 
 SDL_ttf, SDL_mixer, SDL_image, SDL3, SDL_shadercross, and proprietary GPU SDKs
 are not used by the `v0.0.2` build. The UI font, menu graphics, miner forms,

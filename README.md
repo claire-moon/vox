@@ -25,7 +25,10 @@ remain under `docs/releasing/` and are not retroactively changed by this work.
 - Four match slots with one or two independent local humans and zero to two
   deterministic bots. Free-for-All and Miners vs Machines expose team and
   friendly-fire rules without giving bots hidden physics advantages.
-- Coal Ridge, Deepworks, and Furnace Yard maps generated from a visible seed.
+- Three topology-specific maps generated from a visible seed: Coal Ridge's
+  rolling seams and drifts, Deepworks' connected chambers and shafts, and
+  Furnace Yard's industrial terraces and contained hot pockets. Suspended
+  rope fixtures no longer place support legs across the ground route.
 - Ten steampunk tools and weapons: Pick, Blast Charge, Smoke Pot, Cinder Flask,
   Pressure Hose, Sledge, Nail Gun, Boiler Shotgun, Concussion Grenade, and Nail
   Bomb.
@@ -36,10 +39,11 @@ remain under `docs/releasing/` and are not retroactively changed by this work.
   attack-cancelled spawn shields, deterministic event variants, and selectable
   `768`/`1536`/`3072` simulated FX-voxel budgets. The selected budget is an
   explicit deterministic match profile, not a presentation-only switch.
-- SDL GameController hotplug and deterministic claims for up to two pads,
-  runtime keyboard/controller rebinding, shared dynamic camera framing,
-  hardware-pointer-correct mouse aim, rumble, local-only flashes, and damage
-  number/accessibility controls.
+- Exclusive per-player AUTO/keyboard/controller ownership, persisted input
+  tuning, circular deadzones, player-relative tool-range aim, raw joystick
+  fallback, SDL GameController hotplug and deterministic claims for two pads,
+  runtime rebinding, shared dynamic camera framing, hardware-pointer-correct
+  mouse aim, rumble, local-only flashes, and damage-number controls.
 - A sandboxed Lua 5.1 catalog containing 79 materials, weapons, entities,
   reactions, anatomy parts, modes, AI states, and system entries. The in-game
   Miner's Index displays six entries at a time; F5 uses transactional reload.
@@ -111,8 +115,10 @@ ctest --test-dir build-demo --output-on-failure
 On Linux System V x86-64, append `-DVOX_BUILD_NASM_ACCEL=ON` to the CMake
 configure command to build and test the optional assembly contract probe.
 
-The host links to the system SDL2 library. No SDL source or binary is vendored
-in this repository; see [THIRD_PARTY.md](THIRD_PARTY.md).
+The host links to the system SDL2 library. No SDL source or binary is vendored.
+A pinned zlib-licensed SDL GameControllerDB data snapshot is bundled so known
+pads are normalized before enumeration; unknown pads use the raw-joystick
+fallback. See [THIRD_PARTY.md](THIRD_PARTY.md).
 
 ## Run the Linux tester bundle
 
@@ -131,7 +137,9 @@ cd vox-digs-v0.0.2-linux-x86_64
 
 `smoke-test.sh`, `benchmark.sh`, the `digs_script` validator, and both headless
 proof binaries are included beside the game. The packaged runtime data lives
-under `share/digs/`; keep that directory with the executable. The matching GPL
+under `share/digs/`, including the Lua catalog and
+`controllers/gamecontrollerdb.txt`; keep that directory with the executable.
+The matching GPL
 Corresponding Source archive and
 `SHA256SUMS` ship next to the binary archive. Both archives contain an SPDX
 2.3 JSON SBOM. The binary bundle also preserves the package-time CTest, Rust,
@@ -173,7 +181,14 @@ prints simulation and framebuffer hashes:
 
 ```sh
 ./build-demo/digs_demo --smoke-test /tmp/digs-demo-smoke.ppm
+./build-demo/digs_demo --input-self-test
+./build-demo/digs_demo --render-miner-icon-xpm /tmp/digs-miner.xpm
 ```
+
+The input self-test exercises controller radial normalization, precision, and
+weapon-aware reach without opening a window. The icon command emits the exact
+transparent, nearest-neighbor miner used by the runtime renderer; release
+packaging compares it byte-for-byte with the reviewed canonical XPM.
 
 The renderer benchmark measures each Lightfield tier on the same deterministic
 scene. The optional argument is the number of frames per tier:
@@ -200,16 +215,19 @@ exercise the identical scalar fallback explicitly.
 - Player 2 keyboard: left/right run, up jumps, right `Shift` uses steam, `/`
   holds the rope, right `Ctrl` fires, `I`/`J`/`K`/`L` aims, and `,`/`.` cycles
   tools.
-- Xbox-style controller: left stick moves/reels, right stick aims, A jumps, X
-  uses steam, left bumper holds the rope, right bumper or right trigger fires,
-  Y/B cycles tools during play, and Start pauses.
+- Normalized controller: left stick moves/reels; right stick uses radial,
+  player-relative aim; A jumps; X uses steam; left bumper holds the rope; right
+  bumper or right trigger fires; Y/B cycles tools; and Start pauses.
 - Match/global: the mouse wheel biases camera zoom, Shift+wheel cycles P1's
   arsenal, `Esc` pauses, `R` restarts, `F1` toggles diagnostics, `F5` reloads
   validated Lua data transactionally, and `F11` toggles fullscreen.
 
 The Controls screen supports run-local action rebinding and conflict swaps.
-See [CG-README.TXT](CG-README.TXT) for controller assignment, rope behavior,
-script validation, the arsenal, and the complete v0.0.2 acceptance procedure.
+Options > Input & Controller selects exclusive AUTO, keyboard, or controller
+ownership per player and persists sensitivity, deadzone, and subtle aim
+slowdown presets. See [CG-README.TXT](CG-README.TXT) for F310 X/D-mode testing,
+controller assignment, rope behavior, script validation, the arsenal, and the
+complete v0.0.2 acceptance procedure.
 [docs/DEMO.md](docs/DEMO.md) remains the historical v0.0.1 demo guide.
 
 ## Architecture and portability policy

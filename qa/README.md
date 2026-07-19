@@ -54,6 +54,35 @@ GitHub issue or release-feedback thread. For a single problem, also copy its
 Issues row into the repository's **Demo feedback** issue form so maintainers can
 triage it directly.
 
+## Controller and input acceptance
+
+Record the exact controller name, SDL version, connection mode, selected P1/P2
+input modes, sensitivity, deadzone, and aim-slow setting. For the Logitech F310,
+run the pass once with its rear switch in `X` mode and once in `D` mode; unplug
+the pad before changing the switch. The pinned mapping database should cover
+known SDL controller GUIDs, while an unmapped D-mode device exercises DIGS's raw
+joystick fallback.
+
+Test `AUTO`, `KEYBOARD`, and `CONTROLLER` separately. AUTO must switch only
+after deliberate activity, an idle or noisy stick must not steal ownership, and
+changing source must not carry a held fire, jump, or rope edge into the next
+simulation tick. Locked modes must ignore the other gameplay source. Menus stay
+available from either source so a player cannot lock themselves out.
+
+For aim, check a centered stick, slow circles just beyond the deadzone, full
+diagonals, movement while the stick is centered, and transitions across an
+enemy. Expect a player-relative radial reticle with no jump at the deadzone,
+exactly one crosshair per local player, tool-aware reach, and gentle slowdown
+without snapping or changing the fired direction. Use `CALIBRATE PADS` with the
+sticks untouched, then repeat these checks at Small, Normal, Large, and Auto
+deadzone settings.
+
+With two local players, test no pads, one pad, and two pads. One pad defaults to
+P2 while P1 remains keyboard/mouse; two pads are exclusive to their claimed
+slots. In a locked controller mode, unplugging the pad must pause safely. In
+AUTO, it must fall back without generating an action. Reconnect and confirm the
+same slot is usable again.
+
 ## Result and severity rules
 
 - **Pass**: observed behavior matches the checkpoint on the recorded build.

@@ -52,6 +52,316 @@ static int set_test_column(vox_world *world, vox_u32 x, vox_u32 y,
     return 1;
 }
 
+static vox_u16 test_map_material_at(const vox_world *world, vox_u32 x,
+                                    vox_u32 y)
+{
+    const vox_cell *cell = vox_world_cell(world, x, y, 0U);
+    return cell == 0 ? VOX_MAT_COUNT : cell->material;
+}
+
+static int test_map_cell_is_solid(const vox_world *world, vox_u32 x,
+                                  vox_u32 y)
+{
+    vox_u16 material = test_map_material_at(world, x, y);
+    const vox_material_properties *properties = vox_material_get(material);
+    return properties != 0 &&
+           (properties->flags & VOX_MATERIAL_SOLID) != 0U;
+}
+
+static vox_u32 test_map_walk_surface(const vox_world *world, vox_u32 x)
+{
+    vox_u32 y;
+    for (y = VOX_WORLD_HEIGHT / 2U - 8U;
+         y + 2U < VOX_WORLD_HEIGHT; ++y) {
+        if (test_map_cell_is_solid(world, x, y)) {
+            return y;
+        }
+    }
+    return VOX_WORLD_HEIGHT;
+}
+
+static vox_u32 test_map_nearby_surface(const vox_world *world, vox_u32 x)
+{
+    vox_u32 radius;
+    for (radius = 0U; radius <= 8U; ++radius) {
+        vox_u32 surface;
+        if (x >= radius) {
+            surface = test_map_walk_surface(world, x - radius);
+            if (surface <= VOX_WORLD_HEIGHT / 2U + 16U) {
+                return surface;
+            }
+        }
+        if (radius != 0U && x + radius < VOX_WORLD_WIDTH) {
+            surface = test_map_walk_surface(world, x + radius);
+            if (surface <= VOX_WORLD_HEIGHT / 2U + 16U) {
+                return surface;
+            }
+        }
+    }
+    return VOX_WORLD_HEIGHT;
+}
+
+static vox_u32 test_map_count_material(const vox_world *world,
+                                       vox_u16 material,
+                                       vox_u32 minimum_y)
+{
+    vox_u32 count = 0U;
+    vox_u32 x;
+    vox_u32 y;
+    for (y = minimum_y; y < VOX_WORLD_HEIGHT; ++y) {
+        for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+            if (test_map_material_at(world, x, y) == material) {
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
+static int test_map_walk_lane(const vox_world *world)
+{
+    vox_u32 x;
+    vox_u32 previous_surface = VOX_WORLD_HEIGHT;
+    vox_u32 gap = 0U;
+    for (x = 2U; x + 2U < VOX_WORLD_WIDTH; ++x) {
+        vox_u32 surface = test_map_walk_surface(world, x);
+        vox_u32 y;
+        if (surface > VOX_WORLD_HEIGHT / 2U + 16U) {
+            gap++;
+            if (gap > 5U) {
+                return 0;
+            }
+            continue;
+        }
+        if (gap == 0U && previous_surface != VOX_WORLD_HEIGHT &&
+            (surface > previous_surface + 2U ||
+             previous_surface > surface + 2U)) {
+            return 0;
+        }
+        gap = 0U;
+        previous_surface = surface;
+        if (surface < 8U) {
+            return 0;
+        }
+        for (y = surface - 8U; y < surface; ++y) {
+            if (test_map_cell_is_solid(world, x, y)) {
+                return 0;
+            }
+        }
+    }
+    return gap <= 5U;
+}
+
+static int test_map_has_anchor_near(const vox_world *world, vox_u32 player_x)
+{
+    vox_u32 surface = test_map_nearby_surface(world, player_x);
+    vox_u32 min_x = player_x > 30U ? player_x - 30U : 0U;
+    vox_u32 max_x = player_x + 30U < VOX_WORLD_WIDTH ?
+                    player_x + 30U : VOX_WORLD_WIDTH - 1U;
+    vox_u32 player_y;
+    vox_u32 x;
+    vox_u32 y;
+    if (surface == VOX_WORLD_HEIGHT || surface < 3U) {
+        return 0;
+    }
+    player_y = surface - 3U;
+    for (x = min_x; x <= max_x; ++x) {
+        vox_u32 delta_x = x > player_x ? x - player_x : player_x - x;
+        for (y = 1U; y + 10U < surface; ++y) {
+            vox_u16 material = test_map_material_at(world, x, y);
+            vox_u32 delta_y = player_y > y ? player_y - y : y - player_y;
+            vox_u32 largest = delta_x > delta_y ? delta_x : delta_y;
+            vox_u32 smallest = delta_x > delta_y ? delta_y : delta_x;
+            if (material == VOX_MAT_METAL &&
+                largest + smallest / 2U <= 30U) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int test_map_suspended_fixtures(const vox_world *world)
+{
+    static const vox_u32 spawn_x[4] = {51U, 102U, 153U, 204U};
+    vox_u32 overhead_metal = 0U;
+    vox_u32 x;
+    vox_u32 player;
+    for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+        vox_u32 surface = test_map_nearby_surface(world, x);
+        vox_u32 vertical_run = 0U;
+        vox_u32 y;
+        if (surface == VOX_WORLD_HEIGHT || surface < 13U) {
+            return 0;
+        }
+        for (y = 1U; y + 10U < surface; ++y) {
+            if (test_map_material_at(world, x, y) == VOX_MAT_METAL) {
+                vertical_run++;
+                overhead_metal++;
+                if (vertical_run > 10U) {
+                    return 0;
+                }
+            } else {
+                vertical_run = 0U;
+            }
+        }
+        for (y = surface - 10U; y < surface; ++y) {
+            if (test_map_cell_is_solid(world, x, y)) {
+                return 0;
+            }
+        }
+    }
+    if (overhead_metal < 80U) {
+        return 0;
+    }
+    for (player = 0U; player < 4U; ++player) {
+        if (!test_map_has_anchor_near(world, spawn_x[player])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int test_map_deepworks_connected(const vox_world *world)
+{
+    static unsigned char visited[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
+    static vox_u16 queue_x[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
+    static vox_u16 queue_y[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
+    vox_u32 minimum_y = VOX_WORLD_HEIGHT / 2U + 8U;
+    vox_u32 head = 0U;
+    vox_u32 tail = 0U;
+    vox_u32 index;
+    vox_u32 x;
+    vox_u32 y;
+    int reached_right = 0;
+    int reached_shaft = 0;
+    for (index = 0U; index < VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT; ++index) {
+        visited[index] = 0U;
+    }
+    for (x = 7U; x < 16U && tail == 0U; ++x) {
+        for (y = minimum_y; y + 4U < VOX_WORLD_HEIGHT; ++y) {
+            vox_u16 material = test_map_material_at(world, x, y);
+            if (material == VOX_MAT_AIR || material == VOX_MAT_FIREDAMP) {
+                queue_x[tail] = (vox_u16)x;
+                queue_y[tail] = (vox_u16)y;
+                visited[y * VOX_WORLD_WIDTH + x] = 1U;
+                tail++;
+                break;
+            }
+        }
+    }
+    while (head < tail) {
+        vox_u32 current_x = queue_x[head];
+        vox_u32 current_y = queue_y[head];
+        vox_i32 direction;
+        head++;
+        if (current_x >= VOX_WORLD_WIDTH - 8U) {
+            reached_right = 1;
+        }
+        if (current_y == minimum_y) {
+            reached_shaft = 1;
+        }
+        for (direction = 0; direction < 4; ++direction) {
+            vox_i32 next_x = (vox_i32)current_x;
+            vox_i32 next_y = (vox_i32)current_y;
+            vox_u32 next_index;
+            vox_u16 material;
+            if (direction == 0) {
+                next_x--;
+            } else if (direction == 1) {
+                next_x++;
+            } else if (direction == 2) {
+                next_y--;
+            } else {
+                next_y++;
+            }
+            if (next_x < 0 || next_y < (vox_i32)minimum_y ||
+                next_x >= (vox_i32)VOX_WORLD_WIDTH ||
+                next_y + 4L >= (vox_i32)VOX_WORLD_HEIGHT) {
+                continue;
+            }
+            next_index = (vox_u32)next_y * VOX_WORLD_WIDTH +
+                         (vox_u32)next_x;
+            material = test_map_material_at(world, (vox_u32)next_x,
+                                            (vox_u32)next_y);
+            if (visited[next_index] == 0U &&
+                (material == VOX_MAT_AIR ||
+                 material == VOX_MAT_FIREDAMP)) {
+                visited[next_index] = 1U;
+                queue_x[tail] = (vox_u16)next_x;
+                queue_y[tail] = (vox_u16)next_y;
+                tail++;
+            }
+        }
+    }
+    return reached_right && reached_shaft;
+}
+
+static int test_map_topology(void)
+{
+    static vox_world world;
+    static const vox_u32 seeds[3] = {
+        0xC0A1C0DEU, 0x13579BDFU, 0x2468ACE0U
+    };
+    vox_u32 hashes[VOX_DIGS_MAP_COUNT];
+    vox_u16 map_style;
+    vox_u32 seed_index;
+    for (map_style = VOX_DIGS_MAP_COAL_RIDGE;
+         map_style < VOX_DIGS_MAP_COUNT; ++map_style) {
+        for (seed_index = 0U; seed_index < 3U; ++seed_index) {
+            vox_u32 first_hash;
+            if (vox_digs_generate_map(&world, map_style,
+                                      seeds[seed_index]) != VOX_OK ||
+                world.awake_cells != 0U) {
+                return 1;
+            }
+            first_hash = vox_world_hash(&world);
+            if (vox_digs_generate_map(&world, map_style,
+                                      seeds[seed_index]) != VOX_OK ||
+                world.awake_cells != 0U ||
+                vox_world_hash(&world) != first_hash) {
+                return 2;
+            }
+        }
+        if (vox_digs_generate_map(&world, map_style, seeds[0]) != VOX_OK) {
+            return 3;
+        }
+        hashes[map_style] = vox_world_hash(&world);
+        if (!test_map_walk_lane(&world) ||
+            !test_map_suspended_fixtures(&world)) {
+            return 4 + (int)map_style;
+        }
+        if (map_style == VOX_DIGS_MAP_COAL_RIDGE) {
+            if (test_map_count_material(&world, VOX_MAT_COAL, 0U) < 500U ||
+                test_map_count_material(&world, VOX_MAT_SAND, 0U) < 50U ||
+                test_map_count_material(&world, VOX_MAT_FIREDAMP, 0U) != 0U ||
+                test_map_count_material(&world, VOX_MAT_LAVA, 0U) != 0U) {
+                return 10;
+            }
+        } else if (map_style == VOX_DIGS_MAP_DEEPWORKS) {
+            if (test_map_count_material(&world, VOX_MAT_FIREDAMP, 0U) < 40U ||
+                test_map_count_material(&world, VOX_MAT_AIR,
+                                        VOX_WORLD_HEIGHT / 2U + 16U) < 900U ||
+                !test_map_deepworks_connected(&world) ||
+                test_map_count_material(&world, VOX_MAT_LAVA, 0U) != 0U) {
+                return 11;
+            }
+        } else {
+            vox_u32 lava = test_map_count_material(&world, VOX_MAT_LAVA, 0U);
+            if (lava < 30U || lava > 300U ||
+                test_map_count_material(&world, VOX_MAT_METAL, 0U) < 500U ||
+                test_map_count_material(&world, VOX_MAT_FIREDAMP, 0U) != 0U) {
+                return 12;
+            }
+        }
+    }
+    if (hashes[0] == hashes[1] || hashes[0] == hashes[2] ||
+        hashes[1] == hashes[2]) {
+        return 13;
+    }
+    return 0;
+}
+
 static int test_map_generation(void)
 {
     static vox_digs_match first;
@@ -1137,6 +1447,14 @@ int main(void)
     if (test_map_generation() != 0) {
         fprintf(stderr, "DIGS map generation mismatch\n");
         return 4;
+    }
+    {
+        int map_topology_result = test_map_topology();
+        if (map_topology_result != 0) {
+            fprintf(stderr, "DIGS map topology mismatch (%d)\n",
+                    map_topology_result);
+            return 20;
+        }
     }
     if (test_player_layout_and_input_authority() != 0) {
         fprintf(stderr, "DIGS player layout/input authority mismatch\n");

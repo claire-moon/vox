@@ -16,6 +16,17 @@ from typing import Dict, List
 
 PROJECT_LICENSE = "GPL-3.0-or-later"
 SDL_LICENSE = "Zlib"
+CONTROLLER_DB_COMMIT = "8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5"
+CONTROLLER_DB_LICENSE = "Zlib"
+
+
+def is_controller_db_file(relative: str) -> bool:
+    return relative in {
+        "LICENSES/SDL_GameControllerDB.txt",
+        "share/digs/controllers/gamecontrollerdb.txt",
+        "third_party/SDL_GameControllerDB/LICENSE",
+        "third_party/SDL_GameControllerDB/gamecontrollerdb.txt",
+    }
 
 
 def digest(path: Path, algorithm: str) -> str:
@@ -44,6 +55,11 @@ def file_types(relative: str) -> List[str]:
 def make_file(root: Path, path: Path) -> Dict[str, object]:
     relative = path.relative_to(root).as_posix()
     identifier = hashlib.sha1(relative.encode("utf-8")).hexdigest()[:20]
+    file_license = (
+        CONTROLLER_DB_LICENSE
+        if is_controller_db_file(relative)
+        else PROJECT_LICENSE
+    )
     return {
         "fileName": "./" + relative,
         "SPDXID": "SPDXRef-File-" + identifier,
@@ -52,8 +68,8 @@ def make_file(root: Path, path: Path) -> Dict[str, object]:
             {"algorithm": "SHA256", "checksumValue": digest(path, "sha256")},
         ],
         "fileTypes": file_types(relative),
-        "licenseConcluded": PROJECT_LICENSE,
-        "licenseInfoInFiles": [PROJECT_LICENSE],
+        "licenseConcluded": file_license,
+        "licenseInfoInFiles": [file_license],
         "copyrightText": "NOASSERTION",
     }
 
@@ -122,6 +138,12 @@ def main() -> int:
 
     project_id = "SPDXRef-Package-VOX-DIGS"
     sdl_id = "SPDXRef-Package-SDL2-System"
+    controller_db_id = "SPDXRef-Package-SDL-GameControllerDB"
+    controller_db_file_ids = [
+        item["SPDXID"]
+        for item, path in zip(files, paths)
+        if is_controller_db_file(path.relative_to(root).as_posix())
+    ]
     document = {
         "spdxVersion": "SPDX-2.3",
         "dataLicense": "CC0-1.0",
@@ -171,6 +193,25 @@ def main() -> int:
                     f"SDL2 is not included in this {distribution_kind}."
                 ),
             },
+            {
+                "name": "SDL GameControllerDB",
+                "SPDXID": controller_db_id,
+                "versionInfo": CONTROLLER_DB_COMMIT,
+                "downloadLocation": (
+                    "https://github.com/mdqinc/SDL_GameControllerDB/tree/"
+                    + CONTROLLER_DB_COMMIT
+                ),
+                "filesAnalyzed": True,
+                "licenseConcluded": CONTROLLER_DB_LICENSE,
+                "licenseDeclared": CONTROLLER_DB_LICENSE,
+                "copyrightText": "Copyright (C) 1997-2025 Sam Lantinga",
+                "primaryPackagePurpose": "OTHER",
+                "hasFiles": controller_db_file_ids,
+                "comment": (
+                    "Pinned controller mapping data and its zlib license are "
+                    f"included in this {distribution_kind}."
+                ),
+            },
         ],
         "files": files,
         "relationships": [
@@ -185,6 +226,20 @@ def main() -> int:
                 "relatedSpdxElement": sdl_id,
                 "comment": "External system dependency; not bundled.",
             },
+            {
+                "spdxElementId": project_id,
+                "relationshipType": "DEPENDS_ON",
+                "relatedSpdxElement": controller_db_id,
+                "comment": "Pinned controller mapping data; bundled.",
+            },
+        ]
+        + [
+            {
+                "spdxElementId": controller_db_id,
+                "relationshipType": "CONTAINS",
+                "relatedSpdxElement": identifier,
+            }
+            for identifier in controller_db_file_ids
         ]
         + [
             {

@@ -6,6 +6,7 @@
 
 #include <SDL.h>
 
+#include "digs_miner_art.h"
 #include "vox/vox_audio.h"
 #include "vox/vox_game.h"
 #include "vox/vox_render.h"
@@ -26,7 +27,10 @@
 #define DEMO_LOCAL_MAX 2U
 #define DEMO_CONTROLLER_MAX 2U
 #define DEMO_DAMAGE_POPUP_MAX 16U
-#define DEMO_CONTROLLER_DEADZONE 8000
+#define DEMO_INPUT_SWITCH_HYSTERESIS_MS 750U
+#define DEMO_CONTROLLER_ACTIVITY_MARGIN 0.08
+#define DEMO_CONTROLLER_CALIBRATION_MS 750U
+#define DEMO_INPUT_SETTINGS_VERSION 1
 
 #define DEMO_SOUND_MOVE 0
 #define DEMO_SOUND_SELECT 1
@@ -62,8 +66,20 @@ typedef enum demo_screen {
     DEMO_HOW_TO = 7,
     DEMO_INDEX = 8,
     DEMO_CONTROLS = 9,
-    DEMO_SCRIPT_ERROR = 10
+    DEMO_SCRIPT_ERROR = 10,
+    DEMO_INPUT_OPTIONS = 11
 } demo_screen;
+
+typedef enum demo_input_preference {
+    DEMO_INPUT_AUTO = 0,
+    DEMO_INPUT_KEYBOARD = 1,
+    DEMO_INPUT_CONTROLLER = 2
+} demo_input_preference;
+
+typedef enum demo_input_source {
+    DEMO_SOURCE_KEYBOARD = 0,
+    DEMO_SOURCE_CONTROLLER = 1
+} demo_input_source;
 
 typedef struct demo_options {
     int frame_cap_index;
@@ -81,9 +97,33 @@ typedef struct demo_options {
 
 typedef struct demo_controller {
     SDL_GameController *handle;
+    SDL_Joystick *joystick;
     SDL_JoystickID instance_id;
     int claimed_player;
+    int raw_fallback;
+    int axis_center[4];
+    long calibration_total[4];
+    int calibration_samples;
+    int calibration_peak;
+    int calibrating;
+    vox_u32 calibration_stamp;
+    double auto_deadzone;
+    int activity_frames;
 } demo_controller;
+
+typedef struct demo_player_input {
+    int preference;
+    int active_source;
+    int sensitivity;
+    int deadzone;
+    int aim_slowdown;
+    vox_u32 switch_stamp;
+    int suppress_ticks;
+    double aim_direction_x;
+    double aim_direction_y;
+    double aim_distance;
+    double aim_magnitude;
+} demo_player_input;
 
 typedef struct demo_damage_popup {
     vox_i32 world_x_q16;
@@ -128,6 +168,9 @@ typedef struct demo_app {
     int mouse_x;
     int mouse_y;
     int mouse_inside;
+    int mouse_activity_x;
+    int mouse_activity_y;
+    int cursor_visible;
     int camera_zoom;
     double camera_world_x;
     double camera_world_y;
@@ -166,6 +209,7 @@ typedef struct demo_app {
     vox_audio_engine audio;
     vox_u32 audio_event_id;
     demo_controller controllers[DEMO_CONTROLLER_MAX];
+    demo_player_input player_input[DEMO_LOCAL_MAX];
     demo_bindings bindings;
     demo_damage_popup damage_popups[DEMO_DAMAGE_POPUP_MAX];
     vox_u16 bot_health_ttl[VOX_DIGS_MAX_SLOTS];
@@ -193,6 +237,11 @@ static const char *demo_flash_names[3] = {"OFF", "REDUCED", "FULL"};
 static const char *demo_gore_names[3] = {"OFF", "REDUCED", "FULL"};
 static const char *demo_fx_names[3] = {"RETRO 768", "STANDARD 1536", "CARNAGE 3072"};
 static const char *demo_number_color_names[2] = {"CLASSIC", "HIGH CONTRAST"};
+static const char *demo_sensitivity_names[3] = {"LOW", "NORMAL", "HIGH"};
+static const char *demo_deadzone_names[4] = {
+    "AUTO", "SMALL", "NORMAL", "LARGE"
+};
+static const char *demo_slowdown_names[3] = {"OFF", "LOW", "MEDIUM"};
 static const char *demo_arsenal_names[DEMO_ARSENAL_COUNT] = {
     "FULL WORKS", "MINER KIT", "POWDER KEG"
 };
@@ -202,6 +251,8 @@ static const vox_u16 demo_arsenal_masks[DEMO_ARSENAL_COUNT] = {
 
 static demo_controller *demo_controller_for_player(demo_app *app,
                                                    int player);
+static void demo_refresh_controller_claims(demo_app *app);
+static int demo_save_input_settings(demo_app *app);
 
 static void demo_audio_emit(demo_app *app, vox_u16 preset,
                             vox_u16 variant, vox_i16 pan_q15)
@@ -439,68 +490,280 @@ static void demo_bindings_default(demo_app *app)
     app->bindings.pad_next = SDL_CONTROLLER_BUTTON_B;
 }
 
-static void demo_refresh_controller_claims(demo_app *app)
+static int demo_controller_connected(const demo_controller *controller)
 {
-    int connected;
-    int total;
-    int index;
-    total = 0;
-    for (index = 0; index < (int)DEMO_CONTROLLER_MAX; ++index) {
-        if (app->controllers[index].handle != 0) {
-            ++total;
+    return controller != 0 && controller->joystick != 0;
+}
+
+static void demo_input_defaults(demo_app *app)
+{
+    int player;
+    for (player = 0; player < (int)DEMO_LOCAL_MAX; ++player) {
+        app->player_input[player].preference = DEMO_INPUT_AUTO;
+        app->player_input[player].active_source = DEMO_SOURCE_KEYBOARD;
+        app->player_input[player].sensitivity = 1;
+        app->player_input[player].deadzone = 0;
+        app->player_input[player].aim_slowdown = 1;
+        app->player_input[player].switch_stamp = 0U;
+        app->player_input[player].suppress_ticks = 0;
+        app->player_input[player].aim_direction_x = player == 0 ? 1.0 : -1.0;
+        app->player_input[player].aim_direction_y = 0.0;
+        app->player_input[player].aim_distance = 24.0;
+        app->player_input[player].aim_magnitude = 1.0;
+    }
+}
+
+static int demo_input_settings_path(char *path, int capacity,
+                                    const char *suffix)
+{
+    char *base;
+    size_t required;
+    if (path == 0 || capacity <= 0 || suffix == 0) return 0;
+    base = SDL_GetPrefPath("Pinnacle Point Development", "DIGS");
+    if (base == 0) return 0;
+    required = strlen(base) + strlen(suffix) + 1U;
+    if (required > (size_t)capacity) {
+        SDL_free(base);
+        return 0;
+    }
+    sprintf(path, "%s%s", base, suffix);
+    SDL_free(base);
+    return 1;
+}
+
+static void demo_validate_input_settings(demo_app *app)
+{
+    int player;
+    for (player = 0; player < (int)DEMO_LOCAL_MAX; ++player) {
+        demo_player_input *input = &app->player_input[player];
+        if (input->preference < DEMO_INPUT_AUTO ||
+            input->preference > DEMO_INPUT_CONTROLLER) {
+            input->preference = DEMO_INPUT_AUTO;
+        }
+        if (input->sensitivity < 0 || input->sensitivity > 2) {
+            input->sensitivity = 1;
+        }
+        if (input->deadzone < 0 || input->deadzone > 3) {
+            input->deadzone = 0;
+        }
+        if (input->aim_slowdown < 0 || input->aim_slowdown > 2) {
+            input->aim_slowdown = 1;
+        }
+        input->active_source = input->preference == DEMO_INPUT_CONTROLLER ?
+                               DEMO_SOURCE_CONTROLLER : DEMO_SOURCE_KEYBOARD;
+    }
+}
+
+static int demo_load_input_settings(demo_app *app)
+{
+    char path[1024];
+    char line[128];
+    FILE *file;
+    int version = 0;
+    if (!demo_input_settings_path(path, (int)sizeof(path), "settings.cfg")) {
+        return 0;
+    }
+    file = fopen(path, "r");
+    if (file == 0) return 0;
+    while (fgets(line, (int)sizeof(line), file) != 0) {
+        int value;
+        if (sscanf(line, "DIGS_INPUT_SETTINGS=%d", &value) == 1) {
+            version = value;
+        } else if (sscanf(line, "P1_MODE=%d", &value) == 1) {
+            app->player_input[0].preference = value;
+        } else if (sscanf(line, "P1_SENSITIVITY=%d", &value) == 1) {
+            app->player_input[0].sensitivity = value;
+        } else if (sscanf(line, "P1_DEADZONE=%d", &value) == 1) {
+            app->player_input[0].deadzone = value;
+        } else if (sscanf(line, "P1_SLOWDOWN=%d", &value) == 1) {
+            app->player_input[0].aim_slowdown = value;
+        } else if (sscanf(line, "P2_MODE=%d", &value) == 1) {
+            app->player_input[1].preference = value;
+        } else if (sscanf(line, "P2_SENSITIVITY=%d", &value) == 1) {
+            app->player_input[1].sensitivity = value;
+        } else if (sscanf(line, "P2_DEADZONE=%d", &value) == 1) {
+            app->player_input[1].deadzone = value;
+        } else if (sscanf(line, "P2_SLOWDOWN=%d", &value) == 1) {
+            app->player_input[1].aim_slowdown = value;
         }
     }
-    connected = 0;
+    (void)fclose(file);
+    if (version != DEMO_INPUT_SETTINGS_VERSION) {
+        demo_input_defaults(app);
+        return 0;
+    }
+    demo_validate_input_settings(app);
+    return 1;
+}
+
+static int demo_save_input_settings(demo_app *app)
+{
+    char path[1024];
+    char temporary[1032];
+    FILE *file;
+    int player;
+    if (!demo_input_settings_path(path, (int)sizeof(path), "settings.cfg")) {
+        return 0;
+    }
+    if (strlen(path) + 5U >= sizeof(temporary)) return 0;
+    sprintf(temporary, "%s.tmp", path);
+    file = fopen(temporary, "w");
+    if (file == 0) return 0;
+    if (fprintf(file, "DIGS_INPUT_SETTINGS=%d\n",
+                DEMO_INPUT_SETTINGS_VERSION) < 0) {
+        (void)fclose(file);
+        (void)remove(temporary);
+        return 0;
+    }
+    for (player = 0; player < (int)DEMO_LOCAL_MAX; ++player) {
+        const demo_player_input *input = &app->player_input[player];
+        if (fprintf(file,
+                    "P%d_MODE=%d\nP%d_SENSITIVITY=%d\n"
+                    "P%d_DEADZONE=%d\nP%d_SLOWDOWN=%d\n",
+                    player + 1, input->preference,
+                    player + 1, input->sensitivity,
+                    player + 1, input->deadzone,
+                    player + 1, input->aim_slowdown) < 0) {
+            (void)fclose(file);
+            (void)remove(temporary);
+            return 0;
+        }
+    }
+    if (fclose(file) != 0) {
+        (void)remove(temporary);
+        return 0;
+    }
+    if (rename(temporary, path) != 0) {
+        /* ISO C rename replaces atomically on POSIX.  Older Windows CRTs do
+         * not replace an existing file, so retain a conservative fallback. */
+        (void)remove(path);
+        if (rename(temporary, path) != 0) {
+            (void)remove(temporary);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void demo_refresh_controller_claims(demo_app *app)
+{
+    int slots[DEMO_CONTROLLER_MAX];
+    int total = 0;
+    int index;
+    int player;
     for (index = 0; index < (int)DEMO_CONTROLLER_MAX; ++index) {
-        if (app->controllers[index].handle != 0) {
-            if (app->local_players >= 2) {
-                app->controllers[index].claimed_player =
-                    connected >= 2 ? -1 : (total == 1 ? 1 : connected);
-            } else {
-                app->controllers[index].claimed_player =
-                    connected == 0 ? 0 : -1;
+        app->controllers[index].claimed_player = -1;
+        if (demo_controller_connected(&app->controllers[index])) {
+            slots[total++] = index;
+        }
+    }
+    if (total == 0) {
+        for (player = 0; player < (int)DEMO_LOCAL_MAX; ++player) {
+            if (app->player_input[player].preference == DEMO_INPUT_AUTO) {
+                app->player_input[player].active_source =
+                    DEMO_SOURCE_KEYBOARD;
             }
-            ++connected;
-        } else {
-            app->controllers[index].claimed_player = -1;
+        }
+        return;
+    }
+    if (app->local_players < 2) {
+        if (app->player_input[0].preference != DEMO_INPUT_KEYBOARD) {
+            app->controllers[slots[0]].claimed_player = 0;
+        }
+    } else if (total == 1) {
+        int claim = -1;
+        if (app->player_input[0].preference == DEMO_INPUT_CONTROLLER &&
+            app->player_input[1].preference != DEMO_INPUT_CONTROLLER) {
+            claim = 0;
+        } else if (app->player_input[1].preference ==
+                   DEMO_INPUT_CONTROLLER) {
+            claim = 1;
+        } else if (app->player_input[1].preference == DEMO_INPUT_KEYBOARD &&
+                   app->player_input[0].preference != DEMO_INPUT_KEYBOARD) {
+            claim = 0;
+        } else if (app->player_input[1].preference != DEMO_INPUT_KEYBOARD) {
+            claim = 1;
+        }
+        app->controllers[slots[0]].claimed_player = claim;
+    } else {
+        int next_slot = 0;
+        for (player = 0; player < app->local_players &&
+             player < (int)DEMO_LOCAL_MAX; ++player) {
+            if (app->player_input[player].preference != DEMO_INPUT_KEYBOARD &&
+                next_slot < total) {
+                app->controllers[slots[next_slot]].claimed_player = player;
+                ++next_slot;
+            }
+        }
+    }
+    for (player = 0; player < (int)DEMO_LOCAL_MAX; ++player) {
+        int has_controller = 0;
+        for (index = 0; index < total; ++index) {
+            if (app->controllers[slots[index]].claimed_player == player) {
+                has_controller = 1;
+            }
+        }
+        if (!has_controller &&
+            app->player_input[player].preference == DEMO_INPUT_AUTO) {
+            app->player_input[player].active_source = DEMO_SOURCE_KEYBOARD;
         }
     }
 }
 
 static int demo_open_controller(demo_app *app, int device_index)
 {
-    SDL_GameController *controller;
+    SDL_GameController *controller = 0;
     SDL_Joystick *joystick;
     SDL_JoystickID instance;
     int slot;
-    if (!SDL_IsGameController(device_index)) {
-        return 0;
+    int raw_fallback = 0;
+    if (SDL_IsGameController(device_index)) {
+        controller = SDL_GameControllerOpen(device_index);
+        if (controller == 0) return 0;
+        joystick = SDL_GameControllerGetJoystick(controller);
+    } else {
+        joystick = SDL_JoystickOpen(device_index);
+        raw_fallback = 1;
+        if (joystick == 0) return 0;
     }
-    controller = SDL_GameControllerOpen(device_index);
-    if (controller == 0) {
-        return 0;
-    }
-    joystick = SDL_GameControllerGetJoystick(controller);
     instance = SDL_JoystickInstanceID(joystick);
     /* SDL can queue DEVICEADDED while startup enumeration is opening the
      * same pad.  Never let one physical controller occupy both local slots. */
     for (slot = 0; slot < (int)DEMO_CONTROLLER_MAX; ++slot) {
-        if (app->controllers[slot].handle != 0 &&
+        if (demo_controller_connected(&app->controllers[slot]) &&
             app->controllers[slot].instance_id == instance) {
-            SDL_GameControllerClose(controller);
+            if (controller != 0) SDL_GameControllerClose(controller);
+            else SDL_JoystickClose(joystick);
             return 1;
         }
     }
     for (slot = 0; slot < (int)DEMO_CONTROLLER_MAX; ++slot) {
-        if (app->controllers[slot].handle == 0) {
+        if (!demo_controller_connected(&app->controllers[slot])) {
+            int axis;
+            int axis_count = SDL_JoystickNumAxes(joystick);
             app->controllers[slot].handle = controller;
+            app->controllers[slot].joystick = joystick;
             app->controllers[slot].instance_id = instance;
             app->controllers[slot].claimed_player = -1;
+            app->controllers[slot].raw_fallback = raw_fallback;
+            app->controllers[slot].auto_deadzone = 0.20;
+            app->controllers[slot].activity_frames = 0;
+            app->controllers[slot].calibrating = 1;
+            app->controllers[slot].calibration_stamp = SDL_GetTicks();
+            app->controllers[slot].calibration_samples = 0;
+            app->controllers[slot].calibration_peak = 0;
+            for (axis = 0; axis < 4; ++axis) {
+                app->controllers[slot].axis_center[axis] =
+                    raw_fallback && axis < axis_count ?
+                    (int)SDL_JoystickGetAxis(joystick, axis) : 0;
+                app->controllers[slot].calibration_total[axis] = 0L;
+            }
             demo_refresh_controller_claims(app);
             return 1;
         }
     }
-    SDL_GameControllerClose(controller);
+    if (controller != 0) SDL_GameControllerClose(controller);
+    else SDL_JoystickClose(joystick);
     return 0;
 }
 
@@ -508,17 +771,29 @@ static void demo_close_controller(demo_app *app, SDL_JoystickID instance)
 {
     int slot;
     for (slot = 0; slot < (int)DEMO_CONTROLLER_MAX; ++slot) {
-        if (app->controllers[slot].handle != 0 &&
+        if (demo_controller_connected(&app->controllers[slot]) &&
             app->controllers[slot].instance_id == instance) {
             int claimed_player = app->controllers[slot].claimed_player;
-            SDL_GameControllerClose(app->controllers[slot].handle);
+            if (app->controllers[slot].raw_fallback) {
+                SDL_JoystickClose(app->controllers[slot].joystick);
+            } else {
+                SDL_GameControllerClose(app->controllers[slot].handle);
+            }
             app->controllers[slot].handle = 0;
+            app->controllers[slot].joystick = 0;
             app->controllers[slot].instance_id = -1;
             app->controllers[slot].claimed_player = -1;
             if (app->screen == DEMO_PLAY && claimed_player >= 0) {
-                app->screen = DEMO_PAUSE;
-                app->selection = 0;
-                app->controller_disconnected = 1;
+                demo_player_input *input =
+                    &app->player_input[claimed_player];
+                if (input->preference == DEMO_INPUT_CONTROLLER) {
+                    app->screen = DEMO_PAUSE;
+                    app->selection = 0;
+                    app->controller_disconnected = 1;
+                } else {
+                    input->active_source = DEMO_SOURCE_KEYBOARD;
+                    input->suppress_ticks = 1;
+                }
             }
         }
     }
@@ -531,7 +806,7 @@ static demo_controller *demo_controller_by_instance(
 {
     int slot;
     for (slot = 0; slot < (int)DEMO_CONTROLLER_MAX; ++slot) {
-        if (app->controllers[slot].handle != 0 &&
+        if (demo_controller_connected(&app->controllers[slot]) &&
             app->controllers[slot].instance_id == instance) {
             return &app->controllers[slot];
         }
@@ -543,22 +818,257 @@ static void demo_close_controllers(demo_app *app)
 {
     int slot;
     for (slot = 0; slot < (int)DEMO_CONTROLLER_MAX; ++slot) {
-        if (app->controllers[slot].handle != 0) {
-            SDL_GameControllerClose(app->controllers[slot].handle);
+        if (demo_controller_connected(&app->controllers[slot])) {
+            if (app->controllers[slot].raw_fallback) {
+                SDL_JoystickClose(app->controllers[slot].joystick);
+            } else {
+                SDL_GameControllerClose(app->controllers[slot].handle);
+            }
             app->controllers[slot].handle = 0;
+            app->controllers[slot].joystick = 0;
         }
         app->controllers[slot].instance_id = -1;
         app->controllers[slot].claimed_player = -1;
     }
 }
 
-static Sint16 demo_deadzone_axis(Sint16 value)
+static Sint16 demo_controller_axis(const demo_controller *controller,
+                                   SDL_GameControllerAxis axis)
 {
-    if (value > -DEMO_CONTROLLER_DEADZONE &&
-        value < DEMO_CONTROLLER_DEADZONE) {
+    int raw_axis;
+    int value;
+    if (!demo_controller_connected(controller)) return 0;
+    if (!controller->raw_fallback) {
+        return SDL_GameControllerGetAxis(controller->handle, axis);
+    }
+    raw_axis = -1;
+    if (axis == SDL_CONTROLLER_AXIS_LEFTX) raw_axis = 0;
+    else if (axis == SDL_CONTROLLER_AXIS_LEFTY) raw_axis = 1;
+    else if (axis == SDL_CONTROLLER_AXIS_RIGHTX) raw_axis = 2;
+    else if (axis == SDL_CONTROLLER_AXIS_RIGHTY) raw_axis = 3;
+    else if (axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT) raw_axis = 4;
+    else if (axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) raw_axis = 5;
+    if (raw_axis < 0 || raw_axis >= SDL_JoystickNumAxes(controller->joystick)) {
         return 0;
     }
-    return value;
+    value = (int)SDL_JoystickGetAxis(controller->joystick, raw_axis);
+    if (raw_axis < 4) value -= controller->axis_center[raw_axis];
+    if (value < -32767) value = -32767;
+    if (value > 32767) value = 32767;
+    return (Sint16)value;
+}
+
+static int demo_controller_button(const demo_controller *controller,
+                                  SDL_GameControllerButton button)
+{
+    int raw_button = -1;
+    Uint8 hat;
+    if (!demo_controller_connected(controller)) return 0;
+    if (!controller->raw_fallback) {
+        return SDL_GameControllerGetButton(controller->handle, button) != 0;
+    }
+    if (button == SDL_CONTROLLER_BUTTON_A) raw_button = 0;
+    else if (button == SDL_CONTROLLER_BUTTON_B) raw_button = 1;
+    else if (button == SDL_CONTROLLER_BUTTON_X) raw_button = 2;
+    else if (button == SDL_CONTROLLER_BUTTON_Y) raw_button = 3;
+    else if (button == SDL_CONTROLLER_BUTTON_LEFTSHOULDER) raw_button = 4;
+    else if (button == SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) raw_button = 5;
+    else if (button == SDL_CONTROLLER_BUTTON_BACK) raw_button = 6;
+    else if (button == SDL_CONTROLLER_BUTTON_START) raw_button = 7;
+    else if (button == SDL_CONTROLLER_BUTTON_LEFTSTICK) raw_button = 8;
+    else if (button == SDL_CONTROLLER_BUTTON_RIGHTSTICK) raw_button = 9;
+    if (raw_button >= 0 &&
+        raw_button < SDL_JoystickNumButtons(controller->joystick)) {
+        return SDL_JoystickGetButton(controller->joystick, raw_button) != 0;
+    }
+    if (SDL_JoystickNumHats(controller->joystick) <= 0) return 0;
+    hat = SDL_JoystickGetHat(controller->joystick, 0);
+    if (button == SDL_CONTROLLER_BUTTON_DPAD_LEFT) {
+        return (hat & SDL_HAT_LEFT) != 0;
+    }
+    if (button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) {
+        return (hat & SDL_HAT_RIGHT) != 0;
+    }
+    if (button == SDL_CONTROLLER_BUTTON_DPAD_UP) {
+        return (hat & SDL_HAT_UP) != 0;
+    }
+    if (button == SDL_CONTROLLER_BUTTON_DPAD_DOWN) {
+        return (hat & SDL_HAT_DOWN) != 0;
+    }
+    return 0;
+}
+
+static double demo_sqrt(double value)
+{
+    double root;
+    int iteration;
+    if (value <= 0.0) return 0.0;
+    root = value > 1.0 ? value : 1.0;
+    for (iteration = 0; iteration < 8; ++iteration) {
+        root = 0.5 * (root + value / root);
+    }
+    return root;
+}
+
+static double demo_input_deadzone(const demo_player_input *input,
+                                  const demo_controller *controller)
+{
+    if (input->deadzone == 1) return 0.12;
+    if (input->deadzone == 2) return 0.20;
+    if (input->deadzone == 3) return 0.30;
+    if (controller != 0 && controller->auto_deadzone >= 0.12 &&
+        controller->auto_deadzone <= 0.35) {
+        return controller->auto_deadzone;
+    }
+    return 0.20;
+}
+
+static int demo_radial_response(Sint16 raw_x, Sint16 raw_y,
+                                double deadzone, int sensitivity,
+                                double *output_x, double *output_y,
+                                double *output_magnitude)
+{
+    double x = (double)raw_x / 32767.0;
+    double y = (double)raw_y / 32767.0;
+    double magnitude = demo_sqrt(x * x + y * y);
+    double scaled;
+    if (magnitude <= deadzone || magnitude <= 0.0001) {
+        *output_x = 0.0;
+        *output_y = 0.0;
+        *output_magnitude = 0.0;
+        return 0;
+    }
+    if (magnitude > 0.95) magnitude = 0.95;
+    scaled = (magnitude - deadzone) / (0.95 - deadzone);
+    if (scaled < 0.0) scaled = 0.0;
+    if (scaled > 1.0) scaled = 1.0;
+    if (sensitivity <= 0) {
+        scaled = scaled * scaled;
+    } else if (sensitivity == 1) {
+        scaled = scaled * (0.35 + scaled * 0.65);
+    }
+    *output_x = x / demo_sqrt(x * x + y * y);
+    *output_y = y / demo_sqrt(x * x + y * y);
+    *output_magnitude = scaled;
+    return 1;
+}
+
+static void demo_reset_input_edges(demo_app *app, int player)
+{
+    int slot;
+    if (player < 0 || player >= (int)DEMO_LOCAL_MAX) return;
+    app->keyboard_previous_down[player] = 0;
+    app->keyboard_next_down[player] = 0;
+    app->player_input[player].suppress_ticks = 1;
+    for (slot = 0; slot < (int)DEMO_CONTROLLER_MAX; ++slot) {
+        if (app->controllers[slot].claimed_player == player) {
+            app->controllers[slot].activity_frames = 0;
+        }
+    }
+}
+
+static int demo_activate_source(demo_app *app, int player, int source,
+                                int deliberate)
+{
+    demo_player_input *input;
+    vox_u32 now;
+    if (player < 0 || player >= app->local_players ||
+        player >= (int)DEMO_LOCAL_MAX) return 0;
+    input = &app->player_input[player];
+    if (input->preference == DEMO_INPUT_KEYBOARD &&
+        source != DEMO_SOURCE_KEYBOARD) return 0;
+    if (input->preference == DEMO_INPUT_CONTROLLER &&
+        source != DEMO_SOURCE_CONTROLLER) return 0;
+    if (input->active_source == source) return 0;
+    if (input->preference != DEMO_INPUT_AUTO) return 0;
+    now = SDL_GetTicks();
+    if (!deliberate && now - input->switch_stamp <
+                       DEMO_INPUT_SWITCH_HYSTERESIS_MS) return 0;
+    input->active_source = source;
+    input->switch_stamp = now;
+    demo_reset_input_edges(app, player);
+    return 1;
+}
+
+static void demo_begin_controller_calibration(demo_app *app)
+{
+    int slot;
+    int axis;
+    for (slot = 0; slot < (int)DEMO_CONTROLLER_MAX; ++slot) {
+        demo_controller *controller = &app->controllers[slot];
+        if (!demo_controller_connected(controller)) continue;
+        controller->calibrating = 1;
+        controller->calibration_stamp = SDL_GetTicks();
+        controller->calibration_samples = 0;
+        controller->calibration_peak = 0;
+        for (axis = 0; axis < 4; ++axis) {
+            controller->calibration_total[axis] = 0L;
+        }
+    }
+}
+
+static void demo_update_controller_calibration(demo_controller *controller)
+{
+    int axis;
+    if (!demo_controller_connected(controller) || !controller->calibrating) {
+        return;
+    }
+    for (axis = 0; axis < 4; ++axis) {
+        int raw;
+        int difference;
+        if (axis >= SDL_JoystickNumAxes(controller->joystick)) continue;
+        raw = (int)SDL_JoystickGetAxis(controller->joystick, axis);
+        difference = raw - controller->axis_center[axis];
+        if (difference < 0) difference = -difference;
+        controller->calibration_total[axis] += raw;
+        if (difference > controller->calibration_peak) {
+            controller->calibration_peak = difference;
+        }
+    }
+    ++controller->calibration_samples;
+    if (SDL_GetTicks() - controller->calibration_stamp >=
+        DEMO_CONTROLLER_CALIBRATION_MS) {
+        double measured;
+        if (controller->raw_fallback && controller->calibration_samples > 0) {
+            for (axis = 0; axis < 4; ++axis) {
+                controller->axis_center[axis] = (int)(
+                    controller->calibration_total[axis] /
+                    (long)controller->calibration_samples);
+            }
+        }
+        measured = (double)controller->calibration_peak / 32767.0 + 0.06;
+        if (measured < 0.18) measured = 0.18;
+        if (measured > 0.35) measured = 0.35;
+        controller->auto_deadzone = measured;
+        controller->calibrating = 0;
+    }
+}
+
+static void demo_load_controller_mappings(void)
+{
+    const char *environment = getenv("DIGS_GAMECONTROLLERDB");
+    const char *relative = "share/digs/controllers/gamecontrollerdb.txt";
+    char path[1024];
+    char *base;
+    FILE *file;
+    if (environment != 0 && *environment != '\0') {
+        (void)SDL_GameControllerAddMappingsFromFile(environment);
+        return;
+    }
+    base = SDL_GetBasePath();
+    if (base != 0 && strlen(base) + strlen(relative) + 1U < sizeof(path)) {
+        sprintf(path, "%s%s", base, relative);
+        file = fopen(path, "r");
+        if (file != 0) {
+            (void)fclose(file);
+            (void)SDL_GameControllerAddMappingsFromFile(path);
+            SDL_free(base);
+            return;
+        }
+    }
+    if (base != 0) SDL_free(base);
+    (void)SDL_GameControllerAddMappingsFromFile(
+        "share/digs/controllers/gamecontrollerdb.txt");
 }
 
 static void demo_prepare_targets(void)
@@ -686,34 +1196,99 @@ static void demo_draw_options(demo_app *app)
     demo_dark_panel(28, 8, 264, 184);
     vox_ui_text_center_shadow(&demo_ui, 160, 14, 2, "OPTIONS",
                               DEMO_VGA_YELLOW);
-    demo_value_line(38, "FRAME CAP", demo_frame_names[app->options.frame_cap_index],
+    demo_value_line(34, "FRAME CAP", demo_frame_names[app->options.frame_cap_index],
                     app->selection == 0);
-    demo_value_line(51, "LIGHTFIELD", demo_gi_names[app->options.gi_quality],
+    demo_value_line(47, "LIGHTFIELD", demo_gi_names[app->options.gi_quality],
                     app->selection == 1);
-    demo_value_line(64, "FX PROFILE", demo_fx_names[app->options.fx_profile],
+    demo_value_line(60, "FX PROFILE", demo_fx_names[app->options.fx_profile],
                     app->selection == 2);
-    demo_value_line(77, "FLASHES", demo_flash_names[app->options.flash_mode],
+    demo_value_line(73, "FLASHES", demo_flash_names[app->options.flash_mode],
                     app->selection == 3);
-    demo_value_line(90, "GORE", demo_gore_names[app->options.gore_level],
+    demo_value_line(86, "GORE", demo_gore_names[app->options.gore_level],
                     app->selection == 4);
-    demo_value_line(103, "CAMERA SHAKE",
+    demo_value_line(99, "CAMERA SHAKE",
                     demo_toggle_names[app->options.camera_shake],
                     app->selection == 5);
-    demo_value_line(116, "DAMAGE NUMBERS",
+    demo_value_line(112, "DAMAGE NUMBERS",
                     demo_toggle_names[app->options.damage_numbers],
                     app->selection == 6);
-    demo_value_line(129, "NUMBER SIZE",
+    demo_value_line(125, "NUMBER SIZE",
                     app->options.damage_number_size ? "LARGE" : "SMALL",
                     app->selection == 7);
-    demo_value_line(142, "NUMBER COLOR",
+    demo_value_line(138, "NUMBER COLOR",
                     demo_number_color_names[app->options.damage_number_color],
                     app->selection == 8);
-    demo_value_line(155, "FULLSCREEN",
+    demo_value_line(151, "FULLSCREEN",
                     demo_toggle_names[app->options.fullscreen],
                     app->selection == 9);
-    demo_menu_item(174, "BACK", app->selection == 10);
-    vox_ui_text_center(&demo_ui, 160, 185, 1,
-                       "FIXED 60 HZ SIM",
+    demo_menu_item(165, "INPUT & CONTROLLER", app->selection == 10);
+    demo_menu_item(180, "BACK", app->selection == 11);
+}
+
+static void demo_input_mode_value(demo_app *app, int player,
+                                  char *value)
+{
+    const demo_player_input *input = &app->player_input[player];
+    demo_controller *controller = demo_controller_for_player(app, player);
+    if (input->preference == DEMO_INPUT_KEYBOARD) {
+        sprintf(value, "%s", player == 0 ? "KEYBOARD+MOUSE" : "KEYBOARD");
+    } else if (input->preference == DEMO_INPUT_CONTROLLER) {
+        if (controller == 0) sprintf(value, "PAD LOST");
+        else sprintf(value, "CONTROLLER %d",
+                     (int)(controller - app->controllers) + 1);
+    } else if (input->active_source == DEMO_SOURCE_CONTROLLER &&
+               controller != 0) {
+        sprintf(value, "AUTO PAD %d",
+                (int)(controller - app->controllers) + 1);
+    } else {
+        sprintf(value, "%s", player == 0 ? "AUTO KBD+MOUSE" : "AUTO KBD");
+    }
+}
+
+static void demo_draw_input_options(demo_app *app)
+{
+    char p1_mode[24];
+    char p2_mode[24];
+    int calibrating = 0;
+    int slot;
+    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
+    (void)vox_software_render_ex(&demo_title_world, &demo_target,
+                                 &demo_render_config);
+    demo_dark_panel(28, 8, 264, 184);
+    vox_ui_text_center_shadow(&demo_ui, 160, 14, 2,
+                              "INPUT & CONTROLLER", DEMO_VGA_YELLOW);
+    demo_input_mode_value(app, 0, p1_mode);
+    demo_input_mode_value(app, 1, p2_mode);
+    demo_value_line(34, "P1 MODE", p1_mode, app->selection == 0);
+    demo_value_line(46, "P1 SENSITIVITY",
+                    demo_sensitivity_names[app->player_input[0].sensitivity],
+                    app->selection == 1);
+    demo_value_line(58, "P1 DEADZONE",
+                    demo_deadzone_names[app->player_input[0].deadzone],
+                    app->selection == 2);
+    demo_value_line(70, "P1 AIM SLOW",
+                    demo_slowdown_names[app->player_input[0].aim_slowdown],
+                    app->selection == 3);
+    demo_value_line(86, "P2 MODE", p2_mode, app->selection == 4);
+    demo_value_line(98, "P2 SENSITIVITY",
+                    demo_sensitivity_names[app->player_input[1].sensitivity],
+                    app->selection == 5);
+    demo_value_line(110, "P2 DEADZONE",
+                    demo_deadzone_names[app->player_input[1].deadzone],
+                    app->selection == 6);
+    demo_value_line(122, "P2 AIM SLOW",
+                    demo_slowdown_names[app->player_input[1].aim_slowdown],
+                    app->selection == 7);
+    for (slot = 0; slot < (int)DEMO_CONTROLLER_MAX; ++slot) {
+        if (app->controllers[slot].calibrating) calibrating = 1;
+    }
+    demo_value_line(138, "CALIBRATE PADS",
+                    calibrating ? "KEEP STICKS STILL" : "START",
+                    app->selection == 8);
+    demo_menu_item(153, "RESTORE INPUT DEFAULTS", app->selection == 9);
+    demo_menu_item(169, "BACK", app->selection == 10);
+    vox_ui_text_center(&demo_ui, 160, 184, 1,
+                       "ARROWS CHANGE  ENTER SELECTS",
                        DEMO_VGA_DARK_GRAY);
 }
 
@@ -1014,65 +1589,28 @@ static void demo_render_voxel(int x, int y, vox_u16 material)
                         demo_material_temperature(material));
 }
 
-static void demo_render_miner_voxel(int x, int y, vox_u16 material)
-{
-    demo_render_voxel(x, y, material);
-    demo_render_voxel(x + 1, y, material);
-    demo_render_voxel(x, y + 1, material);
-    demo_render_voxel(x + 1, y + 1, material);
-}
-
 static void demo_voxelize_miner(vox_u16 player)
 {
     static const vox_u16 coats[VOX_DIGS_MAX_SLOTS] = {
         VOX_MAT_METAL, VOX_MAT_BIOMASS, VOX_MAT_COAL, VOX_MAT_STONE
     };
     const vox_physics_body *body = &demo_match.players[player];
+    digs_miner_pose pose;
     int x = demo_q16_to_screen(body->position_x.value_q16,
                                VOX_WORLD_WIDTH, VOX_WORLD_WIDTH);
     int y = demo_q16_to_screen(body->position_y.value_q16,
                                VOX_WORLD_HEIGHT, VOX_WORLD_HEIGHT);
-    int lamp_x = demo_match.facing_right[player] ? x + 4 : x - 4;
-    int row;
-    int column;
-    if (!(demo_match.anatomy[player][VOX_DIGS_PART_HEAD].flags &
-          VOX_DIGS_PART_SEVERED)) {
-        for (column = -1; column <= 1; ++column) {
-            demo_render_miner_voxel(x + column * 2, y - 8, VOX_MAT_METAL);
-            demo_render_miner_voxel(x + column * 2, y - 6, VOX_MAT_FLESH);
-        }
-        demo_render_miner_voxel(lamp_x, y - 8, VOX_MAT_LAVA);
-    }
-    for (row = -2; row <= 0; ++row) {
-        for (column = -1; column <= 1; ++column) {
-            demo_render_miner_voxel(x + column * 2, y + row * 2,
-                                    coats[player]);
+    vox_u16 part;
+    digs_miner_pose_default(&pose);
+    pose.coat_material = coats[player];
+    pose.facing_right = demo_match.facing_right[player];
+    for (part = 0U; part < VOX_DIGS_ANATOMY_PART_COUNT; ++part) {
+        if ((demo_match.anatomy[player][part].flags &
+             VOX_DIGS_PART_SEVERED) != 0U) {
+            pose.severed_mask |= (vox_u32)1U << part;
         }
     }
-    if (!(demo_match.anatomy[player][VOX_DIGS_PART_LEFT_UPPER_ARM].flags &
-          VOX_DIGS_PART_SEVERED)) {
-        demo_render_miner_voxel(x - 4, y - 2, coats[player]);
-    }
-    if (!(demo_match.anatomy[player][VOX_DIGS_PART_RIGHT_UPPER_ARM].flags &
-          VOX_DIGS_PART_SEVERED)) {
-        demo_render_miner_voxel(x + 4, y - 2, coats[player]);
-    }
-    if (!(demo_match.anatomy[player][VOX_DIGS_PART_LEFT_THIGH].flags &
-          VOX_DIGS_PART_SEVERED)) {
-        demo_render_miner_voxel(x - 2, y + 2, VOX_MAT_METAL);
-    }
-    if (!(demo_match.anatomy[player][VOX_DIGS_PART_RIGHT_THIGH].flags &
-          VOX_DIGS_PART_SEVERED)) {
-        demo_render_miner_voxel(x + 2, y + 2, VOX_MAT_METAL);
-    }
-    if (!(demo_match.anatomy[player][VOX_DIGS_PART_LEFT_FOOT].flags &
-          VOX_DIGS_PART_SEVERED)) {
-        demo_render_miner_voxel(x - 2, y + 4, VOX_MAT_COAL);
-    }
-    if (!(demo_match.anatomy[player][VOX_DIGS_PART_RIGHT_FOOT].flags &
-          VOX_DIGS_PART_SEVERED)) {
-        demo_render_miner_voxel(x + 2, y + 4, VOX_MAT_COAL);
-    }
+    (void)digs_miner_voxelize(&demo_render_world, x, y, &pose);
 }
 
 static void demo_voxelize_rope(vox_u16 player)
@@ -1466,9 +2004,14 @@ static void demo_draw_world_feedback(demo_app *app)
                                DEMO_VGA_LIGHT_CYAN);
         }
     }
-    for (player = 0; player < app->local_players; ++player) {
+    for (player = 0; app->screen == DEMO_PLAY &&
+         player < app->local_players; ++player) {
         int x;
         int y;
+        if (player == 0 && app->mouse_inside &&
+            app->player_input[0].active_source == DEMO_SOURCE_KEYBOARD) {
+            continue;
+        }
         demo_world_to_screen(app,
             (vox_i32)app->aim_world_x[player] << 16,
             (vox_i32)app->aim_world_y[player] << 16, &x, &y);
@@ -1542,10 +2085,12 @@ static void demo_draw_play(demo_app *app)
     demo_apply_player_camera(app);
     /* Keep the mouse player's authoritative aim synchronized to the camera
      * transform that is actually being presented this frame. */
-    if (app->mouse_inside && demo_controller_for_player(app, 0) == 0) {
+    if (app->screen == DEMO_PLAY && app->mouse_inside &&
+        app->player_input[0].active_source == DEMO_SOURCE_KEYBOARD) {
         demo_mouse_world(app, &app->aim_world_x[0], &app->aim_world_y[0]);
     }
-    if (app->mouse_inside) {
+    if (app->screen == DEMO_PLAY && app->mouse_inside &&
+        app->player_input[0].active_source == DEMO_SOURCE_KEYBOARD) {
         vox_ui_frame(&demo_ui, app->mouse_x - 3, app->mouse_y - 3,
                      7, 7, DEMO_VGA_YELLOW);
         vox_ui_rect(&demo_ui, app->mouse_x, app->mouse_y, 1, 1,
@@ -1601,6 +2146,8 @@ static void demo_render(demo_app *app)
         demo_draw_index(app);
     } else if (app->screen == DEMO_CONTROLS) {
         demo_draw_controls(app);
+    } else if (app->screen == DEMO_INPUT_OPTIONS) {
+        demo_draw_input_options(app);
     } else if (app->screen == DEMO_SCRIPT_ERROR) {
         demo_draw_script_error(app);
     } else if (app->screen == DEMO_RESULTS) {
@@ -1714,6 +2261,12 @@ static int demo_start_match(demo_app *app, int foundry)
             }
             app->aim_world_x[player] = (vox_u32)aim_x;
             app->aim_world_y[player] = (vox_u32)aim_y;
+            app->player_input[player].aim_direction_x =
+                player == 0U ? 1.0 : -1.0;
+            app->player_input[player].aim_direction_y = 0.0;
+            app->player_input[player].aim_distance = 24.0;
+            app->player_input[player].aim_magnitude = 1.0;
+            app->player_input[player].suppress_ticks = 0;
         }
     }
     app->screen = DEMO_PLAY;
@@ -1727,7 +2280,7 @@ static demo_controller *demo_controller_for_player(demo_app *app,
 {
     int index;
     for (index = 0; index < (int)DEMO_CONTROLLER_MAX; ++index) {
-        if (app->controllers[index].handle != 0 &&
+        if (demo_controller_connected(&app->controllers[index]) &&
             app->controllers[index].claimed_player == player) {
             return &app->controllers[index];
         }
@@ -1763,6 +2316,129 @@ static void demo_fire_player(demo_app *app, int player)
     }
 }
 
+static double demo_weapon_aim_range(demo_app *app, int player,
+                                    int rope_held)
+{
+    const vox_digs_weapon_properties *properties;
+    if (rope_held) return 30.0;
+    properties = vox_digs_weapon_get((vox_u16)app->selected_tool[player]);
+    if (properties != 0 && (properties->flags & VOX_DIGS_WEAPON_MELEE)) {
+        return 8.0;
+    }
+    return 24.0;
+}
+
+static int demo_aim_line_clear(int start_x, int start_y,
+                               int end_x, int end_y)
+{
+    int delta_x = end_x - start_x;
+    int delta_y = end_y - start_y;
+    int absolute_x = delta_x < 0 ? -delta_x : delta_x;
+    int absolute_y = delta_y < 0 ? -delta_y : delta_y;
+    int steps = absolute_x > absolute_y ? absolute_x : absolute_y;
+    int step;
+    if (steps <= 1) return 1;
+    for (step = 2; step < steps; ++step) {
+        int x = start_x + delta_x * step / steps;
+        int y = start_y + delta_y * step / steps;
+        const vox_cell *cell;
+        if (x < 0 || y < 0 || x >= (int)VOX_WORLD_WIDTH ||
+            y >= (int)VOX_WORLD_HEIGHT) return 0;
+        cell = vox_world_cell(&demo_match.world, (vox_u32)x, (vox_u32)y,
+                              VOX_WORLD_DEPTH - 1U);
+        if (cell != 0 && cell->material != VOX_MAT_AIR) return 0;
+    }
+    return 1;
+}
+
+static int demo_aim_near_visible_target(int player, double direction_x,
+                                        double direction_y, double reach)
+{
+    int body_x = (int)(demo_match.players[player].position_x.value_q16 /
+                       65536L);
+    int body_y = (int)(demo_match.players[player].position_y.value_q16 /
+                       65536L);
+    int target;
+    for (target = 0; target < (int)demo_match.rules.player_count; ++target) {
+        double delta_x;
+        double delta_y;
+        double forward;
+        double lateral;
+        int target_x;
+        int target_y;
+        if (target == player || !demo_match.alive[target]) continue;
+        if (demo_match.rules.team_mode == VOX_DIGS_MODE_MINERS_VS_MACHINES &&
+            (demo_match.rules.bot_mask & (vox_u16)(1U << target)) == 0U) {
+            continue;
+        }
+        target_x = (int)(demo_match.players[target].position_x.value_q16 /
+                         65536L);
+        target_y = (int)(demo_match.players[target].position_y.value_q16 /
+                         65536L);
+        delta_x = (double)(target_x - body_x);
+        delta_y = (double)(target_y - body_y);
+        forward = delta_x * direction_x + delta_y * direction_y;
+        lateral = delta_x * direction_y - delta_y * direction_x;
+        if (lateral < 0.0) lateral = -lateral;
+        if (forward > 0.0 && forward <= reach + 4.0 && lateral <= 3.5 &&
+            demo_aim_line_clear(body_x, body_y, target_x, target_y)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void demo_update_controller_aim(demo_app *app, int player,
+                                       demo_controller *controller,
+                                       Sint16 raw_x, Sint16 raw_y,
+                                       int rope_held)
+{
+    demo_player_input *input = &app->player_input[player];
+    double desired_x;
+    double desired_y;
+    double magnitude;
+    double reach = demo_weapon_aim_range(app, player, rope_held);
+    double smoothing = input->sensitivity == 0 ? 0.24 :
+                       (input->sensitivity == 1 ? 0.38 : 0.58);
+    int active = demo_radial_response(raw_x, raw_y,
+        demo_input_deadzone(input, controller), input->sensitivity,
+        &desired_x, &desired_y, &magnitude);
+    if (active) {
+        double length;
+        if (input->aim_slowdown > 0 &&
+            demo_aim_near_visible_target(player, desired_x, desired_y,
+                                         reach)) {
+            smoothing *= input->aim_slowdown == 1 ? 0.65 : 0.45;
+        }
+        input->aim_direction_x +=
+            (desired_x - input->aim_direction_x) * smoothing;
+        input->aim_direction_y +=
+            (desired_y - input->aim_direction_y) * smoothing;
+        length = demo_sqrt(input->aim_direction_x * input->aim_direction_x +
+                           input->aim_direction_y * input->aim_direction_y);
+        if (length > 0.0001) {
+            input->aim_direction_x /= length;
+            input->aim_direction_y /= length;
+        }
+        input->aim_magnitude = magnitude;
+    }
+    input->aim_distance = reach * input->aim_magnitude;
+    {
+        long body_x = demo_match.players[player].position_x.value_q16 /
+                      65536L;
+        long body_y = demo_match.players[player].position_y.value_q16 /
+                      65536L;
+        long world_x = body_x + (long)(input->aim_direction_x *
+                                       input->aim_distance);
+        long world_y = body_y + (long)(input->aim_direction_y *
+                                       input->aim_distance);
+        if (world_x < 0L) world_x = 0L;
+        if (world_y < 0L) world_y = 0L;
+        app->aim_world_x[player] = (vox_u32)world_x;
+        app->aim_world_y[player] = (vox_u32)world_y;
+    }
+}
+
 static void demo_submit_human_input(demo_app *app)
 {
     const vox_u8 *keys = SDL_GetKeyboardState(0);
@@ -1772,9 +2448,10 @@ static void demo_submit_human_input(demo_app *app)
         demo_controller *controller = demo_controller_for_player(app, player);
         Sint16 move_x = 0;
         Sint16 move_y = 0;
-        Sint16 aim_x = 0;
-        Sint16 aim_y = 0;
         int fire = 0;
+        int previous_down = 0;
+        int next_down = 0;
+        int use_controller;
         SDL_Scancode *left = demo_keyboard_binding(app, player, 0);
         SDL_Scancode *right = demo_keyboard_binding(app, player, 1);
         SDL_Scancode *jump = demo_keyboard_binding(app, player, 2);
@@ -1783,99 +2460,150 @@ static void demo_submit_human_input(demo_app *app)
         SDL_Scancode *fire_key = demo_keyboard_binding(app, player, 5);
         SDL_Scancode *previous_key = demo_keyboard_binding(app, player, 6);
         SDL_Scancode *next_key = demo_keyboard_binding(app, player, 7);
-        int previous_down = previous_key != 0 && keys[*previous_key];
-        int next_down = next_key != 0 && keys[*next_key];
-        if (player == 0 && app->mouse_inside && controller == 0) {
-            demo_mouse_world(app, &app->aim_world_x[0],
-                             &app->aim_world_y[0]);
+        if (controller != 0) {
+            Sint16 activity_axes[4];
+            double activity = 0.0;
+            int axis;
+            demo_update_controller_calibration(controller);
+            activity_axes[0] = demo_controller_axis(
+                controller, SDL_CONTROLLER_AXIS_LEFTX);
+            activity_axes[1] = demo_controller_axis(
+                controller, SDL_CONTROLLER_AXIS_LEFTY);
+            activity_axes[2] = demo_controller_axis(
+                controller, SDL_CONTROLLER_AXIS_RIGHTX);
+            activity_axes[3] = demo_controller_axis(
+                controller, SDL_CONTROLLER_AXIS_RIGHTY);
+            for (axis = 0; axis < 4; axis += 2) {
+                double x = (double)activity_axes[axis] / 32767.0;
+                double y = (double)activity_axes[axis + 1] / 32767.0;
+                double magnitude = demo_sqrt(x * x + y * y);
+                if (magnitude > activity) activity = magnitude;
+            }
+            if (demo_controller_axis(controller,
+                    SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 16000 ||
+                demo_controller_axis(controller,
+                    SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16000) {
+                activity = 1.0;
+            }
+            if (!controller->calibrating &&
+                activity > demo_input_deadzone(&app->player_input[player],
+                                                controller) +
+                           DEMO_CONTROLLER_ACTIVITY_MARGIN) {
+                ++controller->activity_frames;
+                if (controller->activity_frames >= 2) {
+                    (void)demo_activate_source(app, player,
+                                               DEMO_SOURCE_CONTROLLER, 0);
+                }
+            } else {
+                controller->activity_frames = 0;
+            }
         }
+        use_controller = app->player_input[player].active_source ==
+                         DEMO_SOURCE_CONTROLLER;
         memset(&input, 0, sizeof(input));
         input.abi_version = VOX_ABI_VERSION;
         input.struct_size = (vox_u32)sizeof(input);
         input.player = (vox_u16)player;
-        if (left != 0 && keys[*left]) move_x = -32767;
-        if (right != 0 && keys[*right]) move_x = 32767;
-        if (jump != 0 && keys[*jump]) {
-            input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_JUMP);
-        }
-        if (steam != 0 && keys[*steam]) {
-            input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_STEAM);
-        }
-        if (rope != 0 && keys[*rope]) {
-            input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_ROPE);
-        }
-        if (fire_key != 0 && keys[*fire_key]) fire = 1;
-        if (player == 0) {
-            if (keys[SDL_SCANCODE_W]) move_y = -32767;
-            if (keys[SDL_SCANCODE_S]) move_y = 32767;
-        } else {
-            if (keys[SDL_SCANCODE_I]) {
-                if (app->aim_world_y[player] > 0U) --app->aim_world_y[player];
+        if (!use_controller) {
+            previous_down = previous_key != 0 && keys[*previous_key];
+            next_down = next_key != 0 && keys[*next_key];
+            if (player == 0 && app->mouse_inside) {
+                demo_mouse_world(app, &app->aim_world_x[0],
+                                 &app->aim_world_y[0]);
             }
-            if (keys[SDL_SCANCODE_K]) ++app->aim_world_y[player];
-            if (keys[SDL_SCANCODE_J] && app->aim_world_x[player] > 0U) {
-                --app->aim_world_x[player];
-            }
-            if (keys[SDL_SCANCODE_L]) ++app->aim_world_x[player];
-        }
-        if (controller != 0) {
-            move_x = demo_deadzone_axis(SDL_GameControllerGetAxis(
-                controller->handle, SDL_CONTROLLER_AXIS_LEFTX));
-            move_y = demo_deadzone_axis(SDL_GameControllerGetAxis(
-                controller->handle, SDL_CONTROLLER_AXIS_LEFTY));
-            aim_x = demo_deadzone_axis(SDL_GameControllerGetAxis(
-                controller->handle, SDL_CONTROLLER_AXIS_RIGHTX));
-            aim_y = demo_deadzone_axis(SDL_GameControllerGetAxis(
-                controller->handle, SDL_CONTROLLER_AXIS_RIGHTY));
-            if (SDL_GameControllerGetButton(controller->handle,
-                                            SDL_CONTROLLER_BUTTON_DPAD_LEFT)) {
-                move_x = -32767;
-            } else if (SDL_GameControllerGetButton(
-                           controller->handle,
-                           SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) {
-                move_x = 32767;
-            }
-            if (SDL_GameControllerGetButton(controller->handle,
-                                            SDL_CONTROLLER_BUTTON_DPAD_UP)) {
-                move_y = -32767;
-            } else if (SDL_GameControllerGetButton(
-                           controller->handle,
-                           SDL_CONTROLLER_BUTTON_DPAD_DOWN)) {
-                move_y = 32767;
-            }
-            if (SDL_GameControllerGetButton(controller->handle,
-                                            app->bindings.pad_jump)) {
+            if (left != 0 && keys[*left]) move_x = -32767;
+            if (right != 0 && keys[*right]) move_x = 32767;
+            if (jump != 0 && keys[*jump]) {
                 input.actions = (vox_u16)(input.actions |
                                           VOX_DIGS_ACTION_JUMP);
             }
-            if (SDL_GameControllerGetButton(controller->handle,
-                                            app->bindings.pad_steam)) {
+            if (steam != 0 && keys[*steam]) {
                 input.actions = (vox_u16)(input.actions |
                                           VOX_DIGS_ACTION_STEAM);
             }
-            if (SDL_GameControllerGetButton(controller->handle,
-                                            app->bindings.pad_rope)) {
+            if (rope != 0 && keys[*rope]) {
                 input.actions = (vox_u16)(input.actions |
                                           VOX_DIGS_ACTION_ROPE);
             }
-            if (SDL_GameControllerGetButton(controller->handle,
-                                            app->bindings.pad_fire) ||
-                SDL_GameControllerGetAxis(controller->handle,
+            if (fire_key != 0 && keys[*fire_key]) fire = 1;
+            if (player == 0) {
+                if (keys[SDL_SCANCODE_W]) move_y = -32767;
+                if (keys[SDL_SCANCODE_S]) move_y = 32767;
+            } else {
+                if (keys[SDL_SCANCODE_I] &&
+                    app->aim_world_y[player] > 0U) {
+                    --app->aim_world_y[player];
+                }
+                if (keys[SDL_SCANCODE_K]) ++app->aim_world_y[player];
+                if (keys[SDL_SCANCODE_J] &&
+                    app->aim_world_x[player] > 0U) {
+                    --app->aim_world_x[player];
+                }
+                if (keys[SDL_SCANCODE_L]) ++app->aim_world_x[player];
+            }
+        } else if (controller != 0) {
+            double direction_x;
+            double direction_y;
+            double magnitude;
+            Sint16 left_x = demo_controller_axis(
+                controller, SDL_CONTROLLER_AXIS_LEFTX);
+            Sint16 left_y = demo_controller_axis(
+                controller, SDL_CONTROLLER_AXIS_LEFTY);
+            Sint16 aim_x = demo_controller_axis(
+                controller, SDL_CONTROLLER_AXIS_RIGHTX);
+            Sint16 aim_y = demo_controller_axis(
+                controller, SDL_CONTROLLER_AXIS_RIGHTY);
+            int rope_held = demo_controller_button(controller,
+                                                   app->bindings.pad_rope);
+            if (demo_radial_response(left_x, left_y,
+                demo_input_deadzone(&app->player_input[player], controller),
+                app->player_input[player].sensitivity,
+                &direction_x, &direction_y, &magnitude)) {
+                move_x = (Sint16)(direction_x * magnitude * 32767.0);
+                move_y = (Sint16)(direction_y * magnitude * 32767.0);
+            }
+            if (demo_controller_button(controller,
+                                       SDL_CONTROLLER_BUTTON_DPAD_LEFT)) {
+                move_x = -32767;
+            } else if (demo_controller_button(
+                           controller, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) {
+                move_x = 32767;
+            }
+            if (demo_controller_button(controller,
+                                       SDL_CONTROLLER_BUTTON_DPAD_UP)) {
+                move_y = -32767;
+            } else if (demo_controller_button(
+                           controller, SDL_CONTROLLER_BUTTON_DPAD_DOWN)) {
+                move_y = 32767;
+            }
+            if (demo_controller_button(controller, app->bindings.pad_jump)) {
+                input.actions = (vox_u16)(input.actions |
+                                          VOX_DIGS_ACTION_JUMP);
+            }
+            if (demo_controller_button(controller, app->bindings.pad_steam)) {
+                input.actions = (vox_u16)(input.actions |
+                                          VOX_DIGS_ACTION_STEAM);
+            }
+            if (rope_held) {
+                input.actions = (vox_u16)(input.actions |
+                                          VOX_DIGS_ACTION_ROPE);
+            }
+            if (demo_controller_button(controller, app->bindings.pad_fire) ||
+                demo_controller_axis(controller,
                     SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16000) {
                 fire = 1;
             }
-            if (aim_x != 0 || aim_y != 0) {
-                vox_i32 body_x = demo_match.players[player].position_x.value_q16;
-                vox_i32 body_y = demo_match.players[player].position_y.value_q16;
-                vox_i32 world_x = body_x / 65536L +
-                                  (vox_i32)aim_x * 52L / 32767L;
-                vox_i32 world_y = body_y / 65536L +
-                                  (vox_i32)aim_y * 52L / 32767L;
-                if (world_x < 0L) world_x = 0L;
-                if (world_y < 0L) world_y = 0L;
-                app->aim_world_x[player] = (vox_u32)world_x;
-                app->aim_world_y[player] = (vox_u32)world_y;
-            }
+            demo_update_controller_aim(app, player, controller,
+                                       aim_x, aim_y, rope_held);
+        }
+        if (app->player_input[player].suppress_ticks > 0) {
+            input.actions = 0U;
+            move_x = 0;
+            move_y = 0;
+            fire = 0;
+            previous_down = 0;
+            next_down = 0;
+            --app->player_input[player].suppress_ticks;
         }
         if (move_x < 0) {
             input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_LEFT);
@@ -1950,9 +2678,15 @@ static void demo_rumble_player(demo_app *app, vox_u16 player,
     if (controller == 0) return;
     strength = (vox_u16)(magnitude >= 100U ? 65535U :
                          10000U + (vox_u32)magnitude * 500U);
-    (void)SDL_GameControllerRumble(controller->handle,
-                                   strength, strength,
-                                   magnitude >= 100U ? 240U : 90U);
+    if (controller->raw_fallback) {
+        (void)SDL_JoystickRumble(controller->joystick,
+                                strength, strength,
+                                magnitude >= 100U ? 240U : 90U);
+    } else {
+        (void)SDL_GameControllerRumble(controller->handle,
+                                      strength, strength,
+                                      magnitude >= 100U ? 240U : 90U);
+    }
 }
 
 static void demo_process_events(demo_app *app)
@@ -2150,6 +2884,15 @@ static int demo_sync_hardware_mouse(demo_app *app)
     return app->mouse_inside;
 }
 
+static void demo_update_cursor_visibility(demo_app *app)
+{
+    int visible = app->screen == DEMO_PLAY ? 0 : 1;
+    if (visible != app->cursor_visible) {
+        (void)SDL_ShowCursor(visible ? SDL_ENABLE : SDL_DISABLE);
+        app->cursor_visible = visible;
+    }
+}
+
 static void demo_fire_at_mouse(demo_app *app)
 {
     vox_u32 world_x;
@@ -2261,10 +3004,10 @@ static void demo_handle_options_key(demo_app *app, SDL_Keycode key)
         app->screen = DEMO_TITLE;
         app->selection = 0;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 10) % 11;
+        app->selection = (app->selection + 11) % 12;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 11;
+        app->selection = (app->selection + 1) % 12;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (direction != 0 || key == SDLK_RETURN || key == SDLK_KP_ENTER) {
         demo_audio_play(app, direction == 0 ? DEMO_SOUND_SELECT :
@@ -2298,8 +3041,62 @@ static void demo_handle_options_key(demo_app *app, SDL_Keycode key)
             app->options.fullscreen = !app->options.fullscreen;
             demo_apply_fullscreen(app);
         } else if (app->selection == 10 && direction == 0) {
+            app->screen = DEMO_INPUT_OPTIONS;
+            app->selection = 0;
+        } else if (app->selection == 11 && direction == 0) {
             app->screen = DEMO_TITLE;
             app->selection = 0;
+        }
+    }
+}
+
+static void demo_handle_input_options_key(demo_app *app, SDL_Keycode key)
+{
+    int direction = key == SDLK_LEFT ? -1 : (key == SDLK_RIGHT ? 1 : 0);
+    int change = direction == 0 ? 1 : direction;
+    int player = app->selection >= 4 && app->selection <= 7 ? 1 : 0;
+    int field = app->selection - player * 4;
+    if (key == SDLK_ESCAPE) {
+        app->screen = DEMO_OPTIONS;
+        app->selection = 10;
+    } else if (key == SDLK_UP) {
+        app->selection = (app->selection + 10) % 11;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_DOWN) {
+        app->selection = (app->selection + 1) % 11;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (direction != 0 || key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+        demo_audio_play(app, direction == 0 ? DEMO_SOUND_SELECT :
+                        DEMO_SOUND_MOVE);
+        if (app->selection <= 7) {
+            demo_player_input *input = &app->player_input[player];
+            if (field == 0) {
+                input->preference = (input->preference + change + 3) % 3;
+                if (input->preference == DEMO_INPUT_KEYBOARD) {
+                    input->active_source = DEMO_SOURCE_KEYBOARD;
+                } else if (input->preference == DEMO_INPUT_CONTROLLER) {
+                    input->active_source = DEMO_SOURCE_CONTROLLER;
+                }
+                demo_reset_input_edges(app, player);
+                demo_refresh_controller_claims(app);
+            } else if (field == 1) {
+                input->sensitivity = (input->sensitivity + change + 3) % 3;
+            } else if (field == 2) {
+                input->deadzone = (input->deadzone + change + 4) % 4;
+            } else if (field == 3) {
+                input->aim_slowdown =
+                    (input->aim_slowdown + change + 3) % 3;
+            }
+            (void)demo_save_input_settings(app);
+        } else if (app->selection == 8 && direction == 0) {
+            demo_begin_controller_calibration(app);
+        } else if (app->selection == 9 && direction == 0) {
+            demo_input_defaults(app);
+            demo_refresh_controller_claims(app);
+            (void)demo_save_input_settings(app);
+        } else if (app->selection == 10 && direction == 0) {
+            app->screen = DEMO_OPTIONS;
+            app->selection = 10;
         }
     }
 }
@@ -2402,6 +3199,8 @@ static void demo_handle_key(demo_app *app, SDL_Keycode key,
         demo_handle_setup_key(app, key);
     } else if (app->screen == DEMO_OPTIONS) {
         demo_handle_options_key(app, key);
+    } else if (app->screen == DEMO_INPUT_OPTIONS) {
+        demo_handle_input_options_key(app, key);
     } else if (app->screen == DEMO_INDEX) {
         demo_handle_index_key(app, key);
     } else if (app->screen == DEMO_CONTROLS) {
@@ -2450,27 +3249,157 @@ static void demo_handle_key(demo_app *app, SDL_Keycode key,
     }
 }
 
+static int demo_keyboard_player_for_scancode(demo_app *app,
+                                             SDL_Scancode scancode)
+{
+    int player;
+    int action;
+    for (player = 0; player < app->local_players &&
+         player < (int)DEMO_LOCAL_MAX; ++player) {
+        for (action = 0; action < 8; ++action) {
+            SDL_Scancode *binding = demo_keyboard_binding(app, player,
+                                                          action);
+            if (binding != 0 && *binding == scancode) return player;
+        }
+    }
+    if (scancode == SDL_SCANCODE_W || scancode == SDL_SCANCODE_S ||
+        (scancode >= SDL_SCANCODE_1 && scancode <= SDL_SCANCODE_0)) {
+        return 0;
+    }
+    if (app->local_players > 1 &&
+        (scancode == SDL_SCANCODE_I || scancode == SDL_SCANCODE_J ||
+         scancode == SDL_SCANCODE_K || scancode == SDL_SCANCODE_L)) {
+        return 1;
+    }
+    return -1;
+}
+
+static SDL_GameControllerButton demo_raw_button(int raw_button)
+{
+    if (raw_button == 0) return SDL_CONTROLLER_BUTTON_A;
+    if (raw_button == 1) return SDL_CONTROLLER_BUTTON_B;
+    if (raw_button == 2) return SDL_CONTROLLER_BUTTON_X;
+    if (raw_button == 3) return SDL_CONTROLLER_BUTTON_Y;
+    if (raw_button == 4) return SDL_CONTROLLER_BUTTON_LEFTSHOULDER;
+    if (raw_button == 5) return SDL_CONTROLLER_BUTTON_RIGHTSHOULDER;
+    if (raw_button == 6) return SDL_CONTROLLER_BUTTON_BACK;
+    if (raw_button == 7) return SDL_CONTROLLER_BUTTON_START;
+    if (raw_button == 8) return SDL_CONTROLLER_BUTTON_LEFTSTICK;
+    if (raw_button == 9) return SDL_CONTROLLER_BUTTON_RIGHTSTICK;
+    return SDL_CONTROLLER_BUTTON_INVALID;
+}
+
+static void demo_handle_controller_button(demo_app *app,
+                                          demo_controller *controller,
+                                          SDL_GameControllerButton button)
+{
+    int player = controller == 0 ? -1 : controller->claimed_player;
+    int changed = 0;
+    if (button == SDL_CONTROLLER_BUTTON_INVALID) return;
+    if (app->screen == DEMO_CONTROLS && app->binding_capture &&
+        app->binding_player == 2) {
+        demo_assign_pad_binding(app, app->binding_capture - 1, button);
+        app->binding_capture = 0;
+        demo_audio_play(app, DEMO_SOUND_SELECT);
+        return;
+    }
+    if (app->screen == DEMO_PLAY && controller != 0) {
+        if (button == SDL_CONTROLLER_BUTTON_START) {
+            demo_handle_key(app, SDLK_ESCAPE, SDL_SCANCODE_UNKNOWN);
+            return;
+        }
+        if (player >= 0) {
+            changed = demo_activate_source(app, player,
+                                           DEMO_SOURCE_CONTROLLER, 1);
+            if (app->player_input[player].active_source !=
+                DEMO_SOURCE_CONTROLLER || changed) return;
+            if (button == app->bindings.pad_previous) {
+                demo_cycle_weapon(app, player, -1);
+            } else if (button == app->bindings.pad_next) {
+                demo_cycle_weapon(app, player, 1);
+            }
+        }
+        return;
+    }
+    {
+        SDL_Keycode key = SDLK_UNKNOWN;
+        if (button == SDL_CONTROLLER_BUTTON_DPAD_UP) key = SDLK_UP;
+        else if (button == SDL_CONTROLLER_BUTTON_DPAD_DOWN) key = SDLK_DOWN;
+        else if (button == SDL_CONTROLLER_BUTTON_DPAD_LEFT) key = SDLK_LEFT;
+        else if (button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) key = SDLK_RIGHT;
+        else if (button == SDL_CONTROLLER_BUTTON_A ||
+                 button == SDL_CONTROLLER_BUTTON_START) key = SDLK_RETURN;
+        else if (button == SDL_CONTROLLER_BUTTON_B) key = SDLK_ESCAPE;
+        if (key != SDLK_UNKNOWN) {
+            demo_handle_key(app, key, SDL_SCANCODE_UNKNOWN);
+        }
+    }
+}
+
+static void demo_handle_controller_navigation_axis(demo_app *app,
+                                                   int axis, Sint16 value)
+{
+    SDL_Keycode key = SDLK_UNKNOWN;
+    if (app->screen == DEMO_PLAY ||
+        SDL_GetTicks() < app->controller_nav_stamp) return;
+    if (axis == SDL_CONTROLLER_AXIS_LEFTX && value < -24000) key = SDLK_LEFT;
+    else if (axis == SDL_CONTROLLER_AXIS_LEFTX && value > 24000) {
+        key = SDLK_RIGHT;
+    } else if (axis == SDL_CONTROLLER_AXIS_LEFTY && value < -24000) {
+        key = SDLK_UP;
+    } else if (axis == SDL_CONTROLLER_AXIS_LEFTY && value > 24000) {
+        key = SDLK_DOWN;
+    }
+    if (key != SDLK_UNKNOWN) {
+        app->controller_nav_stamp = SDL_GetTicks() + 180U;
+        demo_handle_key(app, key, SDL_SCANCODE_UNKNOWN);
+    }
+}
+
 static void demo_handle_event(demo_app *app, const SDL_Event *event)
 {
     if (event->type == SDL_QUIT) {
         app->running = 0;
     } else if (event->type == SDL_MOUSEMOTION) {
+        int old_x = app->mouse_activity_x;
+        int old_y = app->mouse_activity_y;
+        int delta_x;
+        int delta_y;
         /* The renderer filters event coordinates already, so query the raw
          * window-relative hardware pointer and transform that exactly once. */
         (void)demo_sync_hardware_mouse(app);
+        delta_x = app->mouse_x - old_x;
+        delta_y = app->mouse_y - old_y;
+        if (delta_x < 0) delta_x = -delta_x;
+        if (delta_y < 0) delta_y = -delta_y;
+        if (app->screen == DEMO_PLAY && (delta_x > 2 || delta_y > 2)) {
+            (void)demo_activate_source(app, 0, DEMO_SOURCE_KEYBOARD, 0);
+            app->mouse_activity_x = app->mouse_x;
+            app->mouse_activity_y = app->mouse_y;
+        }
     } else if (event->type == SDL_MOUSEBUTTONDOWN &&
                event->button.button == SDL_BUTTON_LEFT &&
                app->screen == DEMO_PLAY) {
         if (demo_sync_hardware_mouse(app)) {
-            demo_fire_at_mouse(app);
+            int changed = demo_activate_source(app, 0,
+                                               DEMO_SOURCE_KEYBOARD, 1);
+            if (!changed && app->player_input[0].active_source ==
+                            DEMO_SOURCE_KEYBOARD) {
+                demo_fire_at_mouse(app);
+            }
         }
     } else if (event->type == SDL_MOUSEWHEEL && app->screen == DEMO_PLAY) {
         if (event->wheel.y != 0) {
             int direction = event->wheel.y > 0 ? 1 : -1;
+            int changed = demo_activate_source(app, 0,
+                                               DEMO_SOURCE_KEYBOARD, 1);
             if (event->wheel.direction == SDL_MOUSEWHEEL_FLIPPED) {
                 direction = -direction;
             }
-            if ((SDL_GetModState() & KMOD_SHIFT) != 0) {
+            if (changed || app->player_input[0].active_source !=
+                           DEMO_SOURCE_KEYBOARD) {
+                return;
+            } else if ((SDL_GetModState() & KMOD_SHIFT) != 0) {
                 demo_cycle_weapon(app, 0, direction);
             } else {
                 app->camera_zoom += direction;
@@ -2482,61 +3411,67 @@ static void demo_handle_event(demo_app *app, const SDL_Event *event)
             }
             demo_audio_play(app, DEMO_SOUND_MOVE);
         }
-    } else if (event->type == SDL_CONTROLLERDEVICEADDED) {
+    } else if (event->type == SDL_CONTROLLERDEVICEADDED ||
+               event->type == SDL_JOYDEVICEADDED) {
         (void)demo_open_controller(app, event->cdevice.which);
-    } else if (event->type == SDL_CONTROLLERDEVICEREMOVED) {
+    } else if (event->type == SDL_CONTROLLERDEVICEREMOVED ||
+               event->type == SDL_JOYDEVICEREMOVED) {
         demo_close_controller(app, event->cdevice.which);
-    } else if (event->type == SDL_CONTROLLERAXISMOTION &&
-               app->screen != DEMO_PLAY &&
-               SDL_GetTicks() >= app->controller_nav_stamp) {
-        SDL_Keycode key = SDLK_UNKNOWN;
-        if (event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTX &&
-            event->caxis.value < -24000) key = SDLK_LEFT;
-        else if (event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTX &&
-                 event->caxis.value > 24000) key = SDLK_RIGHT;
-        else if (event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTY &&
-                 event->caxis.value < -24000) key = SDLK_UP;
-        else if (event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTY &&
-                 event->caxis.value > 24000) key = SDLK_DOWN;
-        if (key != SDLK_UNKNOWN) {
-            app->controller_nav_stamp = SDL_GetTicks() + 180U;
-            demo_handle_key(app, key, SDL_SCANCODE_UNKNOWN);
+    } else if (event->type == SDL_CONTROLLERAXISMOTION) {
+        demo_handle_controller_navigation_axis(app, event->caxis.axis,
+                                               event->caxis.value);
+    } else if (event->type == SDL_JOYAXISMOTION) {
+        demo_controller *controller = demo_controller_by_instance(
+            app, event->jaxis.which);
+        if (controller != 0 && controller->raw_fallback &&
+            event->jaxis.axis <= 1) {
+            demo_handle_controller_navigation_axis(
+                app, event->jaxis.axis == 0 ? SDL_CONTROLLER_AXIS_LEFTX :
+                                              SDL_CONTROLLER_AXIS_LEFTY,
+                event->jaxis.value);
         }
     } else if (event->type == SDL_CONTROLLERBUTTONDOWN) {
         demo_controller *controller = demo_controller_by_instance(
             app, event->cbutton.which);
         SDL_GameControllerButton button =
             (SDL_GameControllerButton)event->cbutton.button;
-        if (app->screen == DEMO_CONTROLS && app->binding_capture &&
-            app->binding_player == 2) {
-            demo_assign_pad_binding(app, app->binding_capture - 1, button);
-            app->binding_capture = 0;
-            demo_audio_play(app, DEMO_SOUND_SELECT);
-        } else if (app->screen == DEMO_PLAY && controller != 0) {
-            int player = controller->claimed_player;
-            if (button == SDL_CONTROLLER_BUTTON_START) {
-                demo_handle_key(app, SDLK_ESCAPE, SDL_SCANCODE_UNKNOWN);
-            } else if (player >= 0 &&
-                       button == app->bindings.pad_previous) {
-                demo_cycle_weapon(app, player, -1);
-            } else if (player >= 0 &&
-                       button == app->bindings.pad_next) {
-                demo_cycle_weapon(app, player, 1);
+        demo_handle_controller_button(app, controller, button);
+    } else if (event->type == SDL_JOYBUTTONDOWN) {
+        demo_controller *controller = demo_controller_by_instance(
+            app, event->jbutton.which);
+        if (controller != 0 && controller->raw_fallback) {
+            demo_handle_controller_button(app, controller,
+                                          demo_raw_button(
+                                              event->jbutton.button));
+        }
+    } else if (event->type == SDL_JOYHATMOTION) {
+        demo_controller *controller = demo_controller_by_instance(
+            app, event->jhat.which);
+        if (controller != 0 && controller->raw_fallback) {
+            SDL_GameControllerButton button = SDL_CONTROLLER_BUTTON_INVALID;
+            if (event->jhat.value & SDL_HAT_UP) {
+                button = SDL_CONTROLLER_BUTTON_DPAD_UP;
+            } else if (event->jhat.value & SDL_HAT_DOWN) {
+                button = SDL_CONTROLLER_BUTTON_DPAD_DOWN;
+            } else if (event->jhat.value & SDL_HAT_LEFT) {
+                button = SDL_CONTROLLER_BUTTON_DPAD_LEFT;
+            } else if (event->jhat.value & SDL_HAT_RIGHT) {
+                button = SDL_CONTROLLER_BUTTON_DPAD_RIGHT;
             }
-        } else {
-            SDL_Keycode key = SDLK_UNKNOWN;
-            if (button == SDL_CONTROLLER_BUTTON_DPAD_UP) key = SDLK_UP;
-            else if (button == SDL_CONTROLLER_BUTTON_DPAD_DOWN) key = SDLK_DOWN;
-            else if (button == SDL_CONTROLLER_BUTTON_DPAD_LEFT) key = SDLK_LEFT;
-            else if (button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) key = SDLK_RIGHT;
-            else if (button == SDL_CONTROLLER_BUTTON_A ||
-                     button == SDL_CONTROLLER_BUTTON_START) key = SDLK_RETURN;
-            else if (button == SDL_CONTROLLER_BUTTON_B) key = SDLK_ESCAPE;
-            if (key != SDLK_UNKNOWN) {
-                demo_handle_key(app, key, SDL_SCANCODE_UNKNOWN);
-            }
+            demo_handle_controller_button(app, controller, button);
         }
     } else if (event->type == SDL_KEYDOWN && !event->key.repeat) {
+        if (app->screen == DEMO_PLAY &&
+            event->key.keysym.sym != SDLK_ESCAPE) {
+            int player = demo_keyboard_player_for_scancode(
+                app, event->key.keysym.scancode);
+            if (player >= 0) {
+                int changed = demo_activate_source(
+                    app, player, DEMO_SOURCE_KEYBOARD, 1);
+                if (changed || app->player_input[player].active_source !=
+                               DEMO_SOURCE_KEYBOARD) return;
+            }
+        }
         demo_handle_key(app, event->key.keysym.sym,
                         event->key.keysym.scancode);
     }
@@ -2662,6 +3597,9 @@ static int demo_smoke_test(const char *path)
     app.screen = DEMO_PLAY;
     app.mouse_x = 160;
     app.mouse_y = 100;
+    app.mouse_activity_x = 160;
+    app.mouse_activity_y = 100;
+    app.cursor_visible = -1;
     app.camera_zoom = 0;
     app.camera_scale = 2.0;
     app.frame_seconds = 1.0 / 60.0;
@@ -2733,6 +3671,95 @@ static int demo_benchmark(vox_u32 frames)
     return 0;
 }
 
+static int demo_input_self_test(void)
+{
+    demo_app app;
+    demo_player_input input;
+    double x;
+    double y;
+    double magnitude;
+    double unit_error;
+    memset(&app, 0, sizeof(app));
+    memset(&input, 0, sizeof(input));
+    demo_input_defaults(&app);
+    input.deadzone = 2;
+    if (demo_radial_response(3000, 3000, 0.20, 1,
+                             &x, &y, &magnitude)) {
+        fprintf(stderr, "input self-test: deadzone leak\n");
+        return 1;
+    }
+    if (!demo_radial_response(32767, 32767, 0.20, 1,
+                              &x, &y, &magnitude)) {
+        fprintf(stderr, "input self-test: full diagonal rejected\n");
+        return 2;
+    }
+    unit_error = x * x + y * y - 1.0;
+    if (unit_error < 0.0) unit_error = -unit_error;
+    if (unit_error > 0.01 || magnitude < 0.99 || magnitude > 1.0) {
+        fprintf(stderr, "input self-test: radial normalization failed\n");
+        return 3;
+    }
+    if (!demo_radial_response(9000, 0, 0.20, 1,
+                              &x, &y, &magnitude) || magnitude >= 0.20) {
+        fprintf(stderr, "input self-test: precision response failed\n");
+        return 4;
+    }
+    app.selected_tool[0] = VOX_DIGS_TOOL_PICK;
+    if (demo_weapon_aim_range(&app, 0, 0) != 8.0 ||
+        demo_weapon_aim_range(&app, 0, 1) != 30.0) {
+        fprintf(stderr, "input self-test: tool ranges failed\n");
+        return 5;
+    }
+    app.selected_tool[0] = VOX_DIGS_TOOL_NAIL_GUN;
+    if (demo_weapon_aim_range(&app, 0, 0) != 24.0) {
+        fprintf(stderr, "input self-test: projectile range failed\n");
+        return 6;
+    }
+    if (demo_input_deadzone(&input, 0) != 0.20) {
+        fprintf(stderr, "input self-test: deadzone preset failed\n");
+        return 7;
+    }
+    app.local_players = 2;
+    app.controllers[0].joystick = (SDL_Joystick *)(void *)&app;
+    app.controllers[0].claimed_player = -1;
+    demo_refresh_controller_claims(&app);
+    if (app.controllers[0].claimed_player != 1) {
+        fprintf(stderr, "input self-test: one-pad P2 claim failed\n");
+        return 8;
+    }
+    app.player_input[0].preference = DEMO_INPUT_CONTROLLER;
+    app.player_input[1].preference = DEMO_INPUT_KEYBOARD;
+    demo_refresh_controller_claims(&app);
+    if (app.controllers[0].claimed_player != 0) {
+        fprintf(stderr, "input self-test: explicit pad claim failed\n");
+        return 9;
+    }
+    demo_input_defaults(&app);
+    app.local_players = 2;
+    app.controllers[1].joystick = (SDL_Joystick *)(void *)&input;
+    app.controllers[1].claimed_player = -1;
+    demo_refresh_controller_claims(&app);
+    if (app.controllers[0].claimed_player != 0 ||
+        app.controllers[1].claimed_player != 1) {
+        fprintf(stderr, "input self-test: exclusive two-pad claims failed\n");
+        return 10;
+    }
+    if (!demo_activate_source(&app, 0, DEMO_SOURCE_CONTROLLER, 1) ||
+        app.player_input[0].active_source != DEMO_SOURCE_CONTROLLER ||
+        app.player_input[0].suppress_ticks != 1) {
+        fprintf(stderr, "input self-test: AUTO source switch failed\n");
+        return 11;
+    }
+    app.player_input[0].preference = DEMO_INPUT_KEYBOARD;
+    app.player_input[0].active_source = DEMO_SOURCE_KEYBOARD;
+    if (demo_activate_source(&app, 0, DEMO_SOURCE_CONTROLLER, 1)) {
+        fprintf(stderr, "input self-test: locked source was stolen\n");
+        return 12;
+    }
+    printf("DIGS input self-test passed\n");
+    return 0;
+}
+
 static void demo_wait_for_frame(Uint64 frequency, int frame_cap,
                                 int *last_frame_cap, Uint64 *deadline)
 {
@@ -2782,6 +3809,19 @@ int main(int argc, char **argv)
     Uint64 present_deadline = 0U;
     int last_frame_cap = -1;
     int controller_index;
+    if (argc >= 2 && strcmp(argv[1], "--render-miner-icon-xpm") == 0) {
+        const char *path = argc >= 3 ? argv[2] : "digs-miner.xpm";
+        if (digs_miner_write_icon_xpm(path) != VOX_OK) {
+            fprintf(stderr, "could not write canonical miner icon: %s\n",
+                    path);
+            return 1;
+        }
+        printf("DIGS canonical miner icon written: %s\n", path);
+        return 0;
+    }
+    if (argc >= 2 && strcmp(argv[1], "--input-self-test") == 0) {
+        return demo_input_self_test();
+    }
     if (argc >= 2 && strcmp(argv[1], "--smoke-test") == 0) {
         const char *path = argc >= 3 ? argv[2] : "/tmp/digs-demo-smoke.ppm";
         demo_prepare_targets();
@@ -2813,6 +3853,9 @@ int main(int argc, char **argv)
     app.seed = 0x564F5831U;
     app.mouse_x = 160;
     app.mouse_y = 100;
+    app.mouse_activity_x = 160;
+    app.mouse_activity_y = 100;
+    app.cursor_visible = -1;
     app.camera_zoom = DEMO_CAMERA_ZOOM_DEFAULT;
     app.camera_scale = (double)DEMO_CAMERA_ZOOM_DEFAULT;
     app.frame_seconds = 1.0 / 60.0;
@@ -2824,6 +3867,7 @@ int main(int argc, char **argv)
     app.options.damage_numbers = 1;
     app.options.damage_number_size = 0;
     app.options.fx_profile = 1;
+    demo_input_defaults(&app);
     demo_bindings_default(&app);
     for (controller_index = 0;
          controller_index < (int)DEMO_CONTROLLER_MAX;
@@ -2836,10 +3880,12 @@ int main(int argc, char **argv)
         fprintf(stderr, "SDL init failed: %s\n", SDL_GetError());
         return 2;
     }
+    (void)demo_load_input_settings(&app);
     /* Keyboard play must remain available even when an SDL platform backend
      * cannot initialize optional controller or haptic services. */
     (void)SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
     (void)SDL_InitSubSystem(SDL_INIT_HAPTIC);
+    demo_load_controller_mappings();
     (void)SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
     (void)SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     app.window = SDL_CreateWindow("DIGS v0.0.2 Demo",
@@ -2924,6 +3970,7 @@ int main(int argc, char **argv)
             demo_handle_event(&app, &event);
         }
         (void)demo_sync_hardware_mouse(&app);
+        demo_update_cursor_visibility(&app);
         while (accumulator >= 1.0 / (double)DEMO_SIM_HZ &&
                catchup < DEMO_MAX_CATCHUP) {
             demo_tick(&app);
@@ -2959,6 +4006,8 @@ int main(int argc, char **argv)
         demo_wait_for_frame(frequency, frame_cap, &last_frame_cap,
                             &present_deadline);
     }
+    (void)demo_save_input_settings(&app);
+    (void)SDL_ShowCursor(SDL_ENABLE);
     demo_scripts_close(&app);
     demo_close_controllers(&app);
     demo_audio_close(&app);

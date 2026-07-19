@@ -23,21 +23,27 @@ Useful tester commands
   ./bin/vox_headless              minimal voxel-kernel scenario
   ./bin/digs_headless             deterministic DIGS match scenario
   ./bin/vox_render_demo out.ppm   software-renderer image test
+  ./bin/digs_demo --input-self-test
+                                  controller normalization/range self-test
 
 Smoke images, benchmark reports, and cockpit packets go to qa/out/. Open
 qa/README.md for the feedback workflow. The cockpit requires the free xleak
 command-line spreadsheet reader to inspect .xlsx feedback workbooks.
 
 Keep bin/, bin/share, share/, and libexec/ in their extracted layout. The
-bin/share link makes the executable-relative Lua path resolve to share/digs/.
-CG-README.TXT documents controller assignment, two-player controls, rope use,
-the Miner's Index, accessibility options, script reload, and the 51-point
-manual acceptance pass.
+bin/share link makes executable-relative data resolve under share/digs/. This
+includes the Lua catalog, the pinned controller mapping database, and the
+canonical miner icon. CG-README.TXT documents AUTO/keyboard/controller modes,
+Logitech F310 X/D-mode checks, radial aim, two-player ownership, rope use, map
+identity, the Miner's Index, accessibility options, script reload, and the
+51-point manual acceptance pass.
 
 The evidence/ directory contains the unmodified package-time test streams,
 exit statuses, smoke images, build profile, and an explanation of their
 provenance. SBOM.spdx.json inventories this exact bundle and records SDL2 as
-an external system library rather than bundled code.
+an external system library rather than bundled code. SDL GameControllerDB is
+bundled data; its pinned identity and zlib notice are recorded in
+THIRD_PARTY.md and LICENSES/SDL_GameControllerDB.txt.
 
 Licensing and source
 --------------------

@@ -48,6 +48,16 @@ Match setup provides one or two local players, zero through two bots,
 Free-for-All or Miners vs Machines, friendly fire, three map styles, a visible
 seed, and three arsenal profiles. Four fighters is the current match maximum.
 
+The map styles now have separate deterministic topology rather than sharing one
+surface with different materials:
+
+  COAL RIDGE       Broad rolling ground, coal seams, sand drifts, sparse rails.
+  DEEPWORKS        Connected chambers, open shafts, firedamp, natural anchors.
+  FURNACE YARD     Industrial terraces, broken gantries, contained hot pockets.
+
+Suspended rope rails and gantries sit above the walk lane. Their hangers run
+upward, so the old surface-to-beam columns no longer wall off horizontal travel.
+
 Every spawn receives a five-second shield. Firing or using a weapon ends that
 player's protection early.
 
@@ -68,15 +78,35 @@ Controller menus:
   A or Start        Select.
   B                 Go back.
 
-Controller assignment is automatic and deterministic:
+Open OPTIONS, then INPUT & CONTROLLER, to choose AUTO, KEYBOARD, or CONTROLLER
+for each player. P1's keyboard mode includes the mouse. Menus remain available
+from keyboard or controller regardless of gameplay ownership.
 
-  - With one local player, the first connected controller drives P1.
-  - With two local players and one controller, keyboard drives P1 and the
-    controller drives P2.
-  - With two local players and two controllers, the first two controllers
-    drive P1 and P2 respectively.
-  - Disconnecting an assigned controller pauses the match safely. Reconnect
-    it, then resume to reclaim the slot.
+AUTO is the default. It switches only after deliberate input and uses a short
+hysteresis so stick noise cannot continually steal control. A source change
+clears held action edges. Keyboard/mouse and controller gameplay input are never
+mixed for one player, so each local player receives exactly one crosshair.
+
+Default controller claims remain deterministic:
+
+  - With one local player, the first pad is available to P1 AUTO.
+  - With two local players and one pad, P1 defaults to keyboard/mouse and the
+    pad is available to P2.
+  - With two local players and two pads, P1 and P2 receive separate pads.
+  - AUTO falls back to keyboard when its pad disappears. A player locked to
+    CONTROLLER pauses safely on disconnect instead of accepting stray input.
+
+INPUT & CONTROLLER also provides Low/Normal/High sensitivity, Auto/Small/
+Normal/Large radial deadzones, Off/Low/Medium aim slowdown, calibration, and
+input-default restoration. These preferences are stored in DIGS's per-user SDL
+settings directory and survive a restart. Keep all sticks still during the
+750 ms calibration sample.
+
+DIGS loads the bundled SDL mapping database before device enumeration. Known
+pads use SDL's logical layout; unknown devices open through the raw joystick
+fallback. For the Logitech F310, test both rear-switch positions: unplug it,
+select X or D, reconnect it, calibrate with the sticks centered, and record the
+mode in QA feedback.
 
 The CONTROLS screen can rebind both keyboard layouts and controller buttons
 for this run. Select a row with Enter/A, press the new input, and use RESTORE
@@ -109,16 +139,22 @@ Player 2 keyboard:
   I / J / K / L     Aim up/left/down/right.
   , / .             Previous/next allowed weapon.
 
-Xbox-style controller defaults:
+Xbox-style and normalized controller defaults:
 
   Left stick        Move; vertical input reels an attached rope.
-  Right stick       Aim.
+  Right stick       Radial player-relative aim.
   A                 Jump.
   X                 Steam pack.
   Left bumper       Hold/release rope.
   Right bumper/RT   Fire/use selected tool.
   Y / B             Previous/next allowed weapon during play.
   Start             Pause.
+
+Right-stick deadzone is circular rather than per-axis. Aim stays attached to
+the moving miner when the stick centers, uses the selected response curve, and
+limits the visible reach to the current tool: 8 cells for close tools, 24 for
+guns/thrown weapons, and 30 for the rope. Low aim slowdown is the default; it
+slows travel near a visible target but never snaps or changes the shot vector.
 
 Global match keys:
 
@@ -138,8 +174,9 @@ swing; P1 W/S or a controller's vertical left-stick input changes rope length.
 Release the rope action to detach while preserving momentum. A destroyed
 anchor breaks the rope, so blasts can cut both escape routes and bot routes.
 
-The generated maps include extra rock and beam anchors. You can also use the
-terrain tools to open, close, or reshape traversal routes.
+The generated maps include suspended rail, gantry, and natural-rock anchors
+within rope reach without placing solid legs across the walk lane. You can also
+use terrain tools to open, close, or reshape traversal routes.
 
 
 6. COMBAT, EFFECTS, AND ACCESSIBILITY
@@ -202,14 +239,18 @@ Run these from the extracted demo directory:
 
   ./smoke-test.sh
   ./benchmark.sh 240
+  ./bin/digs_demo --input-self-test
+  ./bin/digs_demo --render-miner-icon-xpm qa/out/digs-miner-test.xpm
   ./bin/vox_headless
   ./bin/digs_headless
   ./bin/vox_render_demo qa/out/vox-render-test.ppm
 
 The smoke test is non-windowed and writes qa/out/digs-demo-smoke.ppm. The
-benchmark reports Compatibility, Balanced, and Showcase CPU Lightfield
-results. Hashes must repeat for the same frozen build; use the values printed
-by this archive's evidence logs rather than old v0.0.1 values.
+input self-test checks radial normalization and weapon-aware aim ranges. The
+icon command re-renders the same miner emitter used in play; compare it with
+share/digs/icons/digs-miner.xpm. The benchmark reports Compatibility,
+Balanced, and Showcase CPU Lightfield results. Hashes must repeat for the same
+frozen build; use this archive's evidence logs rather than old v0.0.1 values.
 
 The package-time versions of these checks, CTest, Cargo tests, script
 validation, and raw exit statuses are under evidence/.
@@ -221,9 +262,11 @@ validation, and raw exit statuses are under evidence/.
 Please check at least these paths:
 
   [ ] Keyboard-only P1 can cross each map, jump, steam, rope, aim, and fire.
-  [ ] One controller works for P1; one pad plus keyboard works for P1/P2.
-  [ ] Two controllers remain isolated to their assigned local players.
-  [ ] Controller disconnect pauses safely and reconnect restores control.
+  [ ] AUTO/KEYBOARD/CONTROLLER modes never mix gameplay sources or crosshairs.
+  [ ] Logitech F310 X and D modes both work after centered calibration.
+  [ ] One pad defaults to P2 in two-player play; two pads remain isolated.
+  [ ] AUTO pad loss falls back safely; locked CONTROLLER loss pauses safely.
+  [ ] Circular deadzone, response presets, aim slowdown, and tool reach agree.
   [ ] Rebinding, conflict swaps, and RESTORE DEFAULTS work for the run.
   [ ] Rope attaches only to valid solid material, reels, swings, detaches,
       preserves release momentum, and breaks when its anchor is destroyed.
@@ -231,7 +274,9 @@ Please check at least these paths:
   [ ] Free-for-All and Miners vs Machines honor friendly-fire selection.
   [ ] Bot roaming/searching/attacking/retreating behavior is observable.
   [ ] Camera frames both humans and remains smooth at every frame cap.
-  [ ] Hardware pointer, software cursor, and P1 world aim stay aligned.
+  [ ] Hardware pointer, sole software reticle, and P1 world aim stay aligned.
+  [ ] Coal Ridge, Deepworks, and Furnace Yard have visibly distinct topology.
+  [ ] Suspended anchors remain reachable and never wall off the walk lane.
   [ ] Each FX profile changes density without changing terrain or damage.
   [ ] Repeated explosions and deaths visibly vary and collapse supports.
   [ ] Gore, flashes, camera shake, and damage-number options work.
@@ -322,6 +367,7 @@ The matching Corresponding Source archive is distributed beside it.
 
 v0.0.2 is still the Linux CPU-software vertical slice. Windows, macOS,
 historical operating systems, a GPU renderer, network multiplayer, a complete
-rigid-body solver, persistent input settings, and final competitive bot
-quality remain planned/evidence-gated work. Record only what you observe and
-do not infer GPU acceleration from the laptop containing a GTX 1660 Ti.
+rigid-body solver, device-specific remapping wizards for every unknown pad, and
+final competitive bot quality remain planned/evidence-gated work. Record only
+what you observe and do not infer GPU acceleration from the laptop containing
+a GTX 1660 Ti.

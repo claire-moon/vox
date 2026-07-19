@@ -11,6 +11,7 @@ OUTPUT=${1:-"$ROOT/qa/out/digs-demo-smoke.ppm"}
 vox_require_executable "$BINARY"
 vox_require_runtime_libraries "$BINARY"
 mkdir -p -- "$(dirname -- "$OUTPUT")"
+"$BINARY" --input-self-test
 "$BINARY" --smoke-test "$OUTPUT"
 [[ -s "$OUTPUT" ]] || vox_die "smoke test did not create $OUTPUT"
 printf 'Smoke image: %s\n' "$OUTPUT"

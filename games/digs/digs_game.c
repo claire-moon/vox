@@ -211,83 +211,258 @@ static void digs_init_anatomy(vox_digs_match *match, vox_u16 player)
     match->clot_ticks[player] = 0U;
 }
 
+static vox_u32 digs_abs_difference(vox_u32 left, vox_u32 right)
+{
+    return left > right ? left - right : right - left;
+}
+
+static vox_u32 digs_lerp_height(vox_u32 left, vox_u32 right,
+                                vox_u32 offset, vox_u32 span)
+{
+    if (span == 0U || offset >= span) {
+        return right;
+    }
+    if (right >= left) {
+        return left + ((right - left) * offset) / span;
+    }
+    return left - ((left - right) * offset) / span;
+}
+
+static vox_u32 digs_rolling_height(vox_u32 seed, vox_u32 x,
+                                   vox_u32 span, vox_u32 base,
+                                   vox_u32 radius, vox_u32 salt)
+{
+    vox_u32 anchor = x / span;
+    vox_u32 offset = x % span;
+    vox_u32 range = radius * 2U + 1U;
+    vox_u32 left_noise = digs_noise(seed, anchor, 0U, salt);
+    vox_u32 right_noise = digs_noise(seed, anchor + 1U, 0U, salt);
+    vox_u32 left = base + (left_noise % range) - radius;
+    vox_u32 right = base + (right_noise % range) - radius;
+    return digs_lerp_height(left, right, offset, span);
+}
+
+static vox_u32 digs_furnace_level(vox_u32 seed, vox_u32 sector)
+{
+    return VOX_WORLD_HEIGHT / 2U - 4U +
+           (digs_noise(seed, sector, 0U, 413U) % 4U) * DIGS_SCALE(2U);
+}
+
 static vox_u32 digs_surface_y(vox_u32 seed, vox_u32 x, vox_u16 map_style)
 {
-    vox_u32 anchor = x / DIGS_SCALE(8U);
-    vox_u32 offset = x % DIGS_SCALE(8U);
-    vox_u32 left_noise = digs_noise(seed, anchor, 0U,
-                                    (vox_u32)map_style + 1U);
-    vox_u32 right_noise = digs_noise(seed, anchor + 1U, 0U,
-                                     (vox_u32)map_style + 1U);
-    vox_u32 amplitude = VOX_WORLD_HEIGHT / 16U;
-    vox_u32 left = VOX_WORLD_HEIGHT / 2U +
-                   (left_noise % (amplitude + 1U));
-    vox_u32 right = VOX_WORLD_HEIGHT / 2U +
-                    (right_noise % (amplitude + 1U));
-    if (right >= left) {
-        return left + ((right - left) * offset) / DIGS_SCALE(8U);
+    if (map_style == VOX_DIGS_MAP_COAL_RIDGE) {
+        return digs_rolling_height(seed, x, DIGS_SCALE(16U),
+                                   VOX_WORLD_HEIGHT / 2U + DIGS_SCALE(2U),
+                                   DIGS_SCALE(4U), 101U);
     }
-    return left - ((left - right) * offset) / DIGS_SCALE(8U);
+    if (map_style == VOX_DIGS_MAP_DEEPWORKS) {
+        return digs_rolling_height(seed, x, DIGS_SCALE(12U),
+                                   VOX_WORLD_HEIGHT / 2U + 1U,
+                                   DIGS_SCALE(4U), 211U);
+    }
+    {
+        vox_u32 span = DIGS_SCALE(16U);
+        vox_u32 blend = DIGS_SCALE(4U);
+        vox_u32 sector = x / span;
+        vox_u32 offset = x % span;
+        vox_u32 current = digs_furnace_level(seed, sector);
+        vox_u32 previous = sector == 0U ? current :
+                           digs_furnace_level(seed, sector - 1U);
+        if (offset < blend) {
+            return digs_lerp_height(previous, current, offset, blend);
+        }
+        return current;
+    }
+}
+
+static vox_u32 digs_coal_seam_depth(vox_u32 seed, vox_u32 x,
+                                    vox_u32 seam)
+{
+    vox_u32 span = DIGS_SCALE(12U);
+    vox_u32 anchor = x / span;
+    vox_u32 offset = x % span;
+    vox_u32 base = DIGS_SCALE(5U) + seam * DIGS_SCALE(8U);
+    vox_u32 left = base + digs_noise(seed, anchor, seam, 307U) %
+                          DIGS_SCALE(3U);
+    vox_u32 right = base + digs_noise(seed, anchor + 1U, seam, 307U) %
+                           DIGS_SCALE(3U);
+    return digs_lerp_height(left, right, offset, span);
+}
+
+static vox_u32 digs_sand_drift_depth(vox_u32 seed, vox_u32 x)
+{
+    vox_u32 span = DIGS_SCALE(10U);
+    vox_u32 segment = x / span;
+    vox_u32 offset = x % span;
+    vox_u32 center;
+    vox_u32 distance;
+    if (((segment + seed) % 3U) != 0U) {
+        return 0U;
+    }
+    center = DIGS_SCALE(3U) +
+             digs_noise(seed, segment, 0U, 349U) % DIGS_SCALE(4U);
+    distance = digs_abs_difference(offset, center);
+    if (distance > DIGS_SCALE(3U)) {
+        return 0U;
+    }
+    return 1U + (DIGS_SCALE(3U) - distance) / DIGS_SCALE(2U);
+}
+
+static vox_u32 digs_deep_tunnel_y(vox_u32 seed, vox_u32 x)
+{
+    return digs_rolling_height(seed, x, DIGS_SCALE(16U),
+                               VOX_WORLD_HEIGHT / 2U + DIGS_SCALE(14U),
+                               DIGS_SCALE(2U), 503U);
+}
+
+static int digs_inside_ellipse(vox_u32 x, vox_u32 y, vox_u32 center_x,
+                               vox_u32 center_y, vox_u32 radius_x,
+                               vox_u32 radius_y)
+{
+    vox_u32 delta_x = digs_abs_difference(x, center_x);
+    vox_u32 delta_y = digs_abs_difference(y, center_y);
+    vox_u32 left;
+    vox_u32 right;
+    if (delta_x > radius_x || delta_y > radius_y) {
+        return 0;
+    }
+    left = delta_x * delta_x * radius_y * radius_y +
+           delta_y * delta_y * radius_x * radius_x;
+    right = radius_x * radius_x * radius_y * radius_y;
+    return left <= right;
+}
+
+static int digs_deep_void(vox_u32 seed, vox_u32 x, vox_u32 y,
+                          vox_u32 surface)
+{
+    vox_u32 tunnel_y = digs_deep_tunnel_y(seed, x);
+    vox_u32 center;
+    if (x > DIGS_SCALE(3U) && x + DIGS_SCALE(3U) < VOX_WORLD_WIDTH &&
+        digs_abs_difference(y, tunnel_y) <= DIGS_SCALE(2U)) {
+        return 1;
+    }
+    for (center = DIGS_SCALE(16U); center < VOX_WORLD_WIDTH;
+         center += DIGS_SCALE(32U)) {
+        vox_u32 chamber_y = digs_deep_tunnel_y(seed, center);
+        if (digs_inside_ellipse(x, y, center, chamber_y,
+                                DIGS_SCALE(7U), DIGS_SCALE(5U))) {
+            return 1;
+        }
+        if (digs_abs_difference(x, center) <= DIGS_SCALE(1U) &&
+            y >= surface && y <= chamber_y) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int digs_deep_firedamp(vox_u32 seed, vox_u32 x, vox_u32 y)
+{
+    vox_u32 center;
+    vox_u32 pocket_index = 0U;
+    for (center = DIGS_SCALE(16U); center < VOX_WORLD_WIDTH;
+         center += DIGS_SCALE(32U)) {
+        vox_u32 chamber_y = digs_deep_tunnel_y(seed, center);
+        vox_u32 shift = digs_noise(seed, pocket_index, 0U, 557U) %
+                        DIGS_SCALE(5U);
+        vox_u32 pocket_x = center + shift - DIGS_SCALE(2U);
+        vox_u32 pocket_y = chamber_y - DIGS_SCALE(3U);
+        if (digs_inside_ellipse(x, y, pocket_x, pocket_y,
+                                DIGS_SCALE(2U), DIGS_SCALE(1U))) {
+            return 1;
+        }
+        pocket_index++;
+    }
+    return 0;
+}
+
+static int digs_furnace_pocket(vox_u32 seed, vox_u32 x, vox_u32 y,
+                               int *hot)
+{
+    vox_u32 pocket;
+    for (pocket = 0U; pocket < 2U; ++pocket) {
+        vox_u32 nominal_x = pocket == 0U ? DIGS_SCALE(32U) :
+                                          DIGS_SCALE(96U);
+        vox_u32 jitter = digs_noise(seed, pocket, 0U, 601U) %
+                         DIGS_SCALE(5U);
+        vox_u32 center_x = nominal_x + jitter - DIGS_SCALE(2U);
+        vox_u32 center_y = digs_surface_y(seed, center_x,
+                                          VOX_DIGS_MAP_FURNACE_YARD) +
+                           DIGS_SCALE(6U);
+        if (digs_inside_ellipse(x, y, center_x, center_y,
+                                DIGS_SCALE(4U), DIGS_SCALE(3U))) {
+            *hot = y >= center_y + DIGS_SCALE(1U);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static vox_u16 digs_map_material(vox_u16 map_style, vox_u32 seed,
                                   vox_u32 x, vox_u32 y)
 {
     vox_u32 surface = digs_surface_y(seed, x, map_style);
+    vox_u32 depth = y >= surface ? y - surface : 0U;
     vox_u32 noise = digs_noise(seed, x, y, (vox_u32)map_style + 17U);
     if (y >= VOX_WORLD_HEIGHT - DIGS_SCALE(2U)) {
         return VOX_MAT_BEDROCK;
     }
+    if (y < surface) {
+        return VOX_MAT_AIR;
+    }
     if (map_style == VOX_DIGS_MAP_COAL_RIDGE) {
-        if (y < surface) {
-            return VOX_MAT_AIR;
-        }
-        if (y == surface) {
-            return (noise % 9U) < 2U ? VOX_MAT_SAND : VOX_MAT_BIOMASS;
-        }
-        if (y <= surface + DIGS_SCALE(2U) && (noise % 31U) == 0U) {
+        vox_u32 drift_depth = digs_sand_drift_depth(seed, x);
+        if (depth < drift_depth) {
             return VOX_MAT_SAND;
         }
-        if (y > surface + DIGS_SCALE(3U) && (noise % 17U) == 0U) {
+        if (y == surface) {
+            return VOX_MAT_BIOMASS;
+        }
+        if (depth >= DIGS_SCALE(3U) &&
+            (digs_abs_difference(depth,
+                                  digs_coal_seam_depth(seed, x, 0U)) <= 1U ||
+             digs_abs_difference(depth,
+                                  digs_coal_seam_depth(seed, x, 1U)) <= 1U)) {
             return VOX_MAT_COAL;
         }
-        return y > surface + DIGS_SCALE(20U) ? VOX_MAT_STONE : VOX_MAT_SOIL;
+        return depth > DIGS_SCALE(20U) ? VOX_MAT_STONE : VOX_MAT_SOIL;
     }
     if (map_style == VOX_DIGS_MAP_DEEPWORKS) {
-        if (y < surface) {
-            return VOX_MAT_AIR;
-        }
-        if (y > surface + DIGS_SCALE(7U) &&
-            y < VOX_WORLD_HEIGHT - DIGS_SCALE(5U) &&
-            (noise % 19U) == 0U) {
-            return (digs_noise(seed, x, y, 91U) % 5U) == 0U ?
-                   VOX_MAT_FIREDAMP : VOX_MAT_AIR;
+        if (digs_deep_void(seed, x, y, surface)) {
+            return digs_deep_firedamp(seed, x, y) ? VOX_MAT_FIREDAMP :
+                                                   VOX_MAT_AIR;
         }
         if (y == surface) {
             return VOX_MAT_SOIL;
         }
-        if ((noise % 13U) == 0U) {
+        if (depth > DIGS_SCALE(3U) &&
+            digs_abs_difference(depth,
+                                 digs_coal_seam_depth(seed ^ 0x51ed270bU,
+                                                      x, 1U)) <= 1U) {
             return VOX_MAT_COAL;
         }
         return VOX_MAT_STONE;
     }
-    if ((x % DIGS_SCALE(24U)) < DIGS_SCALE(2U) &&
-        y + DIGS_SCALE(12U) >= surface && y <= surface) {
-        return VOX_MAT_METAL;
-    }
-    if (y >= surface) {
-        if (y == surface && (x % DIGS_SCALE(12U)) < DIGS_SCALE(7U)) {
-            return VOX_MAT_METAL;
+    {
+        int hot = 0;
+        if (digs_furnace_pocket(seed, x, y, &hot)) {
+            return hot ? VOX_MAT_LAVA : VOX_MAT_AIR;
         }
-        if (y == surface && (x % DIGS_SCALE(12U)) >= DIGS_SCALE(9U)) {
+    }
+    if (y == surface) {
+        if ((x % DIGS_SCALE(16U)) >= DIGS_SCALE(12U)) {
             return VOX_MAT_SAND;
         }
-        if ((noise % 23U) == 0U) {
-            return VOX_MAT_COAL;
-        }
-        return y > surface + DIGS_SCALE(14U) ? VOX_MAT_STONE : VOX_MAT_SOIL;
+        return VOX_MAT_METAL;
     }
-    return VOX_MAT_AIR;
+    if ((x % DIGS_SCALE(16U)) < DIGS_SCALE(1U) &&
+        depth < DIGS_SCALE(8U)) {
+        return VOX_MAT_METAL;
+    }
+    if (depth > DIGS_SCALE(12U) && (noise % 19U) == 0U) {
+        return VOX_MAT_COAL;
+    }
+    return depth > DIGS_SCALE(14U) ? VOX_MAT_STONE : VOX_MAT_SOIL;
 }
 
 static vox_result digs_set_column(vox_world *world, vox_u32 x, vox_u32 y,
@@ -302,31 +477,81 @@ static vox_result digs_set_column(vox_world *world, vox_u32 x, vox_u32 y,
     return VOX_OK;
 }
 
-static vox_result digs_add_rope_scaffolds(vox_world *world,
-                                          vox_u16 map_style,
-                                          vox_u32 seed)
+static vox_result digs_add_metal_span(vox_world *world, vox_u32 left,
+                                      vox_u32 right, vox_u32 y)
+{
+    vox_u32 x;
+    if (right >= VOX_WORLD_WIDTH || y >= VOX_WORLD_HEIGHT || left > right) {
+        return VOX_ERR_INVALID;
+    }
+    for (x = left; x <= right; ++x) {
+        if (digs_set_column(world, x, y, VOX_MAT_METAL) != VOX_OK) {
+            return VOX_ERR_INVALID;
+        }
+    }
+    return VOX_OK;
+}
+
+static vox_result digs_add_upward_hanger(vox_world *world, vox_u32 x,
+                                         vox_u32 rail_y, vox_u32 height)
+{
+    vox_u32 y;
+    vox_u32 top = rail_y > height ? rail_y - height : 1U;
+    for (y = top; y < rail_y; ++y) {
+        if (digs_set_column(world, x, y, VOX_MAT_METAL) != VOX_OK) {
+            return VOX_ERR_INVALID;
+        }
+    }
+    return VOX_OK;
+}
+
+static vox_result digs_add_overhead_fixtures(vox_world *world,
+                                             vox_u16 map_style,
+                                             vox_u32 seed)
 {
     vox_u32 center;
-    for (center = 24U; center + 12U < VOX_WORLD_WIDTH; center += 48U) {
-        vox_u32 base_y = digs_surface_y(seed, center, map_style);
-        vox_u32 top_y = base_y > DIGS_SCALE(10U) ?
-                        base_y - DIGS_SCALE(10U) : 2U;
-        vox_u32 x;
-        vox_u32 y;
-        for (x = center - DIGS_SCALE(5U);
-             x <= center + DIGS_SCALE(5U); ++x) {
-            if (digs_set_column(world, x, top_y, VOX_MAT_METAL) != VOX_OK) {
+    vox_u32 fixture = 0U;
+    for (center = DIGS_SCALE(16U);
+         center + DIGS_SCALE(8U) < VOX_WORLD_WIDTH;
+         center += DIGS_SCALE(24U)) {
+        vox_u32 surface = digs_surface_y(seed, center, map_style);
+        vox_u32 clearance = DIGS_SCALE(9U) +
+                            digs_noise(seed, fixture, map_style, 701U) %
+                            (DIGS_SCALE(3U) + 1U);
+        vox_u32 rail_y = surface > clearance ? surface - clearance : 2U;
+        vox_u32 half_width = map_style == VOX_DIGS_MAP_FURNACE_YARD ?
+                             DIGS_SCALE(8U) : DIGS_SCALE(7U);
+        vox_u32 gap = map_style == VOX_DIGS_MAP_DEEPWORKS ?
+                      DIGS_SCALE(1U) : DIGS_SCALE(2U);
+        vox_u32 left = center - half_width;
+        vox_u32 right = center + half_width;
+        vox_u32 hanger_height = DIGS_SCALE(2U) +
+                                digs_noise(seed, fixture, 0U, 733U) %
+                                (DIGS_SCALE(2U) + 1U);
+        if (digs_add_metal_span(world, left, center - gap, rail_y) != VOX_OK ||
+            digs_add_metal_span(world, center + gap, right, rail_y) != VOX_OK ||
+            digs_add_upward_hanger(world, left, rail_y,
+                                    hanger_height) != VOX_OK ||
+            digs_add_upward_hanger(world, right, rail_y,
+                                    hanger_height) != VOX_OK) {
+            return VOX_ERR_INVALID;
+        }
+        if (map_style == VOX_DIGS_MAP_FURNACE_YARD) {
+            vox_u32 truss_y = rail_y > DIGS_SCALE(3U) ?
+                              rail_y - DIGS_SCALE(3U) : 1U;
+            if (digs_add_metal_span(world, center - DIGS_SCALE(3U),
+                                    center + DIGS_SCALE(2U),
+                                    truss_y) != VOX_OK ||
+                digs_add_upward_hanger(world,
+                                        center - DIGS_SCALE(3U), rail_y,
+                                        DIGS_SCALE(3U)) != VOX_OK ||
+                digs_add_upward_hanger(world,
+                                        center + DIGS_SCALE(2U), rail_y,
+                                        DIGS_SCALE(3U)) != VOX_OK) {
                 return VOX_ERR_INVALID;
             }
         }
-        for (y = top_y; y < base_y; ++y) {
-            if (digs_set_column(world, center - DIGS_SCALE(5U), y,
-                                VOX_MAT_METAL) != VOX_OK ||
-                digs_set_column(world, center + DIGS_SCALE(5U), y,
-                                VOX_MAT_METAL) != VOX_OK) {
-                return VOX_ERR_INVALID;
-            }
-        }
+        fixture++;
     }
     return VOX_OK;
 }
@@ -349,7 +574,7 @@ vox_result vox_digs_generate_map(vox_world *world, vox_u16 map_style,
             }
         }
     }
-    if (digs_add_rope_scaffolds(world, map_style, seed) != VOX_OK) {
+    if (digs_add_overhead_fixtures(world, map_style, seed) != VOX_OK) {
         return VOX_ERR_INVALID;
     }
     return vox_world_sleep_all(world);

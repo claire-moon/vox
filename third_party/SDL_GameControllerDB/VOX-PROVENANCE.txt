@@ -1,0 +1,49 @@
+SDL GameControllerDB intake record
+==================================
+
+Canonical project:
+  https://github.com/mdqinc/SDL_GameControllerDB
+
+Pinned upstream commit:
+  8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5
+
+Upstream commit date:
+  2026-07-15T17:29:38-04:00
+
+Upstream file URLs:
+  https://raw.githubusercontent.com/mdqinc/SDL_GameControllerDB/8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5/gamecontrollerdb.txt
+  https://raw.githubusercontent.com/mdqinc/SDL_GameControllerDB/8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5/LICENSE
+
+Upstream Git blob identities:
+  gamecontrollerdb.txt  d0686ea57f676383bfec7e2c2cfbb21a7e5ec4c6
+  LICENSE               23abb73f2b67d1f5b5b9b4d6c949654d525173bb
+
+Downloaded-file SHA-256 checksums:
+  dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0  gamecontrollerdb.txt
+  97f35b302b361680ec1e891e95d2d52097bb95abff361434916d99dc1305f127  LICENSE
+
+Vendored-file SHA-256 checksums:
+  dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0  gamecontrollerdb.txt
+  7826eca0a0f7e591f38dd844e207a200aac81a59b20d8a30c3af8c6282af13e6  LICENSE
+
+License:
+  Zlib
+
+Local modifications:
+  gamecontrollerdb.txt is byte-for-byte upstream. The license wording is
+  unchanged; trailing spaces on three lines and one empty line after the final
+  notice were removed so repository text files pass whitespace validation and
+  end with one newline. This provenance record and build/package integration
+  are VOX additions.
+
+Distribution:
+  The database is copied into share/digs/controllers/gamecontrollerdb.txt
+  for SDL2 to load before controller enumeration. The license is reproduced
+  in LICENSES/SDL_GameControllerDB.txt in binary bundles. Corresponding Source
+  archives retain this complete vendored directory.
+
+Update procedure:
+  Pin a reviewed upstream commit, replace both upstream files without local
+  edits, recompute SHA-256 and Git blob identities, update this record plus
+  THIRD_PARTY.md and the package integrity assertion, and repeat controller
+  mapping and license/SBOM acceptance checks.

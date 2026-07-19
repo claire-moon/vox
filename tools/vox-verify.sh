@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 BUILD_DIR=${VOX_BUILD_DIR:-/tmp/vox-verify-build}
 CARGO_TARGET_DIR=${VOX_CARGO_TARGET_DIR:-/tmp/vox-cargo-target}
 SMOKE_IMAGE=${VOX_SMOKE_IMAGE:-/tmp/vox-digs-demo-smoke.ppm}
+MINER_ICON=${VOX_MINER_ICON:-/tmp/vox-digs-miner.xpm}
 NASM_ACCEL=${VOX_NASM_ACCEL:-AUTO}
 
 if [ "$NASM_ACCEL" = AUTO ]; then
@@ -34,5 +35,8 @@ ctest --test-dir "$BUILD_DIR" --output-on-failure
 CARGO_TARGET_DIR="$CARGO_TARGET_DIR" cargo test --manifest-path "$ROOT/Cargo.toml" --workspace
 "$BUILD_DIR/vox_headless"
 "$BUILD_DIR/digs_headless"
+"$BUILD_DIR/digs_demo" --input-self-test
+"$BUILD_DIR/digs_demo" --render-miner-icon-xpm "$MINER_ICON"
+cmp "$MINER_ICON" "$BUILD_DIR/share/digs/icons/digs-miner.xpm"
 "$BUILD_DIR/digs_demo" --smoke-test "$SMOKE_IMAGE"
 test -s "$SMOKE_IMAGE"

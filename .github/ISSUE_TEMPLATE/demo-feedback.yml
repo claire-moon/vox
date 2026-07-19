@@ -41,14 +41,14 @@ body:
     id: platform
     attributes:
       label: Platform tuple
-      description: OS, CPU, GPU/driver or CPU software, SDL version, and display/audio path.
+      description: OS, CPU, GPU/driver or CPU software, SDL version, display/audio path, and controller model plus X/D connection mode when relevant.
     validations:
       required: true
   - type: input
     id: scenario
     attributes:
       label: Scenario
-      description: Map, seed, bot count, arsenal, weapon, and relevant options.
+      description: Map, seed, bot count, arsenal, weapon, P1/P2 input ownership, and relevant options.
     validations:
       required: true
   - type: textarea
