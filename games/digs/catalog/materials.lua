@@ -12,7 +12,7 @@ vox.define("material", "material.air", {
 vox.define("material", "material.bedrock", {
     order = 101, title = "BEDROCK", category = "MATERIALS",
     summary = "The immutable boundary and final structural anchor of a generated mine.",
-    detail = "Bedrock cannot be mined, melted, displaced, or destroyed by shipped tools. It terminates blast excavation and provides a permanent rope anchor. The bottom two terrain rows are bedrock so collapse and rising lava retain a bounded world.",
+    detail = "Bedrock cannot be mined, melted, displaced, or destroyed by shipped tools. It terminates blast excavation and provides a permanent rope anchor. The dense desktop arena uses four bottom rows of bedrock so collapse and rising lava retain a bounded world.",
     tags = "solid,anchor,indestructible",
     values = { conductivity = 65535, density = 65535, flags = 16, id = 1, ignition_q16 = 0, melt_q16 = 0, strength = 65535 }
 })
@@ -68,7 +68,7 @@ vox.define("material", "material.water", {
 vox.define("material", "material.lava", {
     order = 108, title = "LAVA", category = "MATERIALS",
     summary = "Rising emissive fluid that burns fighters and turns the match into a shrinking route puzzle.",
-    detail = "Lava flows slowly, emits local light, ignites fuel, cauterizes flesh, and fries an unshielded fighter on contact. Water cools it into stone while generating steam and smoke. Match lava rises after the configured delay, invalidating camps and low tunnels.",
+    detail = "Lava flows slowly, emits local light, ignites fuel, cauterizes flesh, and fries an unshielded fighter on contact. Every arena starts above a visible lava basin; after the configured delay its surface rises, invalidating camps and low tunnels. Water cools it into stone while generating steam and smoke.",
     tags = "fluid,emissive,heat,hazard",
     values = { conductivity = 900, density = 3000, flags = 10, id = 8, ignition_q16 = 0, melt_q16 = 42598400, strength = 0 }
 })

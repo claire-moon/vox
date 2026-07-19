@@ -33,6 +33,8 @@ static const vox_rgb vox_palette[VOX_MAT_COUNT] = {
 static vox_light_rgb vox_light_a[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
 static vox_light_rgb vox_light_b[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
 static vox_u8 vox_light_solid[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
+/* Reused by the raster pass after vox_build_lightfield scans each column. */
+static vox_u16 vox_surface_material[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
 
 static vox_u8 vox_clamp_u8(vox_u32 value)
 {
@@ -52,41 +54,34 @@ static vox_u16 vox_light_decay(vox_u16 value, vox_u16 attenuation)
     return value > attenuation ? (vox_u16)(value - attenuation) : 0U;
 }
 
-static const vox_cell *vox_surface_cell(const vox_world *world, vox_u32 x,
-                                        vox_u32 y)
+static vox_u16 vox_scan_column(const vox_world *world, vox_u32 x, vox_u32 y,
+                               vox_light_rgb *emission)
 {
     vox_u32 depth;
-    for (depth = VOX_WORLD_DEPTH; depth > 0U; --depth) {
-        const vox_cell *cell = vox_world_cell(world, x, y, depth - 1U);
-        if (cell != 0 && cell->material != VOX_MAT_AIR) {
-            return cell;
-        }
-    }
-    return 0;
-}
-
-static void vox_inject_emission(const vox_world *world, vox_u32 x, vox_u32 y,
-                                vox_light_rgb *light)
-{
-    vox_u32 depth;
+    vox_u16 surface_material = VOX_MAT_AIR;
+    emission->red = 0U;
+    emission->green = 0U;
+    emission->blue = 0U;
     for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
         const vox_cell *cell = vox_world_cell(world, x, y, depth);
         if (cell == 0 || cell->material == VOX_MAT_AIR) {
             continue;
         }
+        surface_material = cell->material;
         if (cell->material == VOX_MAT_LAVA) {
-            light->red = 255U;
-            light->green = vox_light_max(light->green, 150U);
-            light->blue = vox_light_max(light->blue, 48U);
+            emission->red = 255U;
+            emission->green = vox_light_max(emission->green, 150U);
+            emission->blue = vox_light_max(emission->blue, 48U);
         } else if (cell->temperature_q16 > (300L << 16)) {
             vox_u16 heat = (vox_u16)(cell->temperature_q16 >> 19);
-            light->red = vox_light_max(light->red,
-                                       heat > 255U ? 255U : heat);
-            light->green = vox_light_max(light->green,
-                                         heat > 160U ? 160U : heat);
-            light->blue = vox_light_max(light->blue, 36U);
+            emission->red = vox_light_max(emission->red,
+                                          heat > 255U ? 255U : heat);
+            emission->green = vox_light_max(emission->green,
+                                            heat > 160U ? 160U : heat);
+            emission->blue = vox_light_max(emission->blue, 36U);
         }
     }
+    return surface_material;
 }
 
 static vox_light_rgb *vox_build_lightfield(const vox_world *world,
@@ -102,16 +97,25 @@ static vox_light_rgb *vox_build_lightfield(const vox_world *world,
     for (y = 0U; y < VOX_WORLD_HEIGHT; ++y) {
         for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
             vox_u32 index = y * VOX_WORLD_WIDTH + x;
-            const vox_cell *surface = vox_surface_cell(world, x, y);
+            vox_light_rgb emission;
+            vox_u16 surface_material = vox_scan_column(world, x, y,
+                                                        &emission);
             vox_u16 sky = (vox_u16)(118U - y * 36U / VOX_WORLD_HEIGHT);
-            if (surface != 0) {
+            if (surface_material != VOX_MAT_AIR) {
                 sky = (vox_u16)(sky * 3U / 5U);
             }
-            vox_light_solid[index] = surface != 0 ? 1U : 0U;
+            vox_surface_material[index] = surface_material;
+            vox_light_solid[index] = surface_material != VOX_MAT_AIR ?
+                                     1U : 0U;
             source[index].red = sky;
             source[index].green = (vox_u16)(sky + 4U);
             source[index].blue = (vox_u16)(sky + 12U);
-            vox_inject_emission(world, x, y, &source[index]);
+            source[index].red = vox_light_max(source[index].red,
+                                              emission.red);
+            source[index].green = vox_light_max(source[index].green,
+                                                emission.green);
+            source[index].blue = vox_light_max(source[index].blue,
+                                               emission.blue);
         }
     }
     for (pass = 0U; pass < passes; ++pass) {
@@ -205,10 +209,10 @@ vox_result vox_software_render_ex(const vox_world *world,
         for (pixel_x = 0U; pixel_x < target->width; ++pixel_x) {
             vox_u32 world_x = pixel_x * VOX_WORLD_WIDTH / target->width;
             vox_u32 light_index = world_y * VOX_WORLD_WIDTH + world_x;
-            const vox_cell *cell = vox_surface_cell(world, world_x, world_y);
+            vox_u16 surface_material = vox_surface_material[light_index];
             vox_u8 *destination_pixel = target->pixels +
                 pixel_y * target->stride + pixel_x * VOX_SOFTWARE_RGB_BYTES;
-            if (cell == 0) {
+            if (surface_material == VOX_MAT_AIR) {
                 destination_pixel[0] = (vox_u8)(16U + world_y * 18U /
                                                  VOX_WORLD_HEIGHT);
                 destination_pixel[1] = (vox_u8)(24U + world_y * 22U /
@@ -216,7 +220,7 @@ vox_result vox_software_render_ex(const vox_world *world,
                 destination_pixel[2] = (vox_u8)(42U + world_y * 28U /
                                                  VOX_WORLD_HEIGHT);
             } else {
-                const vox_rgb *base = &vox_palette[cell->material];
+                const vox_rgb *base = &vox_palette[surface_material];
                 destination_pixel[0] = vox_clamp_u8(
                     (vox_u32)base->red * lightfield[light_index].red / 128U);
                 destination_pixel[1] = vox_clamp_u8(

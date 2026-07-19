@@ -7,7 +7,7 @@
 #define VOX_DIGS_MAX_BOTS 2U
 #define VOX_DIGS_MAX_SLOTS 4U
 #define VOX_DIGS_TICKS_PER_SECOND 60U
-#define VOX_DIGS_MAP_GENERATOR_VERSION 3U
+#define VOX_DIGS_MAP_GENERATOR_VERSION 4U
 
 #define VOX_DIGS_ACTION_LEFT 1U
 #define VOX_DIGS_ACTION_RIGHT 2U
@@ -60,6 +60,13 @@ typedef enum vox_digs_map_style {
     VOX_DIGS_MAP_FURNACE_YARD = 2,
     VOX_DIGS_MAP_COUNT = 3
 } vox_digs_map_style;
+
+typedef enum vox_digs_landform {
+    VOX_DIGS_LANDFORM_ARCHIPELAGO = 0,
+    VOX_DIGS_LANDFORM_CONTINENT = 1,
+    VOX_DIGS_LANDFORM_TWIN_HILLS = 2,
+    VOX_DIGS_LANDFORM_COUNT = 3
+} vox_digs_landform;
 
 typedef enum vox_digs_team_mode {
     VOX_DIGS_MODE_FFA = 0,
@@ -287,6 +294,7 @@ extern "C" {
 void vox_digs_rules_classic(vox_digs_rules *rules);
 int vox_digs_player_is_active(const vox_digs_match *match, vox_u16 player);
 int vox_digs_player_is_bot(const vox_digs_match *match, vox_u16 player);
+vox_u16 vox_digs_map_landform(vox_u16 map_style, vox_u32 seed);
 vox_result vox_digs_generate_map(vox_world *world, vox_u16 map_style,
                                  vox_u32 seed);
 vox_result vox_digs_match_init(vox_digs_match *match,

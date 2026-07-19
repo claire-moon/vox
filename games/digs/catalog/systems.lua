@@ -34,7 +34,7 @@ vox.define("system", "system.rope", {
     values = {
         break_tension_q16 = 327680,
         integrity = 100,
-        max_length_q16 = 1966080,
+        max_length_q16 = 3145728,
         min_length_q16 = 196608,
         pull_q16 = 32768,
         ray_steps = 96

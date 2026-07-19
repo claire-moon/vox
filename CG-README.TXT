@@ -48,15 +48,19 @@ Match setup provides one or two local players, zero through two bots,
 Free-for-All or Miners vs Machines, friendly fire, three map styles, a visible
 seed, and three arsenal profiles. Four fighters is the current match maximum.
 
-The map styles now have separate deterministic topology rather than sharing one
-surface with different materials:
+The 512 x 320 x 10 arena is four times the area of the previous dense demo.
+Each visible seed selects an ARCHIPELAGO, CONTINENT, or TWIN HILLS macro
+landform inside the chosen material style:
 
   COAL RIDGE       Broad rolling ground, coal seams, sand drifts, sparse rails.
   DEEPWORKS        Connected chambers, open shafts, firedamp, natural anchors.
   FURNACE YARD     Industrial terraces, broken gantries, contained hot pockets.
 
-Suspended rope rails and gantries sit above the walk lane. Their hangers run
-upward, so the old surface-to-beam columns no longer wall off horizontal travel.
+The outer drop-offs and island gaps expose the permanent lava basin. Lava is
+visible from match start and rises during the endgame. Suspended rope anchors
+are sparse and sit 36 through 42 cells above terrain, beyond the complete
+walk/jump envelope; they have no ground-to-rail legs and cannot become spawn
+floors.
 
 Every spawn receives a five-second shield. Firing or using a weapon ends that
 player's protection early.
@@ -153,7 +157,7 @@ Xbox-style and normalized controller defaults:
 Right-stick deadzone is circular rather than per-axis. Aim stays attached to
 the moving miner when the stick centers, uses the selected response curve, and
 limits the visible reach to the current tool: 8 cells for close tools, 24 for
-guns/thrown weapons, and 30 for the rope. Low aim slowdown is the default; it
+guns/thrown weapons, and 48 for the rope. Low aim slowdown is the default; it
 slows travel near a visible target but never snaps or changes the shot vector.
 
 Global match keys:
@@ -174,9 +178,10 @@ swing; P1 W/S or a controller's vertical left-stick input changes rope length.
 Release the rope action to detach while preserving momentum. A destroyed
 anchor breaks the rope, so blasts can cut both escape routes and bot routes.
 
-The generated maps include suspended rail, gantry, and natural-rock anchors
-within rope reach without placing solid legs across the walk lane. You can also
-use terrain tools to open, close, or reshape traversal routes.
+The generated maps include sparse high rail, gantry, and natural-rock anchors
+within the 48-cell rope reach without placing solid legs or low ceilings across
+the walk lane. You can also use terrain tools to open, close, or reshape
+traversal routes.
 
 
 6. COMBAT, EFFECTS, AND ACCESSIBILITY
@@ -240,6 +245,7 @@ Run these from the extracted demo directory:
   ./smoke-test.sh
   ./benchmark.sh 240
   ./bin/digs_demo --input-self-test
+  ./bin/digs_demo --camera-self-test
   ./bin/digs_demo --render-miner-icon-xpm qa/out/digs-miner-test.xpm
   ./bin/vox_headless
   ./bin/digs_headless
@@ -247,10 +253,13 @@ Run these from the extracted demo directory:
 
 The smoke test is non-windowed and writes qa/out/digs-demo-smoke.ppm. The
 input self-test checks radial normalization and weapon-aware aim ranges. The
-icon command re-renders the same miner emitter used in play; compare it with
-share/digs/icons/digs-miner.xpm. The benchmark reports Compatibility,
-Balanced, and Showcase CPU Lightfield results. Hashes must repeat for the same
-frozen build; use this archive's evidence logs rather than old v0.0.1 values.
+camera self-test checks every zoom and world edge for black exposure, verifies
+true close zoom plus full-world player/lava framing and the offscreen lava
+horizon, and rechecks the mouse transform. The icon command
+re-renders the same miner emitter used in play; compare it with
+share/digs/icons/digs-miner.xpm. The benchmark reports Compatibility, Balanced,
+and Showcase CPU Lightfield results. Hashes must repeat for the same frozen
+build; use this archive's evidence logs rather than old v0.0.1 values.
 
 The package-time versions of these checks, CTest, Cargo tests, script
 validation, and raw exit statuses are under evidence/.
@@ -273,10 +282,13 @@ Please check at least these paths:
   [ ] Five-second spawn protection is visible and attacking cancels it.
   [ ] Free-for-All and Miners vs Machines honor friendly-fire selection.
   [ ] Bot roaming/searching/attacking/retreating behavior is observable.
-  [ ] Camera frames both humans and remains smooth at every frame cap.
+  [ ] Camera frames both humans and remains smooth at every frame cap; maximum
+      zoom-out still shows sky and the lava horizon without black exposure.
   [ ] Hardware pointer, sole software reticle, and P1 world aim stay aligned.
   [ ] Coal Ridge, Deepworks, and Furnace Yard have visibly distinct topology.
-  [ ] Suspended anchors remain reachable and never wall off the walk lane.
+  [ ] Seeds expose archipelago, continent, and twin-hill macro landforms.
+  [ ] Suspended anchors remain reachable, stay above the full jump envelope,
+      never become spawn floors, and never wall off the walk lane.
   [ ] Each FX profile changes density without changing terrain or damage.
   [ ] Repeated explosions and deaths visibly vary and collapse supports.
   [ ] Gore, flashes, camera shake, and damage-number options work.
@@ -291,7 +303,7 @@ Please check at least these paths:
 10. RECORD AND SHARE QA FEEDBACK
 --------------------------------
 
-The included 51-checkpoint workbook is:
+The included 53-checkpoint workbook is:
 
   qa/VOX_QA_FEEDBACK.xlsx
 

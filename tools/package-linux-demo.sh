@@ -225,6 +225,8 @@ capture_evidence digs-script-headless "$EVIDENCE_DIR" \
         "$BUILD_DIR/share/digs/scripts/manifest.txt"
 capture_evidence digs-input-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --input-self-test
+capture_evidence digs-camera-self-test "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --camera-self-test
 capture_evidence digs-miner-icon "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --render-miner-icon-xpm \
         digs-miner-generated.xpm

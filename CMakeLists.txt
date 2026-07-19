@@ -322,6 +322,8 @@ if (VOX_BUILD_TESTS)
     if (TARGET digs_demo)
         add_test(NAME digs_input_normalization
             COMMAND digs_demo --input-self-test)
+        add_test(NAME digs_camera_bounds
+            COMMAND digs_demo --camera-self-test)
     endif()
     add_test(NAME vox_headless_scenario COMMAND vox_headless)
     add_test(NAME digs_headless_scenario COMMAND digs_headless)

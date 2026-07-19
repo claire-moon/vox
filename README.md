@@ -19,16 +19,19 @@ remain under `docs/releasing/` and are not retroactively changed by this work.
 
 ## v0.0.2 development-demo highlights
 
-- A bounded `256 x 160 x 10` mini-voxel world: 409,600 simulated cells,
-  exactly 10x the original demo volume, partitioned into 160
+- A bounded `512 x 320 x 10` mini-voxel world: 1,638,400 simulated cells,
+  exactly 40x the original demo volume and four times the prior dense profile,
+  partitioned into 640
   `16 x 16 x 10` active/sleeping chunks.
 - Four match slots with one or two independent local humans and zero to two
   deterministic bots. Free-for-All and Miners vs Machines expose team and
   friendly-fire rules without giving bots hidden physics advantages.
 - Three topology-specific maps generated from a visible seed: Coal Ridge's
   rolling seams and drifts, Deepworks' connected chambers and shafts, and
-  Furnace Yard's industrial terraces and contained hot pockets. Suspended
-  rope fixtures no longer place support legs across the ground route.
+  Furnace Yard's industrial terraces and contained hot pockets. Every style
+  can resolve into an archipelago, continent, or twin-hill macro landform.
+  Sparse rope fixtures sit high above the complete jump envelope and never
+  place support legs across the ground route.
 - Ten steampunk tools and weapons: Pick, Blast Charge, Smoke Pot, Cinder Flask,
   Pressure Hose, Sledge, Nail Gun, Boiler Shotgun, Concussion Grenade, and Nail
   Bomb.
@@ -51,8 +54,9 @@ remain under `docs/releasing/` and are not retroactively changed by this work.
   square/polynomial-noise timbres and deterministic event patches. No sampled
   sound asset or music file is required.
 - A CPU RGB Lightfield with Compatibility, Balanced, and Showcase quality
-  tiers. Rendering and frame pacing never change the authoritative 60 Hz
-  simulation.
+  tiers. One depth scan caches each visible surface while collecting emission
+  from all ten layers; rendering and frame pacing never change the
+  authoritative 60 Hz simulation.
 - An opt-in Linux System V x86-64 NASM FNV-1a leaf with a strict C89 fallback
   and exhaustive scalar/assembly parity over the acceptance vectors. It is a
   dispatch contract probe, not a renderer or simulation speed claim.
@@ -158,7 +162,7 @@ the planned Windows, macOS, historical, or GPU adapters.
 ## Playtest feedback
 
 The title screen's **QA Feedback** entry points testers to the versioned
-51-checkpoint workbook and cockpit. Fill `qa/VOX_QA_FEEDBACK.xlsx`, then combine
+53-checkpoint workbook and cockpit. Fill `qa/VOX_QA_FEEDBACK.xlsx`, then combine
 one or more
 tester workbooks with xleak and optionally exercise the exact demo binary:
 

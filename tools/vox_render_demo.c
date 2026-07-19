@@ -11,30 +11,46 @@ static vox_u8 vox_demo_pixels[VOX_DEMO_WIDTH * VOX_DEMO_HEIGHT *
 
 static void vox_demo_world(vox_world *world)
 {
+    vox_u32 water_left = VOX_WORLD_WIDTH * 18U / 256U;
+    vox_u32 water_right = VOX_WORLD_WIDTH * 43U / 256U;
+    vox_u32 water_top = VOX_WORLD_HEIGHT * 51U / 160U;
+    vox_u32 water_bottom = VOX_WORLD_HEIGHT * 54U / 160U;
+    vox_u32 lava_left = VOX_WORLD_WIDTH * 78U / 256U;
+    vox_u32 lava_right = VOX_WORLD_WIDTH * 106U / 256U;
+    vox_u32 lava_top = VOX_WORLD_HEIGHT * 54U / 160U;
+    vox_u32 lava_bottom = VOX_WORLD_HEIGHT * 59U / 160U;
+    vox_u32 smoke_left = VOX_WORLD_WIDTH * 82U / 256U;
+    vox_u32 smoke_right = VOX_WORLD_WIDTH * 102U / 256U;
+    vox_u32 smoke_y = VOX_WORLD_HEIGHT * 50U / 160U;
+    vox_u32 blast_x = VOX_WORLD_WIDTH * 91U / 256U;
+    vox_u32 blast_y = VOX_WORLD_HEIGHT * 55U / 160U;
+    vox_u32 blast_radius = VOX_WORLD_WIDTH / 64U;
     vox_u32 x;
     vox_u32 y;
+    if (blast_radius == 0U) blast_radius = 1U;
     if (vox_digs_generate_map(world, VOX_DIGS_MAP_FURNACE_YARD,
                               0xD1655EEDU) != VOX_OK) {
         vox_world_init(world);
         return;
     }
-    for (x = 18U; x < 43U; ++x) {
-        for (y = 51U; y < 54U; ++y) {
+    for (x = water_left; x < water_right; ++x) {
+        for (y = water_top; y < water_bottom; ++y) {
             (void)vox_world_set(world, x, y, VOX_WORLD_DEPTH - 1U,
                                 VOX_MAT_WATER, 20L << 16);
         }
     }
-    for (x = 78U; x < 106U; ++x) {
-        for (y = 54U; y < 59U; ++y) {
+    for (x = lava_left; x < lava_right; ++x) {
+        for (y = lava_top; y < lava_bottom; ++y) {
             (void)vox_world_set(world, x, y, VOX_WORLD_DEPTH - 1U,
                                 VOX_MAT_LAVA, 700L << 16);
         }
     }
-    for (x = 82U; x < 102U; ++x) {
-        (void)vox_world_set(world, x, 50U, VOX_WORLD_DEPTH - 1U,
+    for (x = smoke_left; x < smoke_right; ++x) {
+        (void)vox_world_set(world, x, smoke_y, VOX_WORLD_DEPTH - 1U,
                             VOX_MAT_SMOKE, 40L << 16);
     }
-    (void)vox_world_blast(world, 91U, 55U, 0U, 4U, 700L << 16);
+    (void)vox_world_blast(world, blast_x, blast_y, 0U, blast_radius,
+                          700L << 16);
     for (x = 0U; x < 4U; ++x) {
         (void)vox_world_step(world, 0);
     }

@@ -42,8 +42,8 @@ vox.define("entity", "entity.rope", {
 
 vox.define("entity", "entity.lava_front", {
     order = 305, title = "RISING LAVA", category = "ENTITIES",
-    summary = "Match-level hazard surface that steadily converts safe low ground into an active heat simulation.",
-    detail = "After the configured start tick, the lava surface rises deterministically and fills reachable cells from below. Contact bypasses ordinary attrition by killing an unshielded fighter rapidly, while the surrounding cells still react normally with water, fuel, flesh, blood, and terrain.",
+    summary = "Permanent lower-world hazard that rises and converts safe ground into an active heat simulation.",
+    detail = "A visible lava basin occupies the lower boundary from match start, including the drop-offs around continents and between islands. After the configured start tick its surface rises deterministically and fills reachable cells from below. Contact rapidly kills an unshielded fighter, while surrounding cells still react normally with water, fuel, flesh, blood, and terrain.",
     tags = "hazard,lava,timer",
     values = { default_start_tick = 12600, material_id = 8 }
 })

@@ -22,6 +22,11 @@
 #define DEMO_CAMERA_ZOOM_MIN 1
 #define DEMO_CAMERA_ZOOM_MAX 4
 #define DEMO_CAMERA_ZOOM_DEFAULT 2
+#define DEMO_CAMERA_MIN_SCALE 1.0
+#define DEMO_CAMERA_LAVA_FOOTER_PIXELS 18.0
+#define DEMO_CAMERA_SAFE_TOP_PIXELS 36.0
+#define DEMO_CAMERA_SAFE_BOTTOM_PIXELS 18.0
+#define DEMO_CAMERA_VERTICAL_PADDING 16.0
 #define DEMO_AUDIO_RATE 44100
 #define DEMO_AUDIO_FRAMES 512U
 #define DEMO_LOCAL_MAX 2U
@@ -31,6 +36,7 @@
 #define DEMO_CONTROLLER_ACTIVITY_MARGIN 0.08
 #define DEMO_CONTROLLER_CALIBRATION_MS 750U
 #define DEMO_INPUT_SETTINGS_VERSION 1
+#define DEMO_ROPE_AIM_RANGE 48.0
 
 #define DEMO_SOUND_MOVE 0
 #define DEMO_SOUND_SELECT 1
@@ -1090,15 +1096,23 @@ static void demo_prepare_targets(void)
 
 static void demo_build_title_world(void)
 {
+    vox_u32 start_x = VOX_WORLD_WIDTH * 19U / 64U;
+    vox_u32 end_x = VOX_WORLD_WIDTH * 27U / 64U;
+    vox_u32 lava_y = VOX_WORLD_HEIGHT * 11U / 32U;
+    vox_u32 blast_x = VOX_WORLD_WIDTH * 91U / 256U;
+    vox_u32 blast_y = VOX_WORLD_HEIGHT * 54U / 160U;
+    vox_u32 blast_radius = VOX_WORLD_WIDTH / 64U;
     vox_u32 x;
     vox_u32 tick;
+    if (blast_radius == 0U) blast_radius = 1U;
     (void)vox_digs_generate_map(&demo_title_world, VOX_DIGS_MAP_FURNACE_YARD,
                                 0xD1655EEDU);
-    for (x = 76U; x < 108U; ++x) {
-        (void)vox_world_set(&demo_title_world, x, 55U,
+    for (x = start_x; x < end_x; ++x) {
+        (void)vox_world_set(&demo_title_world, x, lava_y,
                             VOX_WORLD_DEPTH - 1U, VOX_MAT_LAVA, 700L << 16);
     }
-    (void)vox_world_blast(&demo_title_world, 91U, 54U, 0U, 4U, 700L << 16);
+    (void)vox_world_blast(&demo_title_world, blast_x, blast_y, 0U,
+                          blast_radius, 700L << 16);
     for (tick = 0U; tick < 4U; ++tick) {
         (void)vox_world_step(&demo_title_world, 0);
     }
@@ -1654,11 +1668,36 @@ static void demo_voxelize_rope(vox_u16 player)
     }
 }
 
+static void demo_voxelize_lava_horizon(void)
+{
+    vox_u32 x;
+    vox_u32 y;
+    vox_u32 wave_tick;
+    if (demo_match.lava_surface_y >= VOX_WORLD_HEIGHT) {
+        return;
+    }
+    y = (vox_u32)demo_match.lava_surface_y;
+    wave_tick = demo_match.tick / 8U;
+    for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+        demo_render_voxel((int)x, (int)y, VOX_MAT_LAVA);
+        if (y + 1U < VOX_WORLD_HEIGHT) {
+            demo_render_voxel((int)x, (int)(y + 1U), VOX_MAT_LAVA);
+        }
+        if (y > 0U && ((x / 4U + wave_tick) % 13U) == 0U) {
+            demo_render_voxel((int)x, (int)(y - 1U), VOX_MAT_LAVA);
+        }
+    }
+}
+
 static void demo_build_render_world(demo_app *app)
 {
     vox_u16 player;
     vox_u16 index;
     memcpy(&demo_render_world, &demo_match.world, sizeof(demo_render_world));
+    /* The simulation treats every cell at and below lava_surface_y as lethal.
+     * Give that exact boundary a top-layer voxel horizon so bedrock or deep
+     * terrain cannot visually hide the rising hazard. */
+    demo_voxelize_lava_horizon();
     for (player = 0U; player < VOX_DIGS_MAX_SLOTS; ++player) {
         if (demo_match.alive[player]) {
             demo_voxelize_rope(player);
@@ -1701,6 +1740,128 @@ static int demo_normalize_camera_zoom(demo_app *app)
         app->camera_zoom = DEMO_CAMERA_ZOOM_DEFAULT;
     }
     return app->camera_zoom;
+}
+
+static void demo_constrain_camera(demo_app *app)
+{
+    double half_width;
+    double half_height;
+    double minimum_x;
+    double maximum_x;
+    double minimum_y;
+    double maximum_y;
+    double presented_x;
+    double presented_y;
+    if (app->camera_scale < DEMO_CAMERA_MIN_SCALE) {
+        app->camera_scale = DEMO_CAMERA_MIN_SCALE;
+        app->camera_scale_velocity = 0.0;
+    }
+    half_width = (double)VOX_WORLD_WIDTH /
+                 (app->camera_scale * 2.0);
+    half_height = (double)VOX_WORLD_HEIGHT /
+                  (app->camera_scale * 2.0);
+    minimum_x = half_width;
+    maximum_x = (double)VOX_WORLD_WIDTH - half_width;
+    minimum_y = half_height;
+    maximum_y = (double)VOX_WORLD_HEIGHT - half_height;
+    if (app->camera_world_x < minimum_x) {
+        app->camera_world_x = minimum_x;
+        if (app->camera_velocity_x < 0.0) app->camera_velocity_x = 0.0;
+    } else if (app->camera_world_x > maximum_x) {
+        app->camera_world_x = maximum_x;
+        if (app->camera_velocity_x > 0.0) app->camera_velocity_x = 0.0;
+    }
+    if (app->camera_world_y < minimum_y) {
+        app->camera_world_y = minimum_y;
+        if (app->camera_velocity_y < 0.0) app->camera_velocity_y = 0.0;
+    } else if (app->camera_world_y > maximum_y) {
+        app->camera_world_y = maximum_y;
+        if (app->camera_velocity_y > 0.0) app->camera_velocity_y = 0.0;
+    }
+    /* Clamp presentation shake as part of the authoritative camera transform.
+     * Mouse and controller aim consume this same adjusted value. */
+    presented_x = app->camera_world_x + app->camera_shake_x;
+    presented_y = app->camera_world_y + app->camera_shake_y;
+    if (presented_x < minimum_x) {
+        app->camera_shake_x = minimum_x - app->camera_world_x;
+    } else if (presented_x > maximum_x) {
+        app->camera_shake_x = maximum_x - app->camera_world_x;
+    }
+    if (presented_y < minimum_y) {
+        app->camera_shake_y = minimum_y - app->camera_world_y;
+    } else if (presented_y > maximum_y) {
+        app->camera_shake_y = maximum_y - app->camera_world_y;
+    }
+}
+
+static void demo_camera_exterior_pixel(vox_u8 *destination, int source_y)
+{
+    long world_y;
+    vox_u32 shade_y;
+    if (source_y <= 0) {
+        world_y = 0L;
+    } else if (source_y >= (int)DEMO_HEIGHT) {
+        world_y = (long)VOX_WORLD_HEIGHT - 1L;
+    } else {
+        world_y = (long)source_y * (long)VOX_WORLD_HEIGHT /
+                  (long)DEMO_HEIGHT;
+    }
+    if (demo_match.lava_surface_y < VOX_WORLD_HEIGHT &&
+        world_y >= (long)demo_match.lava_surface_y) {
+        destination[0] = 255U;
+        destination[1] = 98U;
+        destination[2] = 8U;
+        return;
+    }
+    shade_y = (vox_u32)world_y;
+    destination[0] = (vox_u8)(16U + shade_y * 18U / VOX_WORLD_HEIGHT);
+    destination[1] = (vox_u8)(24U + shade_y * 22U / VOX_WORLD_HEIGHT);
+    destination[2] = (vox_u8)(42U + shade_y * 28U / VOX_WORLD_HEIGHT);
+}
+
+static void demo_draw_lava_horizon_footer(const demo_app *app)
+{
+    double presented_y;
+    double projected_y;
+    int footer_bottom;
+    int footer_top;
+    int x;
+    int y;
+    if (app == 0 || demo_match.lava_surface_y >= VOX_WORLD_HEIGHT) {
+        return;
+    }
+    presented_y = app->camera_world_y + app->camera_shake_y;
+    projected_y = (double)DEMO_HEIGHT / 2.0 +
+        ((double)demo_match.lava_surface_y - presented_y) *
+        app->camera_scale * (double)DEMO_HEIGHT /
+        (double)VOX_WORLD_HEIGHT;
+    if (projected_y < (double)DEMO_HEIGHT) {
+        return;
+    }
+    footer_bottom = app->options.debug ? 174 : (int)DEMO_HEIGHT;
+    footer_top = (int)((double)footer_bottom -
+                       DEMO_CAMERA_LAVA_FOOTER_PIXELS);
+    if (footer_top < 0) footer_top = 0;
+    for (y = footer_top; y < footer_bottom; ++y) {
+        for (x = 0; x < (int)DEMO_WIDTH; ++x) {
+            vox_u8 *destination = &demo_pixels[
+                (y * (int)DEMO_WIDTH + x) * VOX_SOFTWARE_RGB_BYTES];
+            int wave = (x / 4 + (int)(demo_match.tick / 6U)) % 11;
+            if (y == footer_top + (wave == 0 ? 0 : 1)) {
+                destination[0] = 255U;
+                destination[1] = 194U;
+                destination[2] = 36U;
+            } else if (y < footer_top + 4) {
+                destination[0] = 255U;
+                destination[1] = 98U;
+                destination[2] = 8U;
+            } else {
+                destination[0] = 198U;
+                destination[1] = 44U;
+                destination[2] = 16U;
+            }
+        }
+    }
 }
 
 static void demo_apply_player_camera(demo_app *app)
@@ -1769,11 +1930,17 @@ static void demo_apply_player_camera(demo_app *app)
     }
     fit_x = (double)VOX_WORLD_WIDTH /
             ((maximum_x - minimum_x) + 54.0);
-    fit_y = (double)VOX_WORLD_HEIGHT /
-            ((maximum_y - minimum_y) + 40.0);
+    fit_y = ((double)DEMO_HEIGHT - DEMO_CAMERA_SAFE_TOP_PIXELS -
+             DEMO_CAMERA_SAFE_BOTTOM_PIXELS) *
+            (double)VOX_WORLD_HEIGHT /
+            ((double)DEMO_HEIGHT *
+             ((maximum_y - minimum_y) +
+              DEMO_CAMERA_VERTICAL_PADDING));
     target_scale = fit_x < fit_y ? fit_x : fit_y;
     if (target_scale > (double)user_zoom) target_scale = (double)user_zoom;
-    if (target_scale < 0.75) target_scale = 0.75;
+    if (target_scale < DEMO_CAMERA_MIN_SCALE) {
+        target_scale = DEMO_CAMERA_MIN_SCALE;
+    }
     if (app->camera_trauma > 0.0) {
         target_scale *= 1.0 + app->camera_trauma * 0.06;
     }
@@ -1793,7 +1960,9 @@ static void demo_apply_player_camera(demo_app *app)
                                   26.0 * dt;
     app->camera_scale_velocity *= damping;
     app->camera_scale += app->camera_scale_velocity * dt;
-    if (app->camera_scale < 0.70) app->camera_scale = 0.70;
+    if (app->camera_scale < DEMO_CAMERA_MIN_SCALE) {
+        app->camera_scale = DEMO_CAMERA_MIN_SCALE;
+    }
     if (app->camera_scale > 4.25) app->camera_scale = 4.25;
     shake_x = 0.0;
     shake_y = 0.0;
@@ -1807,6 +1976,7 @@ static void demo_apply_player_camera(demo_app *app)
     }
     app->camera_shake_x = shake_x;
     app->camera_shake_y = shake_y;
+    demo_constrain_camera(app);
     app->camera_trauma -= dt * 1.8;
     if (app->camera_trauma < 0.0) app->camera_trauma = 0.0;
     center_x = (int)((app->camera_world_x + app->camera_shake_x) *
@@ -1831,12 +2001,14 @@ static void demo_apply_player_camera(demo_app *app)
                 destination[1] = source[1];
                 destination[2] = source[2];
             } else {
-                destination[0] = 0U;
-                destination[1] = 0U;
-                destination[2] = 0U;
+                demo_camera_exterior_pixel(destination, source_y);
             }
         }
     }
+    /* At overview scale the physical basin is in frame.  At closer zooms,
+     * keep full player-follow fidelity and draw a thin animated continuation
+     * only while the authoritative horizon is below the viewport. */
+    demo_draw_lava_horizon_footer(app);
 }
 
 static void demo_mouse_world(demo_app *app, vox_u32 *world_x,
@@ -2159,30 +2331,76 @@ static void demo_render(demo_app *app)
     }
 }
 
+static vox_u32 demo_clamp_world_coordinate(long value, vox_u32 limit)
+{
+    if (limit == 0U || value < 0L) return 0U;
+    if ((vox_u32)value >= limit) return limit - 1U;
+    return (vox_u32)value;
+}
+
 static void demo_prepare_foundry_world(void)
 {
+    vox_u32 scale_x = VOX_WORLD_WIDTH / 256U;
+    vox_u32 scale_y = VOX_WORLD_HEIGHT / 160U;
+    long player_x = demo_match.players[0].position_x.value_q16 / 65536L;
+    long player_y = demo_match.players[0].position_y.value_q16 / 65536L;
+    vox_u32 sand_left;
+    vox_u32 sand_right;
+    vox_u32 sand_y;
+    vox_u32 chamber_left;
+    vox_u32 chamber_right;
+    vox_u32 chamber_top;
+    vox_u32 chamber_bottom;
+    vox_u32 gas_left;
+    vox_u32 gas_right;
+    vox_u32 gas_top;
+    vox_u32 gas_bottom;
     vox_u32 x;
     vox_u32 y;
     vox_u32 z;
+    if (scale_x == 0U) scale_x = 1U;
+    if (scale_y == 0U) scale_y = 1U;
+    sand_left = demo_clamp_world_coordinate(
+        player_x - (long)(16U * scale_x), VOX_WORLD_WIDTH);
+    sand_right = demo_clamp_world_coordinate(
+        player_x - (long)(9U * scale_x), VOX_WORLD_WIDTH);
+    sand_y = demo_clamp_world_coordinate(
+        player_y - (long)(10U * scale_y), VOX_WORLD_HEIGHT - 1U);
+    chamber_left = demo_clamp_world_coordinate(
+        player_x + (long)(8U * scale_x), VOX_WORLD_WIDTH);
+    chamber_right = demo_clamp_world_coordinate(
+        player_x + (long)(18U * scale_x), VOX_WORLD_WIDTH);
+    chamber_top = demo_clamp_world_coordinate(
+        player_y - (long)(12U * scale_y), VOX_WORLD_HEIGHT);
+    chamber_bottom = demo_clamp_world_coordinate(
+        player_y - (long)(3U * scale_y), VOX_WORLD_HEIGHT);
+    gas_left = demo_clamp_world_coordinate(
+        player_x + (long)(11U * scale_x), VOX_WORLD_WIDTH);
+    gas_right = demo_clamp_world_coordinate(
+        player_x + (long)(15U * scale_x), VOX_WORLD_WIDTH);
+    gas_top = demo_clamp_world_coordinate(
+        player_y - (long)(9U * scale_y), VOX_WORLD_HEIGHT);
+    gas_bottom = demo_clamp_world_coordinate(
+        player_y - (long)(5U * scale_y), VOX_WORLD_HEIGHT);
     for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-        for (x = 22U; x <= 29U; ++x) {
-            (void)vox_world_set(&demo_match.world, x, 24U, z,
+        for (x = sand_left; x <= sand_right; ++x) {
+            (void)vox_world_set(&demo_match.world, x, sand_y, z,
                                 VOX_MAT_SAND, 20L << 16);
-            (void)vox_world_set(&demo_match.world, x, 25U, z,
+            (void)vox_world_set(&demo_match.world, x, sand_y + 1U, z,
                                 VOX_MAT_SAND, 20L << 16);
         }
-        for (y = 31U; y <= 40U; ++y) {
-            for (x = 36U; x <= 46U; ++x) {
-                int boundary = y == 31U || y == 40U ||
-                               x == 36U || x == 46U;
+        for (y = chamber_top; y <= chamber_bottom; ++y) {
+            for (x = chamber_left; x <= chamber_right; ++x) {
+                int boundary = y == chamber_top || y == chamber_bottom ||
+                               x == chamber_left || x == chamber_right;
                 (void)vox_world_set(&demo_match.world, x, y, z,
                                     boundary ? VOX_MAT_METAL : VOX_MAT_AIR,
                                     20L << 16);
             }
         }
     }
-    for (y = 34U; y <= 38U; ++y) {
-        for (x = 39U; x <= 43U; ++x) {
+    for (y = gas_top; y <= gas_bottom; ++y) {
+        for (x = gas_left; x <= gas_right; ++x) {
             (void)vox_world_set(&demo_match.world, x, y,
                                 VOX_WORLD_DEPTH - 1U,
                                 VOX_MAT_FIREDAMP, 20L << 16);
@@ -2322,7 +2540,7 @@ static double demo_weapon_aim_range(demo_app *app, int player,
                                     int rope_held)
 {
     const vox_digs_weapon_properties *properties;
-    if (rope_held) return 30.0;
+    if (rope_held) return DEMO_ROPE_AIM_RANGE;
     properties = vox_digs_weapon_get((vox_u16)app->selected_tool[player]);
     if (properties != 0 && (properties->flags & VOX_DIGS_WEAPON_MELEE)) {
         return 8.0;
@@ -3603,15 +3821,23 @@ static int demo_smoke_test(const char *path)
     app.mouse_activity_x = 160;
     app.mouse_activity_y = 100;
     app.cursor_visible = -1;
-    app.camera_zoom = 0;
-    app.camera_scale = 2.0;
+    app.camera_zoom = DEMO_CAMERA_ZOOM_DEFAULT;
+    app.camera_scale = (double)DEMO_CAMERA_ZOOM_DEFAULT;
     app.frame_seconds = 1.0 / 60.0;
+    app.render_alpha = 1.0;
+    app.camera_world_x = (double)demo_match.players[0].
+                         position_x.value_q16 / 65536.0;
+    app.camera_world_y = (double)demo_match.players[0].
+                         position_y.value_q16 / 65536.0;
+    for (tick = 0U; tick < VOX_DIGS_MAX_SLOTS; ++tick) {
+        app.previous_player_x[tick] =
+            demo_match.players[tick].position_x.value_q16;
+        app.previous_player_y[tick] =
+            demo_match.players[tick].position_y.value_q16;
+    }
     app.options.debug = 1;
     app.measured_fps = 60.0;
     demo_render(&app);
-    if (app.camera_zoom != DEMO_CAMERA_ZOOM_DEFAULT) {
-        return 4;
-    }
     if (!demo_write_ppm(path)) {
         return 5;
     }
@@ -3709,7 +3935,7 @@ static int demo_input_self_test(void)
     }
     app.selected_tool[0] = VOX_DIGS_TOOL_PICK;
     if (demo_weapon_aim_range(&app, 0, 0) != 8.0 ||
-        demo_weapon_aim_range(&app, 0, 1) != 30.0) {
+        demo_weapon_aim_range(&app, 0, 1) != DEMO_ROPE_AIM_RANGE) {
         fprintf(stderr, "input self-test: tool ranges failed\n");
         return 5;
     }
@@ -3760,6 +3986,183 @@ static int demo_input_self_test(void)
         return 12;
     }
     printf("DIGS input self-test passed\n");
+    return 0;
+}
+
+static int demo_camera_self_test(void)
+{
+    demo_app app;
+    const vox_cell *cell;
+    vox_u32 mouse_world_x;
+    vox_u32 mouse_world_y;
+    vox_u32 pixel;
+    vox_u32 lava_y;
+    vox_u32 lava_pixels;
+    int player_screen_x;
+    int player_screen_y;
+    int lava_screen_x;
+    int lava_screen_y;
+    int zoom;
+    int edge;
+    lava_y = VOX_WORLD_HEIGHT > 8U ? VOX_WORLD_HEIGHT - 8U :
+                                    VOX_WORLD_HEIGHT - 1U;
+    memset(&demo_match, 0, sizeof(demo_match));
+    /* A valid basin is lethal and visible before the timed rise begins. */
+    demo_match.lava_level_q16 = 0U;
+    demo_match.lava_surface_y = (vox_u16)lava_y;
+    vox_world_init(&demo_render_world);
+    demo_voxelize_lava_horizon();
+    cell = vox_world_cell(&demo_render_world, 0U, lava_y,
+                          VOX_WORLD_DEPTH - 1U);
+    if (cell == 0 || cell->material != VOX_MAT_LAVA) {
+        fprintf(stderr, "camera self-test: lava horizon is not authoritative\n");
+        return 1;
+    }
+    for (zoom = DEMO_CAMERA_ZOOM_MIN;
+         zoom <= DEMO_CAMERA_ZOOM_MAX; ++zoom) {
+        for (edge = 0; edge < 2; ++edge) {
+            double half_width;
+            double half_height;
+            double maximum_y;
+            double presented_x;
+            double presented_y;
+            memset(&app, 0, sizeof(app));
+            memset(demo_pixels, 31, sizeof(demo_pixels));
+            app.camera_zoom = zoom;
+            app.camera_scale = (double)zoom;
+            app.camera_world_x = edge == 0 ? -100.0 :
+                                 (double)VOX_WORLD_WIDTH + 100.0;
+            app.camera_world_y = edge == 0 ? -100.0 :
+                                 (double)VOX_WORLD_HEIGHT + 100.0;
+            app.camera_shake_x = edge == 0 ? -20.0 : 20.0;
+            app.camera_shake_y = edge == 0 ? -20.0 : 20.0;
+            app.frame_seconds = 1.0 / 60.0;
+            app.mouse_x = (int)DEMO_WIDTH / 2;
+            app.mouse_y = (int)DEMO_HEIGHT / 2;
+            demo_apply_player_camera(&app);
+            half_width = (double)VOX_WORLD_WIDTH /
+                         (app.camera_scale * 2.0);
+            half_height = (double)VOX_WORLD_HEIGHT /
+                          (app.camera_scale * 2.0);
+            maximum_y = (double)VOX_WORLD_HEIGHT - half_height;
+            presented_x = app.camera_world_x + app.camera_shake_x;
+            presented_y = app.camera_world_y + app.camera_shake_y;
+            if (presented_x < half_width - 0.001 ||
+                presented_x > (double)VOX_WORLD_WIDTH - half_width + 0.001 ||
+                presented_y < half_height - 0.001 ||
+                presented_y > maximum_y + 0.001) {
+                fprintf(stderr, "camera self-test: zoom %d escaped world\n",
+                        zoom);
+                return 2;
+            }
+            for (pixel = 0U; pixel < DEMO_WIDTH * DEMO_HEIGHT; ++pixel) {
+                const vox_u8 *sample = &demo_pixels[
+                    pixel * VOX_SOFTWARE_RGB_BYTES];
+                if (sample[0] == 0U && sample[1] == 0U && sample[2] == 0U) {
+                    fprintf(stderr,
+                            "camera self-test: zoom %d exposed black\n",
+                            zoom);
+                    return 3;
+                }
+            }
+            demo_mouse_world(&app, &mouse_world_x, &mouse_world_y);
+            if (mouse_world_x != (vox_u32)(long)presented_x ||
+                mouse_world_y != (vox_u32)(long)presented_y) {
+                fprintf(stderr,
+                        "camera self-test: center mouse transform drift\n");
+                return 4;
+            }
+        }
+    }
+    memset(&app, 0, sizeof(app));
+    app.local_players = 1;
+    app.camera_zoom = DEMO_CAMERA_ZOOM_MAX;
+    app.camera_scale = (double)DEMO_CAMERA_ZOOM_MAX;
+    app.camera_world_x = (double)VOX_WORLD_WIDTH / 2.0;
+    app.camera_world_y = (double)VOX_WORLD_HEIGHT / 2.0;
+    app.frame_seconds = 1.0 / 60.0;
+    app.render_alpha = 1.0;
+    demo_match.alive[0] = 1U;
+    demo_match.players[0].position_x.value_q16 =
+        (vox_i32)(VOX_WORLD_WIDTH / 2U) << 16;
+    demo_match.players[0].position_y.value_q16 =
+        (vox_i32)(VOX_WORLD_HEIGHT / 2U) << 16;
+    app.previous_player_x[0] =
+        demo_match.players[0].position_x.value_q16;
+    app.previous_player_y[0] =
+        demo_match.players[0].position_y.value_q16;
+    for (pixel = 0U; pixel < 360U; ++pixel) {
+        memset(demo_pixels, 31, sizeof(demo_pixels));
+        demo_apply_player_camera(&app);
+    }
+    demo_world_to_screen(&app,
+        demo_match.players[0].position_x.value_q16,
+        demo_match.players[0].position_y.value_q16,
+        &player_screen_x, &player_screen_y);
+    demo_world_to_screen(&app,
+        (vox_i32)(VOX_WORLD_WIDTH / 2U) << 16,
+        (vox_i32)lava_y << 16, &lava_screen_x, &lava_screen_y);
+    if (player_screen_x < 0 || player_screen_x >= (int)DEMO_WIDTH ||
+        player_screen_y < (int)DEMO_CAMERA_SAFE_TOP_PIXELS ||
+        player_screen_y >= (int)DEMO_HEIGHT ||
+        app.camera_scale < 3.5 ||
+        lava_screen_y < (int)DEMO_HEIGHT) {
+        fprintf(stderr,
+                "camera self-test: close zoom lost (%d,%d) (%d,%d) %.2f\n",
+                player_screen_x, player_screen_y,
+                lava_screen_x, lava_screen_y, app.camera_scale);
+        return 5;
+    }
+    lava_pixels = 0U;
+    for (pixel = 0U; pixel < DEMO_WIDTH * DEMO_HEIGHT; ++pixel) {
+        const vox_u8 *sample = &demo_pixels[
+            pixel * VOX_SOFTWARE_RGB_BYTES];
+        if (sample[0] == 255U && sample[1] == 98U && sample[2] == 8U) {
+            ++lava_pixels;
+        }
+    }
+    if (lava_pixels < DEMO_WIDTH * 2U) {
+        fprintf(stderr,
+                "camera self-test: visible lava footer too small (%lu)\n",
+                (unsigned long)lava_pixels);
+        return 6;
+    }
+    app.camera_zoom = DEMO_CAMERA_ZOOM_MIN;
+    app.camera_scale = DEMO_CAMERA_MIN_SCALE;
+    app.camera_world_x = (double)VOX_WORLD_WIDTH / 2.0;
+    app.camera_world_y = (double)VOX_WORLD_HEIGHT / 2.0;
+    app.camera_shake_x = 0.0;
+    app.camera_shake_y = 0.0;
+    demo_constrain_camera(&app);
+    demo_world_to_screen(&app,
+        demo_match.players[0].position_x.value_q16,
+        demo_match.players[0].position_y.value_q16,
+        &player_screen_x, &player_screen_y);
+    demo_world_to_screen(&app,
+        (vox_i32)(VOX_WORLD_WIDTH / 2U) << 16,
+        (vox_i32)lava_y << 16, &lava_screen_x, &lava_screen_y);
+    if (player_screen_x < 0 || player_screen_x >= (int)DEMO_WIDTH ||
+        player_screen_y < 0 || player_screen_y >= (int)DEMO_HEIGHT ||
+        lava_screen_x < 0 || lava_screen_x >= (int)DEMO_WIDTH ||
+        lava_screen_y < 0 || lava_screen_y >= (int)DEMO_HEIGHT) {
+        fprintf(stderr,
+                "camera self-test: overview lost (%d,%d) (%d,%d)\n",
+                player_screen_x, player_screen_y,
+                lava_screen_x, lava_screen_y);
+        return 7;
+    }
+    {
+        vox_u8 exterior[VOX_SOFTWARE_RGB_BYTES];
+        demo_camera_exterior_pixel(exterior, (int)DEMO_HEIGHT + 8);
+        if (exterior[0] == 0U && exterior[1] == 0U && exterior[2] == 0U) {
+            fprintf(stderr, "camera self-test: exterior fallback is black\n");
+            return 8;
+        }
+    }
+    printf("DIGS camera self-test passed zoom=%d overview-player=%d,%d "
+           "overview-lava=%d,%d footer=%lu\n",
+           DEMO_CAMERA_ZOOM_MAX, player_screen_x, player_screen_y,
+           lava_screen_x, lava_screen_y, (unsigned long)lava_pixels);
     return 0;
 }
 
@@ -3824,6 +4227,9 @@ int main(int argc, char **argv)
     }
     if (argc >= 2 && strcmp(argv[1], "--input-self-test") == 0) {
         return demo_input_self_test();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--camera-self-test") == 0) {
+        return demo_camera_self_test();
     }
     if (argc >= 2 && strcmp(argv[1], "--smoke-test") == 0) {
         const char *path = argc >= 3 ? argv[2] : "/tmp/digs-demo-smoke.ppm";

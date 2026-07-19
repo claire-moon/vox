@@ -4,11 +4,15 @@
 
 #include "vox_types.h"
 
+/*
+ * The desktop showcase uses a four-screen 16:10 field.  Memory-constrained
+ * ports can retain the same engine API with smaller compile-time dimensions.
+ */
 #ifndef VOX_WORLD_WIDTH
-#define VOX_WORLD_WIDTH 256U
+#define VOX_WORLD_WIDTH 512U
 #endif
 #ifndef VOX_WORLD_HEIGHT
-#define VOX_WORLD_HEIGHT 160U
+#define VOX_WORLD_HEIGHT 320U
 #endif
 #ifndef VOX_WORLD_DEPTH
 #define VOX_WORLD_DEPTH 10U
@@ -20,11 +24,27 @@
 #define VOX_CHUNK_HEIGHT 16U
 #endif
 
+#if VOX_WORLD_WIDTH == 0U || VOX_WORLD_HEIGHT == 0U || \
+    VOX_WORLD_DEPTH == 0U
+#error "VOX world dimensions must be nonzero"
+#else
+#if VOX_WORLD_WIDTH > \
+    (4294967295UL / VOX_WORLD_HEIGHT / VOX_WORLD_DEPTH)
+#error "VOX world cell count must fit vox_u32"
+#endif
+#endif
+#if VOX_CHUNK_WIDTH == 0U || VOX_CHUNK_HEIGHT == 0U
+#error "VOX chunk dimensions must be nonzero"
+#else
 #if (VOX_WORLD_WIDTH % VOX_CHUNK_WIDTH) != 0
 #error "VOX_WORLD_WIDTH must be an exact multiple of VOX_CHUNK_WIDTH"
 #endif
 #if (VOX_WORLD_HEIGHT % VOX_CHUNK_HEIGHT) != 0
 #error "VOX_WORLD_HEIGHT must be an exact multiple of VOX_CHUNK_HEIGHT"
+#endif
+#endif
+#if VOX_WORLD_WIDTH > 32767U || VOX_WORLD_HEIGHT > 32767U
+#error "VOX world dimensions must fit signed Q16.16 coordinates"
 #endif
 
 #define VOX_WORLD_CHUNKS_X (VOX_WORLD_WIDTH / VOX_CHUNK_WIDTH)

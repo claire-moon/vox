@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define DIGS_MINER_ICON_EXPECTED_FNV 0xD267A2A5U
+#define DIGS_MINER_ICON_EXPECTED_FNV 0xEE849C02U
 
 static int digs_read_file(const char *path, vox_u8 **bytes, size_t *size)
 {

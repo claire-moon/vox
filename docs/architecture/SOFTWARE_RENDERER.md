@@ -5,12 +5,13 @@ The software renderer is VOX's portable presentation oracle. It projects the
 ten-layer mini-voxel slab into a caller-owned RGB24 framebuffer without an
 OS, window, GPU, allocator, floating-point calculation, or external asset.
 
-For each `x/y` world location, the renderer resolves the frontmost non-air cell
-across depth. It initializes a `256 x 160` RGB lightfield with vertical ambient
-skylight, injects colored emission from lava and sufficiently hot material,
-and propagates the maximum attenuated neighbor light. Air transmits farther
-than occupied cells. The final pass samples material palette color and the
-lightfield while scaling to the target resolution.
+For each `x/y` world location, one ascending depth scan caches the frontmost
+non-air material while collecting emission from every layer. It initializes a
+`512 x 320` RGB lightfield with vertical ambient skylight, injects colored
+emission from lava and sufficiently hot material, and propagates the maximum
+attenuated neighbor light. Air transmits farther than occupied cells. The final
+pass reuses the cached surface material instead of rescanning depth, then
+samples palette color and the lightfield while scaling to the target.
 
 This is a bounded diffuse Lightfield approximation designed for cheap CPUs,
 not physically based global illumination. There are no rays, visibility cones,
@@ -37,10 +38,11 @@ That lets every visible world element participate in the Lightfield while the
 canonical material array and match hash remain untouched. Custom menu/HUD text
 is composited afterward as a separate RGB layer.
 
-The renderer owns two fixed world-sized scratch fields, so this v0.0.1 scalar
-implementation is allocation-free but not reentrant. A host must serialize
-calls. A future worker implementation may use caller-owned scratch arenas and
-chunk-dirty recomputation after proving byte-stable results against this path.
+The renderer owns two fixed world-sized light fields plus solid and surface
+caches, so this v0.0.2 scalar implementation is allocation-free but not
+reentrant. A host must serialize calls. A future worker implementation may use
+caller-owned scratch arenas and chunk-dirty recomputation after proving
+byte-stable results against this path.
 
 ## Host and future backends
 

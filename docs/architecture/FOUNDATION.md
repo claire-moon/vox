@@ -25,13 +25,15 @@ C89 material world   C++98 fixed-point bodies
  SDL2 texture / custom UI / procedural audio
 ```
 
-The bounded dense profile is `256 x 160 x 10`, split into 160
-`16 x 16 x 10` chunks. Its 409,600 cells are exactly ten times the original
-demo volume while remaining practical for strict-language test cycles and
-exercising map-sized storage, cross-chunk material motion, sleeping, dirty
-regions, projectiles, reactions, hazards, and multiple miners. A future large
-profile may use a `2048 x 1024 x 4` shallow slab, cold-chunk compression, and
-streaming only after memory, determinism, and platform evidence exists.
+The active v0.0.2 profile is `512 x 320 x 10`, split into 640
+`16 x 16 x 10` chunks. Its 1,638,400 cells are exactly forty times the
+original demo volume and four times the v0.0.1 dense profile. That expanded
+space supports seed-selected archipelagos, continents, twin hills, broad sky,
+and a permanent lava basin while still exercising bounded static storage,
+cross-chunk material motion, sleeping, dirty regions, projectiles, reactions,
+hazards, and multiple miners. Future larger or historical profiles use the
+compile-time dimension boundary until cold-chunk compression and streaming
+have their own determinism and platform evidence.
 
 Cells remain in one canonical, stable `z/y/x` array. Parallel chunk metadata
 tracks occupied and awake counts, active state, noncanonical dirty/revision

@@ -94,11 +94,12 @@ the first systemic vocabulary, not a chemically complete simulation.
 
 ## Lightfield and presentation
 
-The software renderer first resolves the frontmost occupied cell across the
-ten-cell depth slab, injects skylight and RGB emission from lava/hot cells,
-then propagates that light through a `256 x 160` world-space field. Occupied
-cells attenuate light more strongly than air. The field is sampled while
-writing a caller-owned `320 x 200` RGB24 framebuffer.
+The software renderer scans each ten-cell depth column once, caching its
+frontmost occupied material while collecting RGB emission from every layer. It
+then propagates skylight and lava/hot-cell emission through a `512 x 320`
+world-space field. Occupied cells attenuate light more strongly than air. The
+cached surface and field are sampled while writing a caller-owned `320 x 200`
+RGB24 framebuffer.
 
 The option changes propagation work, not simulation:
 

@@ -36,6 +36,7 @@ CARGO_TARGET_DIR="$CARGO_TARGET_DIR" cargo test --manifest-path "$ROOT/Cargo.tom
 "$BUILD_DIR/vox_headless"
 "$BUILD_DIR/digs_headless"
 "$BUILD_DIR/digs_demo" --input-self-test
+"$BUILD_DIR/digs_demo" --camera-self-test
 "$BUILD_DIR/digs_demo" --render-miner-icon-xpm "$MINER_ICON"
 cmp "$MINER_ICON" "$BUILD_DIR/share/digs/icons/digs-miner.xpm"
 "$BUILD_DIR/digs_demo" --smoke-test "$SMOKE_IMAGE"
