@@ -13,6 +13,19 @@ every machine released since 1990.
 | VERIFIED | Native or reproducible acceptance evidence is recorded |
 | UNSUPPORTED | Explicitly outside the current profile |
 
+## v0.0.2 development-candidate evidence
+
+| Surface | Exact environment | State | Evidence and boundary |
+|---|---|---|---|
+| Strict portable core, ABI 8, and headless match | Ageless Linux 0.1.1 (Linux Mint 22.3 base), Linux 6.17.0-35 x86-64; Intel Core i7-10750H; GCC/G++ 13.3.0; CMake 3.28.3; Cargo 1.95.0 | RUNS | Extension-free strict C89/C++98 scalar and NASM-enabled suites, Rust tests, audio/input/camera/settings proofs, deterministic headless scenarios, and focused AddressSanitizer/UndefinedBehaviorSanitizer runs pass on the development branch; the clean package records the final commit and logs |
+| SDL2 non-windowed demo smoke | Same host; SDL2 2.30.0; Release CPU RGB24 renderer | RUNS | Two latest-source runs match at state `06fb9a04`, frame `78e5e49a`, and PPM SHA-256 `53c0f9d8765d52d753f19163543d7305d18d2e3a7fcda60d8fa4fcd09efcb37c`; this proves the scripted smoke path, not desktop input or audible output |
+| Release CPU Lightfield sample | Same host on the `balanced` power profile; 60 frames per tier | RUNS | Compatibility 7.708 ms/frame (129.7 FPS), Balanced 10.900 ms/frame (91.7 FPS), and Showcase 14.098 ms/frame (70.9 FPS), with stable hashes `0412d9ae`, `a5e05931`, and `b5979fc2`; timing is a short local sample, not a cross-platform guarantee |
+| SDL desktop, Logitech F310, two-player input, and procedural audio | Code-complete SDL2 host on the same laptop | BUILDS | Automated input normalization, camera, settings migration, and silent-device paths pass; the 65-point workbook still requires an interactive X/D-mode, audio, display, and couch-play pass before promotion to VERIFIED |
+| NVIDIA GTX 1660 Ti acceleration | GPU is present in the laptop but v0.0.2 still uploads a CPU-rendered SDL texture | PLANNED | No GPU backend, driver-performance result, or GPU acceleration claim is made for this candidate |
+
+These rows describe a development candidate, not a tagged release. RFC review,
+manual QA, a clean packaged soak, and governance checks remain release gates.
+
 ## v0.0.1 evidence
 
 | Surface | Exact environment | State | Evidence and boundary |

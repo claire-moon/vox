@@ -19,8 +19,10 @@
                               VOX_DIGS_ACTION_ROPE)
 
 #define VOX_DIGS_MAX_HEALTH 100U
-#define VOX_DIGS_RESPAWN_TICKS 120U
+#define VOX_DIGS_RESPAWN_TICKS 180U
 #define VOX_DIGS_SPAWN_SHIELD_TICKS 300U
+#define VOX_DIGS_LAST_ATTACKER_TICKS 300U
+#define VOX_DIGS_PROJECTILE_OWNER_CLEAR_TICKS 6U
 #define VOX_DIGS_MAX_PROJECTILES 64U
 #define VOX_DIGS_FX_RETRO 768U
 #define VOX_DIGS_FX_STANDARD 1536U
@@ -29,7 +31,11 @@
 #define VOX_DIGS_MAX_EVENTS 128U
 #define VOX_DIGS_ANATOMY_PART_COUNT 15U
 #define VOX_DIGS_NO_PLAYER 65535U
+#define VOX_DIGS_NO_TEAM 65535U
 #define VOX_DIGS_NO_PART 65535U
+
+#define VOX_DIGS_TEAM_MINERS 0U
+#define VOX_DIGS_TEAM_MACHINES 1U
 
 #define VOX_DIGS_WEAPON_MELEE 1U
 #define VOX_DIGS_WEAPON_PROJECTILE 2U
@@ -72,6 +78,17 @@ typedef enum vox_digs_team_mode {
     VOX_DIGS_MODE_FFA = 0,
     VOX_DIGS_MODE_MINERS_VS_MACHINES = 1
 } vox_digs_team_mode;
+
+typedef enum vox_digs_respawn_mode {
+    VOX_DIGS_RESPAWN_AUTO = 0,
+    VOX_DIGS_RESPAWN_ON_FIRE = 1
+} vox_digs_respawn_mode;
+
+typedef enum vox_digs_end_reason {
+    VOX_DIGS_END_NONE = 0,
+    VOX_DIGS_END_TIME = 1,
+    VOX_DIGS_END_SCORE = 2
+} vox_digs_end_reason;
 
 typedef enum vox_digs_tool {
     VOX_DIGS_TOOL_PICK = 0,
@@ -126,7 +143,9 @@ typedef enum vox_digs_event_type {
     VOX_DIGS_EVENT_AI_STATE = 10,
     VOX_DIGS_EVENT_AI_BARK = 11,
     VOX_DIGS_EVENT_LIMB_SEVER = 12,
-    VOX_DIGS_EVENT_BLEED = 13
+    VOX_DIGS_EVENT_BLEED = 13,
+    VOX_DIGS_EVENT_RESPAWN_READY = 14,
+    VOX_DIGS_EVENT_MATCH_END = 15
 } vox_digs_event_type;
 
 typedef struct vox_digs_weapon_properties {
@@ -144,6 +163,10 @@ typedef struct vox_digs_projectile {
     vox_i32 position_y_q16;
     vox_i32 velocity_x_q16;
     vox_i32 velocity_y_q16;
+    vox_i32 launch_min_x_q16;
+    vox_i32 launch_max_x_q16;
+    vox_i32 launch_min_y_q16;
+    vox_i32 launch_max_y_q16;
     vox_u16 active;
     vox_u16 owner;
     vox_u16 weapon;
@@ -152,6 +175,8 @@ typedef struct vox_digs_projectile {
     vox_u16 age_ticks;
     vox_u16 damage;
     vox_u16 blast_radius;
+    vox_u16 owner_clear;
+    vox_u16 arming_ticks;
 } vox_digs_projectile;
 
 typedef struct vox_digs_effect {
@@ -223,6 +248,8 @@ typedef struct vox_digs_rules {
     vox_u16 weapon_mask;
     vox_u16 fx_budget;
     vox_u16 friendly_fire;
+    vox_u16 respawn_mode;
+    vox_u16 respawn_delay_ticks;
     vox_u16 reserved;
 } vox_digs_rules;
 
@@ -245,11 +272,19 @@ typedef struct vox_digs_match {
     vox_u32 tick;
     vox_u32 state_hash;
     vox_digs_phase phase;
+    vox_u16 result_reason;
+    vox_u16 result_draw;
+    vox_u16 winner_player;
+    vox_u16 winner_team;
     vox_u16 scores[VOX_DIGS_MAX_SLOTS];
     vox_u16 alive[VOX_DIGS_MAX_SLOTS];
     vox_u16 health[VOX_DIGS_MAX_SLOTS];
     vox_u16 deaths[VOX_DIGS_MAX_SLOTS];
     vox_u16 respawn_ticks[VOX_DIGS_MAX_SLOTS];
+    vox_u16 respawn_ready[VOX_DIGS_MAX_SLOTS];
+    vox_u16 respawn_requested[VOX_DIGS_MAX_SLOTS];
+    vox_i32 respawn_target_x_q16[VOX_DIGS_MAX_SLOTS];
+    vox_i32 respawn_target_y_q16[VOX_DIGS_MAX_SLOTS];
     vox_u16 spawn_shield_ticks[VOX_DIGS_MAX_SLOTS];
     vox_u16 player_actions[VOX_DIGS_MAX_SLOTS];
     vox_u16 previous_actions[VOX_DIGS_MAX_SLOTS];
@@ -265,6 +300,7 @@ typedef struct vox_digs_match {
     vox_u16 selected_weapon[VOX_DIGS_MAX_SLOTS];
     vox_u16 facing_right[VOX_DIGS_MAX_SLOTS];
     vox_u16 last_attacker[VOX_DIGS_MAX_SLOTS];
+    vox_u32 last_attacker_tick[VOX_DIGS_MAX_SLOTS];
     vox_u16 bleed_accumulator_q8[VOX_DIGS_MAX_SLOTS];
     vox_u16 clot_ticks[VOX_DIGS_MAX_SLOTS];
     vox_u32 lava_level_q16;
@@ -300,6 +336,8 @@ vox_result vox_digs_generate_map(vox_world *world, vox_u16 map_style,
 vox_result vox_digs_match_init(vox_digs_match *match,
                                const vox_digs_rules *rules);
 vox_result vox_digs_match_step(vox_digs_match *match);
+vox_result vox_digs_request_respawn(vox_digs_match *match,
+                                    vox_u16 player);
 vox_result vox_digs_record_kill(vox_digs_match *match, vox_u16 killer,
                                 vox_u16 victim);
 vox_result vox_digs_submit_input(vox_digs_match *match,

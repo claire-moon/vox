@@ -1583,23 +1583,33 @@ static int test_rule_bounds_and_long_lava(void)
     if (vox_digs_match_init(&match, &rules) != VOX_ERR_INVALID) {
         return 1;
     }
-    rules.score_limit = 10U;
+    rules.score_limit = 0U;
+    rules.respawn_mode = 2U;
+    if (vox_digs_match_init(&match, &rules) != VOX_ERR_INVALID) {
+        return 2;
+    }
+    rules.respawn_mode = VOX_DIGS_RESPAWN_AUTO;
+    rules.respawn_delay_ticks = 3601U;
+    if (vox_digs_match_init(&match, &rules) != VOX_ERR_INVALID) {
+        return 3;
+    }
+    rules.respawn_delay_ticks = VOX_DIGS_RESPAWN_TICKS;
     rules.player_count = 1U;
     rules.bot_mask = 0U;
     rules.match_ticks = 100000U;
     rules.lava_start_tick = 1U;
     if (vox_digs_match_init(&match, &rules) != VOX_OK) {
-        return 2;
+        return 4;
     }
     match.tick = 65537U;
     if (vox_digs_match_step(&match) != VOX_OK ||
         match.lava_level_q16 < 40000U) {
-        return 3;
+        return 5;
     }
     first_level = match.lava_level_q16;
     if (vox_digs_match_step(&match) != VOX_OK ||
         match.lava_level_q16 < first_level) {
-        return 4;
+        return 6;
     }
     return 0;
 }
@@ -1635,6 +1645,261 @@ static int test_bot_score_limit_step(void)
     return 0;
 }
 
+static int test_respawn_modes_and_requests(void)
+{
+    static vox_digs_match match;
+    vox_digs_rules rules;
+    vox_u32 tick;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    rules.respawn_delay_ticks = 2U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) {
+        return 1;
+    }
+    match.spawn_shield_ticks[1] = 0U;
+    if (vox_digs_record_kill(&match, 0U, 1U) != VOX_OK ||
+        match.respawn_ticks[1] != 2U || match.respawn_ready[1] ||
+        match.respawn_target_x_q16[1] <= 0L ||
+        vox_digs_request_respawn(&match, 1U) != VOX_ERR_INVALID) {
+        return 2;
+    }
+    for (tick = 0U; tick < 2U; ++tick) {
+        if (vox_digs_match_step(&match) != VOX_OK) {
+            return 3;
+        }
+    }
+    if (!match.alive[1] || match.respawn_ticks[1] != 0U ||
+        match.respawn_ready[1] || match.respawn_requested[1]) {
+        return 4;
+    }
+
+    rules.respawn_mode = VOX_DIGS_RESPAWN_ON_FIRE;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) {
+        return 5;
+    }
+    match.spawn_shield_ticks[1] = 0U;
+    if (vox_digs_record_kill(&match, 0U, 1U) != VOX_OK) {
+        return 6;
+    }
+    for (tick = 0U; tick < 2U; ++tick) {
+        if (vox_digs_match_step(&match) != VOX_OK) {
+            return 7;
+        }
+    }
+    if (match.alive[1] || !match.respawn_ready[1] ||
+        !event_type_seen(&match, VOX_DIGS_EVENT_RESPAWN_READY) ||
+        vox_digs_request_respawn(&match, 1U) != VOX_OK ||
+        vox_digs_match_step(&match) != VOX_OK || !match.alive[1]) {
+        return 8;
+    }
+
+    rules.respawn_mode = VOX_DIGS_RESPAWN_AUTO;
+    rules.respawn_delay_ticks = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) {
+        return 9;
+    }
+    match.spawn_shield_ticks[1] = 0U;
+    if (vox_digs_record_kill(&match, 0U, 1U) != VOX_OK ||
+        match.alive[1] || match.respawn_ready[1] ||
+        vox_digs_match_step(&match) != VOX_OK || !match.alive[1]) {
+        return 10;
+    }
+
+    rules.respawn_mode = VOX_DIGS_RESPAWN_ON_FIRE;
+    rules.respawn_delay_ticks = 1U;
+    rules.bot_mask = 0x0002U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) {
+        return 11;
+    }
+    match.spawn_shield_ticks[1] = 0U;
+    if (vox_digs_record_kill(&match, 0U, 1U) != VOX_OK ||
+        vox_digs_match_step(&match) != VOX_OK || !match.alive[1]) {
+        return 12;
+    }
+    return 0;
+}
+
+static int test_match_results_and_final_batch(void)
+{
+    static vox_digs_match match;
+    vox_digs_rules rules;
+    vox_u16 ordinal;
+    vox_u16 end_events;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    rules.match_ticks = 1U;
+    rules.lava_start_tick = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) {
+        return 1;
+    }
+    match.scores[0] = 3U;
+    match.scores[1] = 2U;
+    if (vox_digs_match_step(&match) != VOX_OK ||
+        match.phase != VOX_DIGS_RESULTS ||
+        match.result_reason != VOX_DIGS_END_TIME || match.result_draw ||
+        match.winner_player != 0U ||
+        match.winner_team != VOX_DIGS_NO_TEAM) {
+        return 2;
+    }
+    end_events = 0U;
+    for (ordinal = 0U; ordinal < match.event_count; ++ordinal) {
+        const vox_digs_event *event = vox_digs_event_get(&match, ordinal);
+        if (event != 0 && event->type == VOX_DIGS_EVENT_MATCH_END) {
+            end_events++;
+        }
+    }
+    if (end_events != 1U || vox_digs_match_step(&match) != VOX_ERR_INVALID) {
+        return 3;
+    }
+
+    rules.player_count = 4U;
+    rules.bot_mask = 0x000cU;
+    rules.score_limit = 1U;
+    rules.match_ticks = 600U;
+    rules.lava_start_tick = 500U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK ||
+        vox_digs_record_kill(&match, 0U, 2U) != VOX_OK ||
+        match.phase != VOX_DIGS_RUNNING ||
+        vox_digs_record_kill(&match, 1U, 3U) != VOX_OK ||
+        match.phase != VOX_DIGS_RUNNING ||
+        vox_digs_match_step(&match) != VOX_OK ||
+        match.phase != VOX_DIGS_RESULTS ||
+        match.result_reason != VOX_DIGS_END_SCORE || !match.result_draw ||
+        match.winner_player != VOX_DIGS_NO_PLAYER) {
+        return 4;
+    }
+
+    rules.player_count = 2U;
+    rules.bot_mask = 0x0002U;
+    rules.team_mode = VOX_DIGS_MODE_MINERS_VS_MACHINES;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK ||
+        vox_digs_record_kill(&match, 0U, 1U) != VOX_OK ||
+        vox_digs_match_step(&match) != VOX_OK ||
+        match.result_reason != VOX_DIGS_END_SCORE || match.result_draw ||
+        match.winner_team != VOX_DIGS_TEAM_MINERS ||
+        match.winner_player != VOX_DIGS_NO_PLAYER) {
+        return 5;
+    }
+    return 0;
+}
+
+static int test_last_attacker_expiry(void)
+{
+    static vox_digs_match match;
+    vox_digs_rules rules;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) {
+        return 1;
+    }
+    match.spawn_shield_ticks[1] = 0U;
+    if (vox_digs_apply_damage(&match, 0U, 1U, 1U) != VOX_OK) {
+        return 2;
+    }
+    match.tick = VOX_DIGS_LAST_ATTACKER_TICKS;
+    if (vox_digs_apply_damage(&match, VOX_DIGS_NO_PLAYER, 1U, 200U) !=
+            VOX_OK || match.scores[0] != 1U) {
+        return 3;
+    }
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) {
+        return 4;
+    }
+    match.spawn_shield_ticks[1] = 0U;
+    if (vox_digs_apply_damage(&match, 0U, 1U, 1U) != VOX_OK) {
+        return 5;
+    }
+    match.tick = VOX_DIGS_LAST_ATTACKER_TICKS + 1U;
+    if (vox_digs_apply_damage(&match, VOX_DIGS_NO_PLAYER, 1U, 200U) !=
+            VOX_OK || match.scores[0] != 0U || match.alive[1]) {
+        return 6;
+    }
+    return 0;
+}
+
+static int test_projectile_owner_clearance(void)
+{
+    static vox_digs_match match;
+    vox_digs_rules rules;
+    vox_i32 player_x;
+    vox_i32 player_y;
+    vox_u32 target_x;
+    vox_u32 target_y;
+    vox_u16 slot;
+    vox_u16 found;
+    vox_u16 health_before;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) {
+        return 1;
+    }
+    player_x = match.players[0].position_x.value_q16 / 65536L;
+    player_y = match.players[0].position_y.value_q16 / 65536L;
+    target_x = (vox_u32)(player_x + 12L < (vox_i32)VOX_WORLD_WIDTH ?
+                         player_x + 12L : player_x - 12L);
+    target_y = (vox_u32)(player_y > 10L ? player_y - 10L : 0L);
+    if (vox_digs_fire_weapon(&match, 0U, VOX_DIGS_TOOL_BLAST_CHARGE,
+                             target_x, target_y) != VOX_OK) {
+        return 2;
+    }
+    found = 0U;
+    slot = 0U;
+    while (slot < VOX_DIGS_MAX_PROJECTILES) {
+        if (match.projectiles[slot].active) {
+            found = 1U;
+            break;
+        }
+        slot++;
+    }
+    if (!found || !match.projectiles[slot].owner_clear ||
+        match.projectiles[slot].arming_ticks !=
+            VOX_DIGS_PROJECTILE_OWNER_CLEAR_TICKS ||
+        (match.projectiles[slot].position_x_q16 ==
+             match.players[0].position_x.value_q16 &&
+         match.projectiles[slot].position_y_q16 ==
+             match.players[0].position_y.value_q16) ||
+        match.projectiles[slot].position_x_q16 <
+            match.projectiles[slot].launch_min_x_q16 ||
+        match.projectiles[slot].position_x_q16 >
+            match.projectiles[slot].launch_max_x_q16 ||
+        match.projectiles[slot].position_y_q16 <
+            match.projectiles[slot].launch_min_y_q16 ||
+        match.projectiles[slot].position_y_q16 >
+            match.projectiles[slot].launch_max_y_q16) {
+        return 3;
+    }
+    health_before = match.health[0];
+    if (vox_digs_match_step(&match) != VOX_OK ||
+        match.health[0] != health_before) {
+        return 4;
+    }
+    if (match.projectiles[slot].active) {
+        match.projectiles[slot].position_x_q16 =
+            match.players[0].position_x.value_q16;
+        match.projectiles[slot].position_y_q16 =
+            match.players[0].position_y.value_q16;
+        match.projectiles[slot].velocity_x_q16 = 0L;
+        match.projectiles[slot].velocity_y_q16 = 0L;
+        match.projectiles[slot].owner_clear = 0U;
+        match.projectiles[slot].arming_ticks = 0U;
+        match.projectiles[slot].fuse_ticks = 1U;
+        if (vox_digs_match_step(&match) != VOX_OK ||
+            match.health[0] >= health_before) {
+            return 5;
+        }
+    } else {
+        return 6;
+    }
+    return 0;
+}
+
 int main(void)
 {
     vox_digs_rules rules;
@@ -1642,7 +1907,9 @@ int main(void)
     vox_u32 first;
     vox_u32 second;
     vox_digs_rules_classic(&rules);
-    if (rules.match_ticks != 18000U || rules.lava_start_tick != 12600U) {
+    if (rules.match_ticks != 7200U || rules.lava_start_tick != 5400U ||
+        rules.respawn_mode != VOX_DIGS_RESPAWN_AUTO ||
+        rules.respawn_delay_ticks != VOX_DIGS_RESPAWN_TICKS) {
         fprintf(stderr, "classic timing mismatch\n");
         return 1;
     }
@@ -1651,6 +1918,35 @@ int main(void)
         match.scores[0] != 1U) {
         fprintf(stderr, "kill attribution mismatch\n");
         return 2;
+    }
+    {
+        int result = test_respawn_modes_and_requests();
+        if (result != 0) {
+            fprintf(stderr, "DIGS respawn-mode mismatch (%d)\n", result);
+            return 21;
+        }
+    }
+    {
+        int result = test_match_results_and_final_batch();
+        if (result != 0) {
+            fprintf(stderr, "DIGS match-result mismatch (%d)\n", result);
+            return 22;
+        }
+    }
+    {
+        int result = test_last_attacker_expiry();
+        if (result != 0) {
+            fprintf(stderr, "DIGS attacker-expiry mismatch (%d)\n", result);
+            return 23;
+        }
+    }
+    {
+        int result = test_projectile_owner_clearance();
+        if (result != 0) {
+            fprintf(stderr, "DIGS projectile-clearance mismatch (%d)\n",
+                    result);
+            return 24;
+        }
     }
     {
         int map_generation_result = test_map_generation();

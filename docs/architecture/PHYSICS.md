@@ -5,7 +5,7 @@
 reads the C89 world but does not allocate, mutate terrain, use floating-point
 state, throw exceptions, enable RTTI, or expose C++ types across the boundary.
 
-The v0.0.1 body is an axis-aligned fixed-point capsule proxy with Q16.16
+The v0.0.2 body is an axis-aligned fixed-point capsule proxy with Q16.16
 position, velocity, and half extents. Each 60 Hz tick applies saturating
 gravity, clamps speed, then resolves horizontal movement before vertical
 movement through bounded one-sixteenth-cell substeps. A projected side-view
@@ -22,6 +22,13 @@ DIGS owns the game-facing layer around those bodies:
 - lava contact damage and match hazards; and
 - fixed-pool C89 projectiles with Q16.16 motion, optional gravity/fuse,
   bounded substeps, terrain/player impacts, material deposits, and blasts.
+
+A fired projectile begins at the ray intersection with its owner's body bounds
+plus a small muzzle clearance. Its public state records that launch envelope
+and a six-tick owner-clear timer. While still inside the envelope it ignores
+the owner and overlapping launch cells; leaving the envelope restores normal
+collision immediately. External walls still collide, and blast self-damage is
+not globally disabled.
 
 Terrain destruction is never an implicit side effect of the body solver.
 The C89 world pass marks awake structural cells unstable when they lose direct

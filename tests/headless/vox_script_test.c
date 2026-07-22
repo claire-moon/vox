@@ -5,7 +5,7 @@
 #include <string.h>
 
 #define DIGS_MANIFEST "games/digs/scripts/manifest.txt"
-#define DIGS_ENTRY_COUNT 79U
+#define DIGS_ENTRY_COUNT 86U
 
 static vox_u32 tested_source_hash;
 static vox_u32 tested_catalog_hash;
@@ -25,11 +25,11 @@ static int test_catalog_shape(const vox_script_catalog *catalog)
         catalog->kind_counts[VOX_SCRIPT_KIND_ENTITY] != 9U ||
         catalog->kind_counts[VOX_SCRIPT_KIND_REACTION] != 12U ||
         catalog->kind_counts[VOX_SCRIPT_KIND_ANATOMY] != 15U ||
-        catalog->kind_counts[VOX_SCRIPT_KIND_SYSTEM] != 8U ||
+        catalog->kind_counts[VOX_SCRIPT_KIND_SYSTEM] != 11U ||
         catalog->kind_counts[VOX_SCRIPT_KIND_HOW_TO] != 1U ||
         catalog->kind_counts[VOX_SCRIPT_KIND_MODE] != 2U ||
         catalog->kind_counts[VOX_SCRIPT_KIND_FX] != 5U ||
-        catalog->kind_counts[VOX_SCRIPT_KIND_AUDIO] != 3U) {
+        catalog->kind_counts[VOX_SCRIPT_KIND_AUDIO] != 7U) {
         return 1;
     }
     entry = vox_script_catalog_entry(catalog, 0U);

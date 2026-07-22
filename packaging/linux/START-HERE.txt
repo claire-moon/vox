@@ -36,7 +36,7 @@ includes the Lua catalog, the pinned controller mapping database, and the
 canonical miner icon. CG-README.TXT documents AUTO/keyboard/controller modes,
 Logitech F310 X/D-mode checks, radial aim, two-player ownership, rope use, map
 identity, the Miner's Index, accessibility options, script reload, and the
-53-point manual acceptance pass.
+65-point manual acceptance pass.
 
 The evidence/ directory contains the unmodified package-time test streams,
 exit statuses, smoke images, build profile, and an explanation of their

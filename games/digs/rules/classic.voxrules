@@ -1,12 +1,14 @@
 # VOX rules schema 1; values are deterministic simulation units.
 schema = 1
 name = "Classic FFA"
-match_ticks = 18000
+match_ticks = 7200
 score_limit = 10
-lava_start_tick = 12600
+lava_start_tick = 5400
 player_count = 2
 bot_mask = 0x0002
 fx_budget = 1536
 friendly_fire = 0
+respawn_mode = "auto"
+respawn_delay_ticks = 180
 team_mode = false
 seed = 1448037169

@@ -25,7 +25,10 @@ remain under `docs/releasing/` and are not retroactively changed by this work.
   `16 x 16 x 10` active/sleeping chunks.
 - Four match slots with one or two independent local humans and zero to two
   deterministic bots. Free-for-All and Miners vs Machines expose team and
-  friendly-fire rules without giving bots hidden physics advantages.
+  friendly-fire rules without giving bots hidden physics advantages. Normal
+  matches use a selectable two- or three-minute clock, optional score cap,
+  named players, authoritative winner/draw results, and configurable AUTO or
+  ON FIRE respawn timing.
 - Three topology-specific maps generated from a visible seed: Coal Ridge's
   rolling seams and drifts, Deepworks' connected chambers and shafts, and
   Furnace Yard's industrial terraces and contained hot pockets. Every style
@@ -47,12 +50,14 @@ remain under `docs/releasing/` and are not retroactively changed by this work.
   fallback, SDL GameController hotplug and deterministic claims for two pads,
   runtime rebinding, shared dynamic camera framing, hardware-pointer-correct
   mouse aim, rumble, local-only flashes, and damage-number controls.
-- A sandboxed Lua 5.1 catalog containing 79 materials, weapons, entities,
+- A sandboxed Lua 5.1 catalog containing 86 materials, weapons, entities,
   reactions, anatomy parts, modes, AI states, and system entries. The in-game
   Miner's Index displays six entries at a time; F5 uses transactional reload.
-- An original allocation-free, dual-bank, eight-voice stereo synth with
-  square/polynomial-noise timbres and deterministic event patches. No sampled
-  sound asset or music file is required.
+- An original allocation-free VOX Audio v2 engine with eight bounded stereo
+  voices, sample-time menu notes, hit/kill confirms, world-aware wind/water/
+  lava ambience, and authored allophone speech for a deep announcer and high
+  miner barks. No sampled sound asset or external speech runtime is required;
+  Options exposes one persistent master-volume control.
 - A CPU RGB Lightfield with Compatibility, Balanced, and Showcase quality
   tiers. One depth scan caches each visible surface while collecting emission
   from all ten layers; rendering and frame pacing never change the
@@ -118,6 +123,9 @@ ctest --test-dir build-demo --output-on-failure
 
 On Linux System V x86-64, append `-DVOX_BUILD_NASM_ACCEL=ON` to the CMake
 configure command to build and test the optional assembly contract probe.
+Thermally constrained machines can cap the project scripts without changing
+test coverage, for example `VOX_BUILD_JOBS=1 tools/vox-verify.sh` or
+`VOX_BUILD_JOBS=2 tools/package-linux-demo.sh`.
 
 The host links to the system SDL2 library. No SDL source or binary is vendored.
 A pinned zlib-licensed SDL GameControllerDB data snapshot is bundled so known
@@ -129,6 +137,13 @@ fallback. See [THIRD_PARTY.md](THIRD_PARTY.md).
 The current easy-run artifact is a Linux x86-64 bundle. Extract it and start
 the launcher; it checks the dynamically linked SDL2 runtime and prints
 distribution-specific installation help if the library is missing:
+
+To obtain a current development bundle, open the repository's
+[GitHub Actions runs](https://github.com/claire-moon/vox/actions), select the
+latest successful `foundation-ci` run for the branch or pull request being
+tested, and download the `vox-digs-v0.0.2-linux-x86_64` artifact. Tagged
+release bundles will also appear on the repository's Releases page after the
+candidate completes manual QA; an Actions artifact is not a final release.
 
 For a complete plain-text walkthrough written for the first local test pass,
 open [CG-README.TXT](CG-README.TXT).
@@ -162,7 +177,7 @@ the planned Windows, macOS, historical, or GPU adapters.
 ## Playtest feedback
 
 The title screen's **QA Feedback** entry points testers to the versioned
-53-checkpoint workbook and cockpit. Fill `qa/VOX_QA_FEEDBACK.xlsx`, then combine
+65-checkpoint workbook and cockpit. Fill `qa/VOX_QA_FEEDBACK.xlsx`, then combine
 one or more
 tester workbooks with xleak and optionally exercise the exact demo binary:
 
@@ -215,18 +230,19 @@ exercise the identical scalar fallback explicitly.
   A, or Start confirms; `Esc` or controller B goes back.
 - Player 1 keyboard/mouse: `A`/`D` run, `Space` jumps, left `Shift` uses the
   steam pack, `Q` holds the rope, `W`/`S` reel an attached rope, mouse aims,
-  and `E` or left mouse fires. Number keys `1` through `0` select tools.
+  `C` barks, and `E` or left mouse fires. Number keys `1` through `0` select
+  tools.
 - Player 2 keyboard: left/right run, up jumps, right `Shift` uses steam, `/`
   holds the rope, right `Ctrl` fires, `I`/`J`/`K`/`L` aims, and `,`/`.` cycles
-  tools.
+  tools; `M` barks.
 - Normalized controller: left stick moves/reels; right stick uses radial,
   player-relative aim; A jumps; X uses steam; left bumper holds the rope; right
-  bumper or right trigger fires; Y/B cycles tools; and Start pauses.
+  bumper or right trigger fires; Y/B cycles tools; R3 barks; and Start pauses.
 - Match/global: the mouse wheel biases camera zoom, Shift+wheel cycles P1's
   arsenal, `Esc` pauses, `R` restarts, `F1` toggles diagnostics, `F5` reloads
   validated Lua data transactionally, and `F11` toggles fullscreen.
 
-The Controls screen supports run-local action rebinding and conflict swaps.
+The Controls screen supports action rebinding and conflict swaps.
 Options > Input & Controller selects exclusive AUTO, keyboard, or controller
 ownership per player and persists sensitivity, deadzone, and subtle aim
 slowdown presets. See [CG-README.TXT](CG-README.TXT) for F310 X/D-mode testing,

@@ -42,24 +42,56 @@ vox.define("fx", "fx.damage_numbers", {
 
 vox.define("audio", "audio.dual_pokey", {
     order = 700, title = "DUAL CHIP SOUND", category = "AUDIO",
-    summary = "Eight deterministic stereo voices synthesize every effect and bark from a POKEY-inspired register palette.",
-    detail = "VOX uses an original GPL implementation inspired by late-1970s polynomial noise and divider-channel techniques; it does not copy Atari800 code. Two four-voice banks provide square, polynomial noise, metallic, and stepped-envelope shapes at the audio callback rate. There is no music in v0.0.2.",
-    tags = "8-bit,synthesis,stereo,sfx",
-    values = { banks = 2, music = 0, voices = 8 }
+    summary = "Eight deterministic stereo voices synthesize effects, interface notes, ambience, and phonetic speech.",
+    detail = "VOX Audio v2 is an original allocation-free GPL implementation inspired by late-1970s divider channels and polynomial noise. Two four-voice banks remain bounded while a sample-time queue schedules short notes, confirms, speech, and world ambience without recorded samples.",
+    tags = "8-bit,synthesis,stereo,sfx,speech",
+    values = { api_version = 2, banks = 2, note_queue = 32, voices = 8 }
 })
 
 vox.define("audio", "audio.event_mapping", {
     order = 701, title = "SOUND EVENT MAPPING", category = "AUDIO",
-    summary = "Simulation event type, magnitude, material, and seeded variant select a bounded chip patch.",
-    detail = "Shots, impacts, explosions, rope events, hurt, death, spawn, lava, and UI navigation map to short register envelopes. Magnitude changes divider and decay; material selects noise character; deterministic variant changes a small patch range so repeated events remain recognizable without becoming identical.",
+    summary = "World events and local confirmations select bounded chip patches without changing simulation state.",
+    detail = "Shots, impacts, explosions, rope events, hurt, death, spawn, hit confirms, and kill confirms use separate priorities and stereo placement. Magnitude, material, and deterministic event variants change divider, noise, and decay while preserving a recognizable sound family.",
     tags = "events,variation,determinism",
-    values = { patch_count = 24, voices = 8 }
+    values = { patch_count = 30, voices = 8 }
 })
 
 vox.define("audio", "audio.bot_barks", {
-    order = 702, title = "MACHINE BARKS", category = "AUDIO",
-    summary = "Sparse contextual synthetic chirps communicate bot state without recorded speech.",
-    detail = "A machine may bark on acquiring a target, losing sight, retreating, attaching a rope, taking a severe hit, or scoring a kill. Cooldowns and event priority keep chatter sparse. Pitch and rhythm derive from bot slot, state, and event sequence, making each machine legible but deterministic.",
+    order = 702, title = "CONTEXTUAL MINER BARKS", category = "AUDIO",
+    summary = "Humans and machines share six playful phrase pools synthesized from authored phonemes.",
+    detail = "Idle, searching, attacking, retreating, hurt, and victory each provide ten paired bubble and phoneme phrases. Humans speak only on Bark; machines pass a deterministic eligibility gate and a twelve-second cooldown. Dialogue is presentation-only and never reveals hidden targets or enters the match hash.",
     tags = "ai,barks,chip-speech,feedback",
-    values = { cooldown_ticks = 180, variants = 16 }
+    values = { bot_cooldown_ticks = 720, contexts = 6, phrases_per_context = 10 }
+})
+
+vox.define("audio", "audio.announcer", {
+    order = 703, title = "PHONETIC ANNOUNCER", category = "AUDIO",
+    summary = "An original fixed-point formant voice announces DIGS, match start, multikills, and sprees.",
+    detail = "Forty stable allophones feed deep-announcer and high-miner profiles at an internal eight-kilohertz speech rate. Authored token streams keep every shipped phrase deterministic and portable; arbitrary text and custom player names are not spoken in v0.0.2.",
+    tags = "speech,allophone,announcer,portable",
+    values = { allophones = 40, internal_rate = 8000, phrase_queue = 4, profiles = 2 }
+})
+
+vox.define("audio", "audio.menu_motif", {
+    order = 704, title = "MINING MENU MOTIF", category = "AUDIO",
+    summary = "Successful menu movement walks an eight-note minor-pentatonic work-song instead of repeating one beep.",
+    detail = "Navigation schedules one short note on a sixty-millisecond grid and resets after one and a half seconds idle. Accept and Back use rising and falling cadences. Mouse-wheel zoom has its own quiet click and stays silent at zoom limits.",
+    tags = "ui,motif,zoom,feedback",
+    values = { idle_reset_ms = 1500, notes = 8, note_grid_ms = 60 }
+})
+
+vox.define("audio", "audio.ambience", {
+    order = 705, title = "WORLD AWARE AMBIENCE", category = "AUDIO",
+    summary = "Wind, water, and lava layers follow the terrain visible around the shared camera.",
+    detail = "A bounded five-hertz scene mapper samples a fixed eight-by-four grid through all ten depth cells. Open sky, water, lava, and material centroids drive smoothed gain and pan while the two strongest layers mix below gameplay and speech priority.",
+    tags = "ambience,wind,water,lava,bounded",
+    values = { depth_reads_per_update = 320, sources = 3, update_hz = 5 }
+})
+
+vox.define("audio", "audio.master_volume", {
+    order = 706, title = "MASTER VOLUME", category = "AUDIO",
+    summary = "One persistent master control adjusts every generated sound from zero through one hundred percent.",
+    detail = "The Options menu exposes eleven ten-percent steps and no per-category sliders. A short gain ramp avoids clicks. At zero the output is silent while deterministic note, speech, and ambience clocks continue to advance.",
+    tags = "volume,options,accessibility",
+    values = { default_percent = 80, maximum_percent = 100, step_percent = 10 }
 })

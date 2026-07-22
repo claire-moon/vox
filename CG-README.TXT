@@ -47,6 +47,11 @@ The title screen contains:
 Match setup provides one or two local players, zero through two bots,
 Free-for-All or Miners vs Machines, friendly fire, three map styles, a visible
 seed, and three arsenal profiles. Four fighters is the current match maximum.
+CUSTOMIZE GAME names every active slot and selects a two- or three-minute
+clock, optional Off/5/10/20 score cap, AUTO or ON FIRE respawn, and a
+0/1/2/3/5-second delay. The defaults are two minutes, score cap Off, AUTO, and
+three seconds. Highest individual FFA score or Miners-versus-Machines team
+total wins; an exact tie is a draw.
 
 The 512 x 320 x 10 arena is four times the area of the previous dense demo.
 Each visible seed selects an ARCHIPELAGO, CONTINENT, or TWIN HILLS macro
@@ -112,9 +117,10 @@ fallback. For the Logitech F310, test both rear-switch positions: unplug it,
 select X or D, reconnect it, calibrate with the sticks centered, and record the
 mode in QA feedback.
 
-The CONTROLS screen can rebind both keyboard layouts and controller buttons
-for this run. Select a row with Enter/A, press the new input, and use RESTORE
-DEFAULTS if needed. A conflicting binding swaps with the displaced action.
+The CONTROLS screen can rebind both keyboard layouts and controller buttons.
+Bindings persist in DIGS's per-user settings file. Select a row with Enter/A,
+press the new input, and use RESTORE DEFAULTS if needed. A conflicting binding
+swaps with the displaced action.
 
 
 4. DEFAULT MATCH CONTROLS
@@ -132,16 +138,19 @@ Player 1 keyboard and mouse:
   1 through 0       Direct-select weapon on key press.
   Mouse wheel       Change camera zoom.
   Shift+wheel       Cycle allowed weapons.
+  C                 Speak a contextual miner bark.
 
 Player 2 keyboard:
 
   Left / Right      Move left/right.
-  Up                Jump.
+  Up                Jump; reel shorter while attached.
+  Down              Reel longer while attached.
   Right Shift       Steam pack.
   /                 Hold/release rope.
   Right Ctrl        Fire/use selected tool.
   I / J / K / L     Aim up/left/down/right.
   , / .             Previous/next allowed weapon.
+  M                 Speak a contextual miner bark.
 
 Xbox-style and normalized controller defaults:
 
@@ -152,6 +161,7 @@ Xbox-style and normalized controller defaults:
   Left bumper       Hold/release rope.
   Right bumper/RT   Fire/use selected tool.
   Y / B             Previous/next allowed weapon during play.
+  Right stick click Speak a contextual miner bark.
   Start             Pause.
 
 Right-stick deadzone is circular rather than per-axis. Aim stays attached to
@@ -213,6 +223,23 @@ look-ahead, and uses momentum, contextual zoom, and optional shake. Mouse aim
 is transformed through the same camera and shake values used to draw the
 software cursor.
 
+Projectiles start at a body-relative muzzle and receive six simulation ticks
+of owner/launch-envelope clearance. Open shots leave the miner cleanly while
+an external wall still collides and ordinary self-damage returns afterward.
+The bottom-left match clock and names above every living miner make the match
+state visible. Local hits tint the victim red, mark the impact, pulse the
+attacker's crosshair, and play a hit confirm. A six-line feed records every
+death; local players receive named kill/death banners. Kills inside three
+seconds produce DOUBLE KILL, TRIPLE KILL, and MULTI KILL; five uninterrupted
+kills produce KILLING SPREE.
+
+The Audio v2 engine generates an eight-note menu motif, a quiet click only when
+unmodified mouse-wheel zoom really changes, original hit/kill sounds, and
+world-aware wind/water/lava ambience. Authored allophones provide a deep
+announcer and high miner voices without samples or external TTS. Human speech
+is manual; bots use long deterministic cooldowns. OPTIONS exposes one audio
+setting only: persistent MASTER VOLUME from 0 through 100 percent.
+
 
 7. MINER'S INDEX AND LUA DATA
 -----------------------------
@@ -233,7 +260,7 @@ Validate the exact packaged data from a terminal:
   ./bin/digs_script --hash share/digs/scripts/manifest.txt
   ./bin/digs_script --headless share/digs/scripts/manifest.txt
 
-The first two commands should report the same source/catalog hashes and 79
+The first two commands should report the same source/catalog hashes and 86
 catalog entries. --headless also prints the complete entry list.
 
 
@@ -280,6 +307,9 @@ Please check at least these paths:
   [ ] Rope attaches only to valid solid material, reels, swings, detaches,
       preserves release momentum, and breaks when its anchor is destroyed.
   [ ] Five-second spawn protection is visible and attacking cancels it.
+  [ ] AUTO and ON FIRE honor every delay and ON FIRE requires a fresh press.
+  [ ] Two/three-minute clocks, optional caps, FFA/team winners, and draws work.
+  [ ] Human names persist; bot names last one match; all nameplates stay clear.
   [ ] Free-for-All and Miners vs Machines honor friendly-fire selection.
   [ ] Bot roaming/searching/attacking/retreating behavior is observable.
   [ ] Camera frames both humans and remains smooth at every frame cap; maximum
@@ -293,8 +323,10 @@ Please check at least these paths:
   [ ] Repeated explosions and deaths visibly vary and collapse supports.
   [ ] Gore, flashes, camera shake, and damage-number options work.
   [ ] Local hit/kill feedback triggers; unrelated bot fights do not flash.
-  [ ] Dual-chip 8-bit sound varies by event or fails safely to silence.
-  [ ] MINER'S INDEX has 79 readable entries, six rows, arrows, and back only.
+  [ ] Hit markers, crosshair pulses, killfeed, multikills, and sprees are clear.
+  [ ] Audio v2 motif, speech, ambience, confirms, and master volume work.
+  [ ] C, M, and controller R3 barks match their visible speech bubbles.
+  [ ] MINER'S INDEX has 86 readable entries, six rows, arrows, and back only.
   [ ] F5 reloads valid Lua data and rejects invalid data without corruption.
   [ ] Rising lava, water cooling, fire, firedamp, liquids, and collapse work.
   [ ] Pause/results/restart/fullscreen/quit paths remain stable.
@@ -303,7 +335,7 @@ Please check at least these paths:
 10. RECORD AND SHARE QA FEEDBACK
 --------------------------------
 
-The included 53-checkpoint workbook is:
+The included 65-checkpoint workbook is:
 
   qa/VOX_QA_FEEDBACK.xlsx
 
@@ -354,6 +386,11 @@ From the VOX repository root:
 Run the complete strict-language verification gate with:
 
   tools/vox-verify.sh
+
+On a hot or battery-powered laptop, cap compiler concurrency while retaining
+the complete gate:
+
+  VOX_BUILD_JOBS=1 tools/vox-verify.sh
 
 Create clean Linux tester archives with:
 

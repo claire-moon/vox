@@ -15,7 +15,7 @@ v0.0.2 DEVELOPMENT CANDIDATE:
   Preserve the v0.0.1 scalar CPU and evidence baseline while adding:
   - one or two local humans, zero through two bots, team/friendly-fire rules;
   - responsive fixed-point movement, steam traversal, and breakable rope;
-  - controller hotplug/claim, run-local rebinding, and shared dynamic camera;
+  - controller hotplug/claim, persistent rebinding, and shared dynamic camera;
   - spawn protection, stateful bots, anatomy, varied simulated FX, and chip SFX;
   - bounded Lua 5.1 catalog, How To Play, Miner's Index, and QA coverage.
 

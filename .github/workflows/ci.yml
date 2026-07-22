@@ -31,10 +31,10 @@ jobs:
       - name: Upload tester bundles
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: vox-digs-v0.0.1-linux-x86_64
+          name: vox-digs-v0.0.2-linux-x86_64
           path: |
-            dist/vox-digs-v0.0.1-linux-x86_64.tar.gz
-            dist/vox-digs-v0.0.1-source.tar.gz
+            dist/vox-digs-v0.0.2-linux-x86_64.tar.gz
+            dist/vox-digs-v0.0.2-source.tar.gz
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 30

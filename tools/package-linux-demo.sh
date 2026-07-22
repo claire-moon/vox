@@ -16,9 +16,15 @@ CHECKSUMS="$DIST_DIR/SHA256SUMS"
 ALLOW_DIRTY=${VOX_PACKAGE_ALLOW_DIRTY:-0}
 NASM_ACCEL=${VOX_PACKAGE_NASM:-AUTO}
 BENCHMARK_FRAMES=${VOX_PACKAGE_BENCHMARK_FRAMES:-120}
+BUILD_JOBS=${VOX_BUILD_JOBS:-}
 CONTROLLER_DB="$ROOT/third_party/SDL_GameControllerDB/gamecontrollerdb.txt"
 CONTROLLER_DB_SHA256=dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0
 WORK_DIR=
+
+if [[ -n "$BUILD_JOBS" && ! "$BUILD_JOBS" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'package-linux-demo: VOX_BUILD_JOBS must be a positive integer\n' >&2
+    exit 1
+fi
 
 die()
 {
@@ -192,7 +198,11 @@ sdl2 (Arch), or libSDL2-devel (openSUSE).
 EOF
     exit 1
 fi
-cmake --build "$BUILD_DIR" --config Release --parallel
+if [[ -n "$BUILD_JOBS" ]]; then
+    cmake --build "$BUILD_DIR" --config Release --parallel "$BUILD_JOBS"
+else
+    cmake --build "$BUILD_DIR" --config Release --parallel
+fi
 
 mkdir -p -- "$EVIDENCE_DIR"
 capture_evidence ctest "$BUILD_DIR" \
@@ -225,6 +235,9 @@ capture_evidence digs-script-headless "$EVIDENCE_DIR" \
         "$BUILD_DIR/share/digs/scripts/manifest.txt"
 capture_evidence digs-input-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --input-self-test
+capture_evidence digs-settings-self-test "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --settings-self-test \
+        "$EVIDENCE_DIR/digs-settings-self-test.cfg"
 capture_evidence digs-camera-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --camera-self-test
 capture_evidence digs-miner-icon "$EVIDENCE_DIR" \

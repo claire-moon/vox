@@ -23,7 +23,6 @@
 #define DEMO_CAMERA_ZOOM_MAX 4
 #define DEMO_CAMERA_ZOOM_DEFAULT 2
 #define DEMO_CAMERA_MIN_SCALE 1.0
-#define DEMO_CAMERA_LAVA_FOOTER_PIXELS 18.0
 #define DEMO_CAMERA_SAFE_TOP_PIXELS 36.0
 #define DEMO_CAMERA_SAFE_BOTTOM_PIXELS 18.0
 #define DEMO_CAMERA_VERTICAL_PADDING 16.0
@@ -35,8 +34,22 @@
 #define DEMO_INPUT_SWITCH_HYSTERESIS_MS 750U
 #define DEMO_CONTROLLER_ACTIVITY_MARGIN 0.08
 #define DEMO_CONTROLLER_CALIBRATION_MS 750U
-#define DEMO_INPUT_SETTINGS_VERSION 1
+#define DEMO_SETTINGS_VERSION 2
 #define DEMO_ROPE_AIM_RANGE 48.0
+#define DEMO_NAME_CHARACTERS 12
+#define DEMO_NAME_CAPACITY 13
+#define DEMO_KILLFEED_MAX 6
+#define DEMO_KILLFEED_TICKS 360U
+#define DEMO_BANNER_TICKS 90U
+#define DEMO_HIT_MARKER_TICKS 12U
+#define DEMO_MINER_HIT_TICKS 8U
+#define DEMO_BUBBLE_TICKS 150U
+#define DEMO_MULTIKILL_WINDOW 180U
+#define DEMO_BARK_COOLDOWN 120U
+#define DEMO_BOT_BARK_COOLDOWN 720U
+#define DEMO_GLOBAL_BARK_GAP 120U
+#define DEMO_NAME_GRID_COLUMNS 8
+#define DEMO_NAME_GRID_ITEMS 42
 
 #define DEMO_SOUND_MOVE 0
 #define DEMO_SOUND_SELECT 1
@@ -73,7 +86,9 @@ typedef enum demo_screen {
     DEMO_INDEX = 8,
     DEMO_CONTROLS = 9,
     DEMO_SCRIPT_ERROR = 10,
-    DEMO_INPUT_OPTIONS = 11
+    DEMO_INPUT_OPTIONS = 11,
+    DEMO_CUSTOMIZE = 12,
+    DEMO_NAME_EDITOR = 13
 } demo_screen;
 
 typedef enum demo_input_preference {
@@ -99,6 +114,7 @@ typedef struct demo_options {
     int damage_number_size;
     int damage_number_color;
     int fx_profile;
+    int master_volume;
 } demo_options;
 
 typedef struct demo_controller {
@@ -140,6 +156,27 @@ typedef struct demo_damage_popup {
     vox_u16 active;
 } demo_damage_popup;
 
+typedef struct demo_hit_marker {
+    vox_i32 world_x_q16;
+    vox_i32 world_y_q16;
+    vox_u16 ttl;
+} demo_hit_marker;
+
+typedef struct demo_killfeed_line {
+    char text[48];
+    vox_u16 ttl;
+} demo_killfeed_line;
+
+typedef struct demo_banner_line {
+    char text[48];
+    vox_u16 ttl;
+} demo_banner_line;
+
+typedef struct demo_speech_bubble {
+    char text[64];
+    vox_u16 ttl;
+} demo_speech_bubble;
+
 typedef struct demo_bindings {
     SDL_Scancode keyboard_left[DEMO_LOCAL_MAX];
     SDL_Scancode keyboard_right[DEMO_LOCAL_MAX];
@@ -149,12 +186,14 @@ typedef struct demo_bindings {
     SDL_Scancode keyboard_fire[DEMO_LOCAL_MAX];
     SDL_Scancode keyboard_previous[DEMO_LOCAL_MAX];
     SDL_Scancode keyboard_next[DEMO_LOCAL_MAX];
+    SDL_Scancode keyboard_bark[DEMO_LOCAL_MAX];
     SDL_GameControllerButton pad_jump;
     SDL_GameControllerButton pad_steam;
     SDL_GameControllerButton pad_rope;
     SDL_GameControllerButton pad_fire;
     SDL_GameControllerButton pad_previous;
     SDL_GameControllerButton pad_next;
+    SDL_GameControllerButton pad_bark;
 } demo_bindings;
 
 typedef struct demo_app {
@@ -168,6 +207,16 @@ typedef struct demo_app {
     int local_players;
     int game_mode;
     int friendly_fire;
+    int match_minutes;
+    int score_limit_index;
+    int respawn_mode;
+    int respawn_delay_index;
+    char human_names[DEMO_LOCAL_MAX][DEMO_NAME_CAPACITY];
+    char bot_names[VOX_DIGS_MAX_BOTS][DEMO_NAME_CAPACITY];
+    char player_names[VOX_DIGS_MAX_SLOTS][DEMO_NAME_CAPACITY];
+    char edit_name_backup[DEMO_NAME_CAPACITY];
+    int edit_name_slot;
+    int name_grid_selection;
     int selected_tool[DEMO_LOCAL_MAX];
     vox_u32 aim_world_x[DEMO_LOCAL_MAX];
     vox_u32 aim_world_y[DEMO_LOCAL_MAX];
@@ -202,6 +251,7 @@ typedef struct demo_app {
     int keyboard_previous_down[DEMO_LOCAL_MAX];
     int keyboard_next_down[DEMO_LOCAL_MAX];
     int controller_disconnected;
+    int settings_writable;
     vox_u32 controller_nav_stamp;
     int foundry;
     double measured_fps;
@@ -214,10 +264,29 @@ typedef struct demo_app {
     SDL_AudioDeviceID audio_device;
     vox_audio_engine audio;
     vox_u32 audio_event_id;
+    vox_u32 menu_note_stamp;
+    vox_u32 menu_note_tail;
+    vox_u16 menu_note_index;
+    int menu_note_screen;
     demo_controller controllers[DEMO_CONTROLLER_MAX];
     demo_player_input player_input[DEMO_LOCAL_MAX];
     demo_bindings bindings;
     demo_damage_popup damage_popups[DEMO_DAMAGE_POPUP_MAX];
+    demo_hit_marker hit_markers[DEMO_LOCAL_MAX];
+    demo_killfeed_line killfeed[DEMO_KILLFEED_MAX];
+    demo_speech_bubble bubbles[VOX_DIGS_MAX_SLOTS];
+    vox_u16 miner_hit_ttl[VOX_DIGS_MAX_SLOTS];
+    vox_u16 crosshair_pulse_ttl[DEMO_LOCAL_MAX];
+    vox_u16 multikill_count[DEMO_LOCAL_MAX];
+    vox_u16 spree_count[DEMO_LOCAL_MAX];
+    vox_u32 last_kill_tick[DEMO_LOCAL_MAX];
+    vox_u32 last_bark_tick[VOX_DIGS_MAX_SLOTS];
+    vox_u32 global_bark_tick;
+    demo_banner_line banners[3];
+    vox_u16 death_camera_hold;
+    vox_u16 death_camera_player;
+    int bark_down[DEMO_LOCAL_MAX];
+    int fire_down[DEMO_LOCAL_MAX];
     vox_u16 bot_health_ttl[VOX_DIGS_MAX_SLOTS];
     vox_script_runtime scripts;
     int scripts_ready;
@@ -232,6 +301,7 @@ static vox_world demo_render_world;
 static vox_ui_surface demo_ui;
 static vox_software_target demo_target;
 static vox_software_config demo_render_config;
+static const char *demo_settings_override;
 
 static const int demo_frame_caps[6] = {30, 60, 90, 120, 144, 0};
 static const char *demo_frame_names[6] = {"30", "60", "90", "120", "144", "UNLIMITED"};
@@ -251,6 +321,50 @@ static const char *demo_slowdown_names[3] = {"OFF", "LOW", "MEDIUM"};
 static const char *demo_arsenal_names[DEMO_ARSENAL_COUNT] = {
     "FULL WORKS", "MINER KIT", "POWDER KEG"
 };
+static const int demo_score_limits[4] = {0, 5, 10, 20};
+static const char *demo_score_limit_names[4] = {"OFF", "5", "10", "20"};
+static const int demo_respawn_delays[5] = {0, 1, 2, 3, 5};
+static const char *demo_respawn_mode_names[2] = {"AUTO", "ON FIRE"};
+static const char demo_name_grid[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
+static const char *demo_bark_phrases[6][10] = {
+    {
+        "BACK TO WORK!", "KEEP DIGGING!", "DIG THAT COAL!",
+        "THE SHIFT IS LONG!", "WHERE IS MY TEA?", "GOOD WORK MINER!",
+        "PICK UP THE COAL!", "MIND THE LAVA!", "I SMELL FIRE!",
+        "DOWN WE GO!"
+    },
+    {
+        "WHERE ARE YOU?", "COME OUT MINER!", "I HEAR YOU!",
+        "CHECK THE SHAFT!", "SHOW YOUR HELMET!", "I SEE TRACKS!",
+        "NO HIDING HERE!", "I SEE YOUR TUNNEL!", "TOO QUIET!",
+        "THE DUST MOVES!"
+    },
+    {
+        "I WILL GET YOU!", "EAT HOT IRON!", "GET OUT MINER!",
+        "HERE I COME!", "DUCK THIS!", "YOUR SHIFT ENDS NOW!",
+        "EAT THE BOILER!", "MAKE A CRATER!", "FIRE IN THE HOLE!",
+        "YOU ARE MINE!"
+    },
+    {
+        "TEA BREAK!", "NOT ENOUGH COAL!", "FALL BACK!",
+        "I NEED A PLAN!", "SAVE MY BEARD!", "TO THE SHAFT!",
+        "THE TUNNEL FALLS!", "I WILL BE BACK!", "TOO HOT HERE!",
+        "RUN MINER RUN!"
+    },
+    {
+        "THAT HURTS!", "MY BONES!", "WHO DID THAT?",
+        "MY TROUSERS!", "I AM HURT!", "THAT WAS MEAN!",
+        "GET THE MEDIC!", "OW MY BEARD!", "I FELT THAT!",
+        "YOU WILL PAY!"
+    },
+    {
+        "SHIFT COMPLETE!", "THAT IS HOW WE DIG!", "GOOD WORK!",
+        "ANOTHER ONE DOWN!", "THAT ONE IS MINE!", "WHAT A BLAST!",
+        "THE SHAFT IS MINE!", "BACK IN THE CART!", "TOO EASY!",
+        "MINER WINS AGAIN!"
+    }
+};
 static const vox_u16 demo_arsenal_masks[DEMO_ARSENAL_COUNT] = {
     0x03FFU, 0x00F1U, 0x030EU
 };
@@ -259,6 +373,10 @@ static demo_controller *demo_controller_for_player(demo_app *app,
                                                    int player);
 static void demo_refresh_controller_claims(demo_app *app);
 static int demo_save_input_settings(demo_app *app);
+static SDL_Scancode *demo_keyboard_binding(demo_app *app, int player,
+                                           int action);
+static SDL_GameControllerButton *demo_pad_binding(demo_app *app,
+                                                  int action);
 
 static void demo_audio_emit(demo_app *app, vox_u16 preset,
                             vox_u16 variant, vox_i16 pan_q15)
@@ -274,9 +392,300 @@ static void demo_audio_emit(demo_app *app, vox_u16 preset,
     (void)vox_audio_emit(&app->audio, &event);
 }
 
+typedef struct demo_pronunciation {
+    const char *word;
+    vox_u8 count;
+    vox_u8 tokens[8];
+} demo_pronunciation;
+
+#define A VOX_AUDIO_ALLOPHONE_A
+#define AE VOX_AUDIO_ALLOPHONE_AE
+#define AH VOX_AUDIO_ALLOPHONE_AH
+#define AW VOX_AUDIO_ALLOPHONE_AW
+#define AY VOX_AUDIO_ALLOPHONE_AY
+#define EH VOX_AUDIO_ALLOPHONE_EH
+#define ER VOX_AUDIO_ALLOPHONE_ER
+#define EY VOX_AUDIO_ALLOPHONE_EY
+#define IH VOX_AUDIO_ALLOPHONE_IH
+#define IY VOX_AUDIO_ALLOPHONE_IY
+#define OW VOX_AUDIO_ALLOPHONE_OW
+#define OY VOX_AUDIO_ALLOPHONE_OY
+#define UH VOX_AUDIO_ALLOPHONE_UH
+#define UW VOX_AUDIO_ALLOPHONE_UW
+#define B VOX_AUDIO_ALLOPHONE_B
+#define CH VOX_AUDIO_ALLOPHONE_CH
+#define D VOX_AUDIO_ALLOPHONE_D
+#define F VOX_AUDIO_ALLOPHONE_F
+#define G VOX_AUDIO_ALLOPHONE_G
+#define H VOX_AUDIO_ALLOPHONE_H
+#define K VOX_AUDIO_ALLOPHONE_K
+#define L VOX_AUDIO_ALLOPHONE_L
+#define M VOX_AUDIO_ALLOPHONE_M
+#define N VOX_AUDIO_ALLOPHONE_N
+#define P VOX_AUDIO_ALLOPHONE_P
+#define R VOX_AUDIO_ALLOPHONE_R
+#define S VOX_AUDIO_ALLOPHONE_S
+#define SH VOX_AUDIO_ALLOPHONE_SH
+#define T VOX_AUDIO_ALLOPHONE_T
+#define TH VOX_AUDIO_ALLOPHONE_TH
+#define V VOX_AUDIO_ALLOPHONE_V
+#define W VOX_AUDIO_ALLOPHONE_W
+#define Y VOX_AUDIO_ALLOPHONE_Y
+#define Z VOX_AUDIO_ALLOPHONE_Z
+
+static const demo_pronunciation demo_pronunciations[] = {
+    {"A", 1U, {AH}}, {"AGAIN", 4U, {AH,G,EH,N}},
+    {"AM", 2U, {AE,M}}, {"ANOTHER", 5U, {AH,N,AH,TH,ER}},
+    {"ARE", 2U, {AH,R}}, {"BACK", 3U, {B,AE,K}},
+    {"BE", 2U, {B,IY}}, {"BEARD", 4U, {B,IY,R,D}},
+    {"BLAST", 5U, {B,L,AE,S,T}}, {"BOILER", 4U, {B,OY,L,ER}},
+    {"BONES", 4U, {B,OW,N,Z}}, {"BREAK", 4U, {B,R,EY,K}},
+    {"CART", 4U, {K,A,R,T}}, {"CHECK", 3U, {CH,EH,K}},
+    {"COAL", 3U, {K,OW,L}}, {"COME", 3U, {K,AH,M}},
+    {"COMPLETE", 7U, {K,AH,M,P,L,IY,T}},
+    {"CRATER", 5U, {K,R,EY,T,ER}}, {"DIG", 3U, {D,IH,G}},
+    {"DIGGING", 5U, {D,IH,G,IH,N}}, {"DID", 3U, {D,IH,D}},
+    {"DIGS", 4U, {D,IH,G,Z}}, {"DOUBLE", 5U, {D,AH,B,AH,L}},
+    {"DOWN", 3U, {D,AW,N}}, {"DRAW", 3U, {D,R,AW}},
+    {"DUCK", 3U, {D,AH,K}}, {"DUST", 4U, {D,AH,S,T}},
+    {"EASY", 3U, {IY,Z,IY}}, {"EAT", 2U, {IY,T}},
+    {"ENDS", 4U, {EH,N,D,Z}}, {"ENOUGH", 4U, {EH,N,AH,F}},
+    {"FALL", 3U, {F,AW,L}}, {"FALLS", 4U, {F,AW,L,Z}},
+    {"FELT", 4U, {F,EH,L,T}}, {"FIRE", 3U, {F,AY,ER}},
+    {"GET", 3U, {G,EH,T}}, {"GO", 2U, {G,OW}},
+    {"GOOD", 3U, {G,UH,D}}, {"HEAR", 3U, {H,IY,R}},
+    {"HELMET", 6U, {H,EH,L,M,EH,T}}, {"HERE", 3U, {H,IY,R}},
+    {"HIDING", 5U, {H,AY,D,IH,N}}, {"HOLE", 3U, {H,OW,L}},
+    {"HOT", 3U, {H,AH,T}}, {"HOW", 2U, {H,AW}},
+    {"HURT", 3U, {H,ER,T}}, {"HURTS", 4U, {H,ER,T,S}},
+    {"I", 1U, {AY}}, {"IN", 2U, {IH,N}},
+    {"IRON", 4U, {AY,ER,AH,N}}, {"IS", 2U, {IH,Z}},
+    {"KEEP", 3U, {K,IY,P}}, {"KILL", 3U, {K,IH,L}},
+    {"KILLING", 5U, {K,IH,L,IH,N}}, {"LAVA", 4U, {L,AH,V,AH}},
+    {"LONG", 4U, {L,AW,N,G}}, {"MAKE", 3U, {M,EY,K}},
+    {"MEAN", 3U, {M,IY,N}}, {"MEDIC", 5U, {M,EH,D,IH,K}},
+    {"MIND", 4U, {M,AY,N,D}}, {"MINE", 3U, {M,AY,N}},
+    {"MINER", 4U, {M,AY,N,ER}}, {"MOVES", 4U, {M,UW,V,Z}},
+    {"MULTI", 5U, {M,AH,L,T,IY}}, {"MY", 2U, {M,AY}},
+    {"NEED", 3U, {N,IY,D}}, {"NO", 2U, {N,OW}},
+    {"NOT", 3U, {N,AH,T}}, {"NOW", 2U, {N,AW}},
+    {"ONE", 3U, {W,AH,N}}, {"OUT", 2U, {AW,T}},
+    {"OW", 1U, {AW}}, {"PAY", 2U, {P,EY}},
+    {"PICK", 3U, {P,IH,K}}, {"PLAN", 4U, {P,L,AE,N}},
+    {"QUIET", 5U, {K,W,AY,EH,T}}, {"RUN", 3U, {R,AH,N}},
+    {"SAVE", 3U, {S,EY,V}}, {"SEE", 2U, {S,IY}},
+    {"SHAFT", 4U, {SH,AE,F,T}}, {"SHIFT", 4U, {SH,IH,F,T}},
+    {"SHOW", 2U, {SH,OW}}, {"SMELL", 4U, {S,M,EH,L}},
+    {"SPREE", 4U, {S,P,R,IY}}, {"TEA", 2U, {T,IY}},
+    {"THAT", 3U, {TH,AE,T}}, {"THE", 2U, {TH,AH}},
+    {"THIS", 3U, {TH,IH,S}}, {"TO", 2U, {T,UW}},
+    {"TOO", 2U, {T,UW}}, {"TRACKS", 5U, {T,R,AE,K,S}},
+    {"TRIPLE", 6U, {T,R,IH,P,AH,L}},
+    {"TROUSERS", 6U, {T,R,AW,Z,ER,S}},
+    {"TUNNEL", 5U, {T,AH,N,AH,L}}, {"UP", 2U, {AH,P}},
+    {"WAS", 3U, {W,AH,Z}}, {"WE", 2U, {W,IY}},
+    {"WHERE", 3U, {W,EH,R}}, {"WHO", 2U, {H,UW}},
+    {"WILL", 3U, {W,IH,L}}, {"WINS", 4U, {W,IH,N,Z}},
+    {"WON", 3U, {W,AH,N}}, {"WORK", 3U, {W,ER,K}},
+    {"YOU", 2U, {Y,UW}}, {"YOUR", 2U, {Y,ER}},
+    {"LOST", 4U, {L,AW,S,T}}
+};
+
+static const demo_pronunciation *demo_find_pronunciation(const char *word)
+{
+    vox_u32 index;
+    vox_u32 count = (vox_u32)(sizeof(demo_pronunciations) /
+                              sizeof(demo_pronunciations[0]));
+    for (index = 0U; index < count; ++index) {
+        if (strcmp(word, demo_pronunciations[index].word) == 0) {
+            return &demo_pronunciations[index];
+        }
+    }
+    return 0;
+}
+
+static void demo_audio_speak_text(demo_app *app, const char *text_value,
+                                  vox_u8 profile, vox_u8 priority,
+                                  vox_i16 pan_q15)
+{
+    vox_u8 tokens[VOX_AUDIO_SPEECH_TOKEN_CAPACITY];
+    vox_u16 count;
+    int index;
+    char word[16];
+    int word_length;
+    vox_audio_speech speech;
+    if (app == 0 || app->audio_device == 0U || text_value == 0) return;
+    count = 0U;
+    index = 0;
+    while (text_value[index] != '\0' &&
+           count < VOX_AUDIO_SPEECH_TOKEN_CAPACITY) {
+        const demo_pronunciation *pronunciation;
+        vox_u8 token;
+        word_length = 0;
+        while (text_value[index] != '\0' &&
+               !(text_value[index] >= 'A' && text_value[index] <= 'Z')) {
+            ++index;
+        }
+        while (text_value[index] >= 'A' && text_value[index] <= 'Z' &&
+               word_length < (int)sizeof(word) - 1) {
+            word[word_length++] = text_value[index++];
+        }
+        word[word_length] = '\0';
+        if (word_length == 0) continue;
+        pronunciation = demo_find_pronunciation(word);
+        if (pronunciation == 0) continue;
+        if (count > 0U && count < VOX_AUDIO_SPEECH_TOKEN_CAPACITY) {
+            tokens[count++] = VOX_AUDIO_ALLOPHONE_SILENCE;
+        }
+        for (token = 0U; token < pronunciation->count &&
+             count < VOX_AUDIO_SPEECH_TOKEN_CAPACITY; ++token) {
+            tokens[count++] = pronunciation->tokens[token];
+        }
+    }
+    if (count == 0U) return;
+    vox_audio_speech_init(&speech, tokens, count);
+    speech.event_id = ++app->audio_event_id;
+    speech.profile = profile;
+    speech.priority = priority;
+    speech.pan_q15 = pan_q15;
+    speech.gain_q15 = profile == VOX_AUDIO_SPEECH_DEEP ? 15000U : 11000U;
+    (void)vox_audio_speak(&app->audio, &speech);
+}
+
+#undef A
+#undef AE
+#undef AH
+#undef AW
+#undef AY
+#undef EH
+#undef ER
+#undef EY
+#undef IH
+#undef IY
+#undef OW
+#undef OY
+#undef UH
+#undef UW
+#undef B
+#undef CH
+#undef D
+#undef F
+#undef G
+#undef H
+#undef K
+#undef L
+#undef M
+#undef N
+#undef P
+#undef R
+#undef S
+#undef SH
+#undef T
+#undef TH
+#undef V
+#undef W
+#undef Y
+#undef Z
+
+static vox_i16 demo_player_pan(vox_u16 player)
+{
+    long x;
+    if (player >= VOX_DIGS_MAX_SLOTS) return VOX_AUDIO_PAN_CENTER;
+    x = demo_match.players[player].position_x.value_q16 / 65536L;
+    return (vox_i16)(x * 65534L / (long)(VOX_WORLD_WIDTH - 1U) -
+                     32767L);
+}
+
+static void demo_copy_text(char *destination, size_t capacity,
+                           const char *source)
+{
+    size_t index = 0U;
+    if (destination == 0 || capacity == 0U) return;
+    if (source != 0) {
+        while (index + 1U < capacity && source[index] != '\0') {
+            destination[index] = source[index];
+            ++index;
+        }
+    }
+    destination[index] = '\0';
+}
+
+static int demo_bark_context(const demo_app *app, int player)
+{
+    if (app->miner_hit_ttl[player] > 0U) return 4;
+    if (demo_match.health[player] < 35U) return 3;
+    if (demo_match.weapon_cooldown[player] > 0U) return 2;
+    if (vox_digs_player_is_bot(&demo_match, (vox_u16)player)) {
+        int state = (int)demo_match.bots[player].mode;
+        return state >= 0 && state <= 3 ? state : 0;
+    }
+    if (demo_match.player_actions[player] != 0U) return 1;
+    return 0;
+}
+
+static void demo_bark(demo_app *app, int player, int context, int bot)
+{
+    vox_u32 required_gap = bot ? DEMO_BOT_BARK_COOLDOWN :
+                                DEMO_BARK_COOLDOWN;
+    vox_u32 phrase_index;
+    const char *phrase;
+    if (player < 0 || player >= (int)demo_match.rules.player_count ||
+        !demo_match.alive[player] || context < 0 || context >= 6) return;
+    if ((app->last_bark_tick[player] != 0U &&
+         demo_match.tick < app->last_bark_tick[player] + required_gap) ||
+        (app->global_bark_tick != 0U &&
+         demo_match.tick < app->global_bark_tick + DEMO_GLOBAL_BARK_GAP)) {
+        return;
+    }
+    phrase_index = (demo_match.tick / 17U + (vox_u32)player * 3U +
+                    (vox_u32)context * 7U) % 10U;
+    phrase = demo_bark_phrases[context][phrase_index];
+    demo_copy_text(app->bubbles[player].text,
+                   sizeof(app->bubbles[player].text), phrase);
+    app->bubbles[player].ttl = DEMO_BUBBLE_TICKS;
+    app->last_bark_tick[player] = demo_match.tick;
+    app->global_bark_tick = demo_match.tick;
+    demo_audio_speak_text(app, phrase, VOX_AUDIO_SPEECH_HIGH,
+                          bot ? VOX_AUDIO_PRIORITY_BOT_BARK :
+                          VOX_AUDIO_PRIORITY_PLAYER_BARK,
+                          demo_player_pan((vox_u16)player));
+}
+
 static void demo_audio_play(demo_app *app, int sound)
 {
+    static const vox_u16 motif[8] = {
+        220U, 262U, 294U, 330U, 294U, 392U, 330U, 262U
+    };
     vox_u16 preset = VOX_AUDIO_PRESET_UI_MOVE;
+    if (sound == DEMO_SOUND_MOVE && app != 0 &&
+        app->audio_device != 0U) {
+        vox_audio_note note;
+        vox_u32 now = SDL_GetTicks();
+        vox_u32 sample_now = vox_audio_sample_clock(&app->audio);
+        vox_u32 spacing = vox_audio_ms_to_frames(&app->audio, 60U);
+        vox_u32 maximum_tail = sample_now + spacing * 8U;
+        if (now - app->menu_note_stamp > 1500U ||
+            app->menu_note_screen != (int)app->screen) {
+            app->menu_note_index = 0U;
+            app->menu_note_tail = sample_now;
+        }
+        vox_audio_note_init(&note, motif[app->menu_note_index % 8U], 60U);
+        if (app->menu_note_tail < sample_now ||
+            app->menu_note_tail > maximum_tail) {
+            app->menu_note_tail = sample_now;
+        }
+        note.delay_frames = app->menu_note_tail - sample_now;
+        note.gain_q15 = 7000U;
+        note.bus = VOX_AUDIO_BUS_UI;
+        note.priority = VOX_AUDIO_PRIORITY_UI;
+        note.event_id = ++app->audio_event_id;
+        (void)vox_audio_schedule_note(&app->audio, &note);
+        app->menu_note_index = (vox_u16)((app->menu_note_index + 1U) % 8U);
+        app->menu_note_tail += spacing;
+        app->menu_note_stamp = now;
+        app->menu_note_screen = (int)app->screen;
+        return;
+    }
     if (sound == DEMO_SOUND_SELECT) {
         preset = VOX_AUDIO_PRESET_UI_ACCEPT;
     } else if (sound == DEMO_SOUND_FIRE) {
@@ -300,7 +709,7 @@ static void demo_audio_pump(demo_app *app)
     }
     queued = SDL_GetQueuedAudioSize(app->audio_device);
     for (chunk = 0; chunk < 3 && queued < chunk_bytes * 2U; ++chunk) {
-        if (vox_audio_active_voice_count(&app->audio) == 0U && queued != 0U) {
+        if (!vox_audio_has_pending(&app->audio)) {
             break;
         }
         if (vox_audio_render(&app->audio, samples,
@@ -317,6 +726,7 @@ static void demo_audio_open(demo_app *app)
 {
     SDL_AudioSpec desired;
     SDL_AudioSpec obtained;
+    vox_audio_config config;
     if (app == 0 || SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
         return;
     }
@@ -333,9 +743,11 @@ static void demo_audio_open(demo_app *app)
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
         return;
     }
+    vox_audio_config_init(&config, (vox_u32)obtained.freq, 0xD1655EEDU);
+    config.master_gain_q15 = (vox_u16)((vox_u32)
+        app->options.master_volume * VOX_AUDIO_GAIN_MAX / 10U);
     if (obtained.format != AUDIO_S16SYS || obtained.channels != 2U ||
-        vox_audio_init(&app->audio, (vox_u32)obtained.freq,
-                       0xD1655EEDU) != VOX_OK) {
+        vox_audio_init_ex(&app->audio, &config) != VOX_OK) {
         SDL_CloseAudioDevice(app->audio_device);
         app->audio_device = 0U;
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
@@ -480,6 +892,7 @@ static void demo_bindings_default(demo_app *app)
     app->bindings.keyboard_fire[0] = SDL_SCANCODE_E;
     app->bindings.keyboard_previous[0] = SDL_SCANCODE_Z;
     app->bindings.keyboard_next[0] = SDL_SCANCODE_X;
+    app->bindings.keyboard_bark[0] = SDL_SCANCODE_C;
     app->bindings.keyboard_left[1] = SDL_SCANCODE_LEFT;
     app->bindings.keyboard_right[1] = SDL_SCANCODE_RIGHT;
     app->bindings.keyboard_jump[1] = SDL_SCANCODE_UP;
@@ -488,12 +901,14 @@ static void demo_bindings_default(demo_app *app)
     app->bindings.keyboard_fire[1] = SDL_SCANCODE_RCTRL;
     app->bindings.keyboard_previous[1] = SDL_SCANCODE_COMMA;
     app->bindings.keyboard_next[1] = SDL_SCANCODE_PERIOD;
+    app->bindings.keyboard_bark[1] = SDL_SCANCODE_M;
     app->bindings.pad_jump = SDL_CONTROLLER_BUTTON_A;
     app->bindings.pad_steam = SDL_CONTROLLER_BUTTON_X;
     app->bindings.pad_rope = SDL_CONTROLLER_BUTTON_LEFTSHOULDER;
     app->bindings.pad_fire = SDL_CONTROLLER_BUTTON_RIGHTSHOULDER;
     app->bindings.pad_previous = SDL_CONTROLLER_BUTTON_Y;
     app->bindings.pad_next = SDL_CONTROLLER_BUTTON_B;
+    app->bindings.pad_bark = SDL_CONTROLLER_BUTTON_RIGHTSTICK;
 }
 
 static int demo_controller_connected(const demo_controller *controller)
@@ -519,12 +934,83 @@ static void demo_input_defaults(demo_app *app)
     }
 }
 
+static int demo_name_character_allowed(char character)
+{
+    return (character >= 'A' && character <= 'Z') ||
+           (character >= '0' && character <= '9') ||
+           character == ' ' || character == '-' || character == '_';
+}
+
+static void demo_sanitize_name(char *name, const char *fallback)
+{
+    int read_index;
+    int write_index;
+    if (name == 0) return;
+    write_index = 0;
+    for (read_index = 0; name[read_index] != '\0' &&
+         write_index < DEMO_NAME_CHARACTERS; ++read_index) {
+        char character = name[read_index];
+        if (character >= 'a' && character <= 'z') {
+            character = (char)(character - 'a' + 'A');
+        }
+        if (demo_name_character_allowed(character)) {
+            name[write_index++] = character;
+        }
+    }
+    while (write_index > 0 && name[write_index - 1] == ' ') {
+        --write_index;
+    }
+    name[write_index] = '\0';
+    if (write_index == 0 && fallback != 0) {
+        demo_copy_text(name, DEMO_NAME_CAPACITY, fallback);
+    }
+}
+
+static void demo_refresh_roster(demo_app *app)
+{
+    int slot;
+    int bot;
+    for (slot = 0; slot < (int)VOX_DIGS_MAX_SLOTS; ++slot) {
+        app->player_names[slot][0] = '\0';
+    }
+    for (slot = 0; slot < app->local_players &&
+         slot < (int)DEMO_LOCAL_MAX; ++slot) {
+        strcpy(app->player_names[slot], app->human_names[slot]);
+    }
+    for (bot = 0; bot < app->bots && bot < (int)VOX_DIGS_MAX_BOTS; ++bot) {
+        slot = app->local_players + bot;
+        if (slot < (int)VOX_DIGS_MAX_SLOTS) {
+            strcpy(app->player_names[slot], app->bot_names[bot]);
+        }
+    }
+}
+
+static void demo_match_settings_defaults(demo_app *app)
+{
+    strcpy(app->human_names[0], "MINER 1");
+    strcpy(app->human_names[1], "MINER 2");
+    strcpy(app->bot_names[0], "RIVET");
+    strcpy(app->bot_names[1], "CINDER");
+    app->match_minutes = 2;
+    app->score_limit_index = 0;
+    app->respawn_mode = 0;
+    app->respawn_delay_index = 3;
+    app->edit_name_slot = -1;
+    demo_refresh_roster(app);
+}
+
 static int demo_input_settings_path(char *path, int capacity,
                                     const char *suffix)
 {
     char *base;
     size_t required;
     if (path == 0 || capacity <= 0 || suffix == 0) return 0;
+    if (demo_settings_override != 0) {
+        required = strlen(demo_settings_override) + 1U;
+        if (required > (size_t)capacity) return 0;
+        strcpy(path, demo_settings_override);
+        return 1;
+    }
     base = SDL_GetPrefPath("Pinnacle Point Development", "DIGS");
     if (base == 0) return 0;
     required = strlen(base) + strlen(suffix) + 1U;
@@ -540,6 +1026,7 @@ static int demo_input_settings_path(char *path, int capacity,
 static void demo_validate_input_settings(demo_app *app)
 {
     int player;
+    int invalid_binding = 0;
     for (player = 0; player < (int)DEMO_LOCAL_MAX; ++player) {
         demo_player_input *input = &app->player_input[player];
         if (input->preference < DEMO_INPUT_AUTO ||
@@ -557,7 +1044,51 @@ static void demo_validate_input_settings(demo_app *app)
         }
         input->active_source = input->preference == DEMO_INPUT_CONTROLLER ?
                                DEMO_SOURCE_CONTROLLER : DEMO_SOURCE_KEYBOARD;
+        {
+            int action;
+            for (action = 0; action < 9; ++action) {
+                SDL_Scancode *binding = demo_keyboard_binding(app, player,
+                                                               action);
+                if (binding == 0 || *binding <= SDL_SCANCODE_UNKNOWN ||
+                    *binding >= SDL_NUM_SCANCODES) {
+                    invalid_binding = 1;
+                }
+            }
+        }
     }
+    {
+        int action;
+        for (action = 2; action < 9; ++action) {
+            SDL_GameControllerButton *binding = demo_pad_binding(app,
+                                                                  action);
+            if (binding == 0 ||
+                *binding <= SDL_CONTROLLER_BUTTON_INVALID ||
+                *binding >= SDL_CONTROLLER_BUTTON_MAX) {
+                invalid_binding = 1;
+            }
+        }
+    }
+    if (invalid_binding) demo_bindings_default(app);
+    if (app->options.master_volume < 0 ||
+        app->options.master_volume > 10) {
+        app->options.master_volume = 8;
+    }
+    if (app->match_minutes != 2 && app->match_minutes != 3) {
+        app->match_minutes = 2;
+    }
+    if (app->score_limit_index < 0 || app->score_limit_index > 3) {
+        app->score_limit_index = 0;
+    }
+    if (app->respawn_mode < 0 || app->respawn_mode > 1) {
+        app->respawn_mode = 0;
+    }
+    if (app->respawn_delay_index < 0 ||
+        app->respawn_delay_index > 4) {
+        app->respawn_delay_index = 3;
+    }
+    demo_sanitize_name(app->human_names[0], "MINER 1");
+    demo_sanitize_name(app->human_names[1], "MINER 2");
+    demo_refresh_roster(app);
 }
 
 static int demo_load_input_settings(demo_app *app)
@@ -565,15 +1096,33 @@ static int demo_load_input_settings(demo_app *app)
     char path[1024];
     char line[128];
     FILE *file;
+    demo_player_input saved_input[DEMO_LOCAL_MAX];
+    demo_options saved_options;
+    demo_bindings saved_bindings;
+    char saved_human_names[DEMO_LOCAL_MAX][DEMO_NAME_CAPACITY];
+    int saved_match_minutes;
+    int saved_score_limit_index;
+    int saved_respawn_mode;
+    int saved_respawn_delay_index;
     int version = 0;
     if (!demo_input_settings_path(path, (int)sizeof(path), "settings.cfg")) {
         return 0;
     }
     file = fopen(path, "r");
     if (file == 0) return 0;
+    memcpy(saved_input, app->player_input, sizeof(saved_input));
+    saved_options = app->options;
+    saved_bindings = app->bindings;
+    memcpy(saved_human_names, app->human_names,
+           sizeof(saved_human_names));
+    saved_match_minutes = app->match_minutes;
+    saved_score_limit_index = app->score_limit_index;
+    saved_respawn_mode = app->respawn_mode;
+    saved_respawn_delay_index = app->respawn_delay_index;
     while (fgets(line, (int)sizeof(line), file) != 0) {
         int value;
-        if (sscanf(line, "DIGS_INPUT_SETTINGS=%d", &value) == 1) {
+        if (sscanf(line, "DIGS_SETTINGS=%d", &value) == 1 ||
+            sscanf(line, "DIGS_INPUT_SETTINGS=%d", &value) == 1) {
             version = value;
         } else if (sscanf(line, "P1_MODE=%d", &value) == 1) {
             app->player_input[0].preference = value;
@@ -591,11 +1140,89 @@ static int demo_load_input_settings(demo_app *app)
             app->player_input[1].deadzone = value;
         } else if (sscanf(line, "P2_SLOWDOWN=%d", &value) == 1) {
             app->player_input[1].aim_slowdown = value;
+        } else if (sscanf(line, "MASTER_VOLUME=%d", &value) == 1) {
+            app->options.master_volume = value;
+        } else if (sscanf(line, "MATCH_MINUTES=%d", &value) == 1) {
+            app->match_minutes = value;
+        } else if (sscanf(line, "SCORE_LIMIT_INDEX=%d", &value) == 1) {
+            app->score_limit_index = value;
+        } else if (sscanf(line, "RESPAWN_MODE=%d", &value) == 1) {
+            app->respawn_mode = value;
+        } else if (sscanf(line, "RESPAWN_DELAY_INDEX=%d", &value) == 1) {
+            app->respawn_delay_index = value;
+        } else if (strncmp(line, "P1_NAME=", 8U) == 0) {
+            demo_copy_text(app->human_names[0], DEMO_NAME_CAPACITY,
+                           line + 8);
+        } else if (strncmp(line, "P2_NAME=", 8U) == 0) {
+            demo_copy_text(app->human_names[1], DEMO_NAME_CAPACITY,
+                           line + 8);
+        } else if (sscanf(line, "P1_BARK=%d", &value) == 1) {
+            app->bindings.keyboard_bark[0] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P2_BARK=%d", &value) == 1) {
+            app->bindings.keyboard_bark[1] = (SDL_Scancode)value;
+        } else if (sscanf(line, "PAD_BARK=%d", &value) == 1) {
+            app->bindings.pad_bark = (SDL_GameControllerButton)value;
+        } else if (sscanf(line, "P1_KEY_LEFT=%d", &value) == 1) {
+            app->bindings.keyboard_left[0] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P1_KEY_RIGHT=%d", &value) == 1) {
+            app->bindings.keyboard_right[0] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P1_KEY_JUMP=%d", &value) == 1) {
+            app->bindings.keyboard_jump[0] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P1_KEY_STEAM=%d", &value) == 1) {
+            app->bindings.keyboard_steam[0] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P1_KEY_ROPE=%d", &value) == 1) {
+            app->bindings.keyboard_rope[0] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P1_KEY_FIRE=%d", &value) == 1) {
+            app->bindings.keyboard_fire[0] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P1_KEY_PREV=%d", &value) == 1) {
+            app->bindings.keyboard_previous[0] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P1_KEY_NEXT=%d", &value) == 1) {
+            app->bindings.keyboard_next[0] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P2_KEY_LEFT=%d", &value) == 1) {
+            app->bindings.keyboard_left[1] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P2_KEY_RIGHT=%d", &value) == 1) {
+            app->bindings.keyboard_right[1] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P2_KEY_JUMP=%d", &value) == 1) {
+            app->bindings.keyboard_jump[1] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P2_KEY_STEAM=%d", &value) == 1) {
+            app->bindings.keyboard_steam[1] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P2_KEY_ROPE=%d", &value) == 1) {
+            app->bindings.keyboard_rope[1] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P2_KEY_FIRE=%d", &value) == 1) {
+            app->bindings.keyboard_fire[1] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P2_KEY_PREV=%d", &value) == 1) {
+            app->bindings.keyboard_previous[1] = (SDL_Scancode)value;
+        } else if (sscanf(line, "P2_KEY_NEXT=%d", &value) == 1) {
+            app->bindings.keyboard_next[1] = (SDL_Scancode)value;
+        } else if (sscanf(line, "PAD_JUMP=%d", &value) == 1) {
+            app->bindings.pad_jump = (SDL_GameControllerButton)value;
+        } else if (sscanf(line, "PAD_STEAM=%d", &value) == 1) {
+            app->bindings.pad_steam = (SDL_GameControllerButton)value;
+        } else if (sscanf(line, "PAD_ROPE=%d", &value) == 1) {
+            app->bindings.pad_rope = (SDL_GameControllerButton)value;
+        } else if (sscanf(line, "PAD_FIRE=%d", &value) == 1) {
+            app->bindings.pad_fire = (SDL_GameControllerButton)value;
+        } else if (sscanf(line, "PAD_PREV=%d", &value) == 1) {
+            app->bindings.pad_previous = (SDL_GameControllerButton)value;
+        } else if (sscanf(line, "PAD_NEXT=%d", &value) == 1) {
+            app->bindings.pad_next = (SDL_GameControllerButton)value;
         }
     }
     (void)fclose(file);
-    if (version != DEMO_INPUT_SETTINGS_VERSION) {
-        demo_input_defaults(app);
+    if (version != 1 && version != DEMO_SETTINGS_VERSION) {
+        memcpy(app->player_input, saved_input, sizeof(saved_input));
+        app->options = saved_options;
+        app->bindings = saved_bindings;
+        memcpy(app->human_names, saved_human_names,
+               sizeof(saved_human_names));
+        app->match_minutes = saved_match_minutes;
+        app->score_limit_index = saved_score_limit_index;
+        app->respawn_mode = saved_respawn_mode;
+        app->respawn_delay_index = saved_respawn_delay_index;
+        demo_refresh_roster(app);
+        if (version > DEMO_SETTINGS_VERSION) {
+            app->settings_writable = 0;
+        }
         return 0;
     }
     demo_validate_input_settings(app);
@@ -606,17 +1233,19 @@ static int demo_save_input_settings(demo_app *app)
 {
     char path[1024];
     char temporary[1032];
+    char backup[1032];
     FILE *file;
     int player;
-    if (!demo_input_settings_path(path, (int)sizeof(path), "settings.cfg")) {
+    if (!app->settings_writable ||
+        !demo_input_settings_path(path, (int)sizeof(path), "settings.cfg")) {
         return 0;
     }
     if (strlen(path) + 5U >= sizeof(temporary)) return 0;
     sprintf(temporary, "%s.tmp", path);
     file = fopen(temporary, "w");
     if (file == 0) return 0;
-    if (fprintf(file, "DIGS_INPUT_SETTINGS=%d\n",
-                DEMO_INPUT_SETTINGS_VERSION) < 0) {
+    if (fprintf(file, "DIGS_SETTINGS=%d\n",
+                DEMO_SETTINGS_VERSION) < 0) {
         (void)fclose(file);
         (void)remove(temporary);
         return 0;
@@ -635,18 +1264,77 @@ static int demo_save_input_settings(demo_app *app)
             return 0;
         }
     }
+    if (fprintf(file,
+                "P1_KEY_LEFT=%d\nP1_KEY_RIGHT=%d\nP1_KEY_JUMP=%d\n"
+                "P1_KEY_STEAM=%d\nP1_KEY_ROPE=%d\nP1_KEY_FIRE=%d\n"
+                "P1_KEY_PREV=%d\nP1_KEY_NEXT=%d\n"
+                "P2_KEY_LEFT=%d\nP2_KEY_RIGHT=%d\nP2_KEY_JUMP=%d\n"
+                "P2_KEY_STEAM=%d\nP2_KEY_ROPE=%d\nP2_KEY_FIRE=%d\n"
+                "P2_KEY_PREV=%d\nP2_KEY_NEXT=%d\n"
+                "PAD_JUMP=%d\nPAD_STEAM=%d\nPAD_ROPE=%d\n"
+                "PAD_FIRE=%d\nPAD_PREV=%d\nPAD_NEXT=%d\n",
+                (int)app->bindings.keyboard_left[0],
+                (int)app->bindings.keyboard_right[0],
+                (int)app->bindings.keyboard_jump[0],
+                (int)app->bindings.keyboard_steam[0],
+                (int)app->bindings.keyboard_rope[0],
+                (int)app->bindings.keyboard_fire[0],
+                (int)app->bindings.keyboard_previous[0],
+                (int)app->bindings.keyboard_next[0],
+                (int)app->bindings.keyboard_left[1],
+                (int)app->bindings.keyboard_right[1],
+                (int)app->bindings.keyboard_jump[1],
+                (int)app->bindings.keyboard_steam[1],
+                (int)app->bindings.keyboard_rope[1],
+                (int)app->bindings.keyboard_fire[1],
+                (int)app->bindings.keyboard_previous[1],
+                (int)app->bindings.keyboard_next[1],
+                (int)app->bindings.pad_jump,
+                (int)app->bindings.pad_steam,
+                (int)app->bindings.pad_rope,
+                (int)app->bindings.pad_fire,
+                (int)app->bindings.pad_previous,
+                (int)app->bindings.pad_next) < 0) {
+        (void)fclose(file);
+        (void)remove(temporary);
+        return 0;
+    }
+    if (fprintf(file,
+                "MASTER_VOLUME=%d\nMATCH_MINUTES=%d\n"
+                "SCORE_LIMIT_INDEX=%d\nRESPAWN_MODE=%d\n"
+                "RESPAWN_DELAY_INDEX=%d\nP1_NAME=%s\nP2_NAME=%s\n"
+                "P1_BARK=%d\nP2_BARK=%d\nPAD_BARK=%d\n",
+                app->options.master_volume, app->match_minutes,
+                app->score_limit_index, app->respawn_mode,
+                app->respawn_delay_index, app->human_names[0],
+                app->human_names[1],
+                (int)app->bindings.keyboard_bark[0],
+                (int)app->bindings.keyboard_bark[1],
+                (int)app->bindings.pad_bark) < 0) {
+        (void)fclose(file);
+        (void)remove(temporary);
+        return 0;
+    }
     if (fclose(file) != 0) {
         (void)remove(temporary);
         return 0;
     }
     if (rename(temporary, path) != 0) {
-        /* ISO C rename replaces atomically on POSIX.  Older Windows CRTs do
-         * not replace an existing file, so retain a conservative fallback. */
-        (void)remove(path);
-        if (rename(temporary, path) != 0) {
+        /* ISO C rename replaces atomically on POSIX. Older Windows CRTs do
+         * not. Move the old file aside so a failed replacement can restore
+         * it instead of deleting the last readable preferences. */
+        if (strlen(path) + 5U >= sizeof(backup)) {
             (void)remove(temporary);
             return 0;
         }
+        sprintf(backup, "%s.bak", path);
+        (void)remove(backup);
+        if (rename(path, backup) != 0 || rename(temporary, path) != 0) {
+            (void)rename(backup, path);
+            (void)remove(temporary);
+            return 0;
+        }
+        (void)remove(backup);
     }
     return 1;
 }
@@ -1198,47 +1886,140 @@ static void demo_draw_setup(demo_app *app)
     demo_value_line(113, "SEED", value, app->selection == 5);
     demo_value_line(127, "ARSENAL", demo_arsenal_names[app->arsenal],
                     app->selection == 6);
-    demo_menu_item(148, "START MATCH", app->selection == 7);
-    demo_menu_item(164, "BACK", app->selection == 8);
+    demo_menu_item(140, "CUSTOMIZE GAME", app->selection == 7);
+    demo_menu_item(154, "START MATCH", app->selection == 8);
+    demo_menu_item(168, "BACK", app->selection == 9);
     vox_ui_text_center(&demo_ui, 160, 180, 1,
                        "ARROWS CHANGE  ENTER SELECTS", DEMO_VGA_DARK_GRAY);
 }
 
+static void demo_draw_customize(demo_app *app)
+{
+    char value[32];
+    int player;
+    int active_players = app->local_players + app->bots;
+    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
+    (void)vox_software_render_ex(&demo_title_world, &demo_target,
+                                 &demo_render_config);
+    demo_dark_panel(28, 8, 264, 184);
+    vox_ui_text_center_shadow(&demo_ui, 160, 14, 2, "CUSTOMIZE GAME",
+                              DEMO_VGA_YELLOW);
+    for (player = 0; player < (int)VOX_DIGS_MAX_SLOTS; ++player) {
+        char label[12];
+        sprintf(label, "PLAYER %d", player + 1);
+        demo_value_line(34 + player * 13, label,
+                        player < active_players ?
+                        app->player_names[player] : "EMPTY",
+                        app->selection == player);
+    }
+    sprintf(value, "%d:00", app->match_minutes);
+    demo_value_line(88, "TIME LIMIT", value, app->selection == 4);
+    demo_value_line(101, "SCORE LIMIT",
+                    demo_score_limit_names[app->score_limit_index],
+                    app->selection == 5);
+    demo_value_line(114, "RESPAWN",
+                    demo_respawn_mode_names[app->respawn_mode],
+                    app->selection == 6);
+    sprintf(value, "%d SEC",
+            demo_respawn_delays[app->respawn_delay_index]);
+    demo_value_line(127, "SPAWN DELAY", value, app->selection == 7);
+    demo_menu_item(145, "RESTORE DEFAULTS", app->selection == 8);
+    demo_menu_item(163, "BACK", app->selection == 9);
+    vox_ui_text_center(&demo_ui, 160, 180, 1,
+                       "ENTER EDITS NAMES  ARROWS CHANGE",
+                       DEMO_VGA_DARK_GRAY);
+}
+
+static const char *demo_name_grid_label(int item, char *label)
+{
+    if (item >= 0 && item < 38) {
+        label[0] = demo_name_grid[item];
+        label[1] = '\0';
+        return label;
+    }
+    if (item == 38) return "SPACE";
+    if (item == 39) return "DEL";
+    if (item == 40) return "CLEAR";
+    return "DONE";
+}
+
+static void demo_draw_name_editor(demo_app *app)
+{
+    char heading[24];
+    int item;
+    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
+    (void)vox_software_render_ex(&demo_title_world, &demo_target,
+                                 &demo_render_config);
+    demo_dark_panel(18, 8, 284, 184);
+    sprintf(heading, "PLAYER %d NAME", app->edit_name_slot + 1);
+    vox_ui_text_center_shadow(&demo_ui, 160, 14, 2, heading,
+                              DEMO_VGA_YELLOW);
+    vox_ui_rect(&demo_ui, 72, 37, 176, 17, DEMO_VGA_BLACK);
+    vox_ui_frame(&demo_ui, 72, 37, 176, 17, DEMO_VGA_LIGHT_CYAN);
+    vox_ui_text_center(&demo_ui, 160, 42, 1,
+                       app->player_names[app->edit_name_slot],
+                       DEMO_VGA_WHITE);
+    for (item = 0; item < DEMO_NAME_GRID_ITEMS; ++item) {
+        int column = item % DEMO_NAME_GRID_COLUMNS;
+        int row = item / DEMO_NAME_GRID_COLUMNS;
+        int x = 28 + column * 34;
+        int y = 66 + row * 17;
+        char character[2];
+        const char *label = demo_name_grid_label(item, character);
+        if (item == app->name_grid_selection) {
+            vox_ui_rect(&demo_ui, x - 3, y - 3, 32, 12,
+                        DEMO_VGA_BLUE);
+            vox_ui_frame(&demo_ui, x - 3, y - 3, 32, 12,
+                         DEMO_VGA_LIGHT_CYAN);
+        }
+        vox_ui_text_center(&demo_ui, x + 12, y, 1, label,
+                           item == app->name_grid_selection ? 255U : 170U,
+                           item == app->name_grid_selection ? 255U : 170U,
+                           item == app->name_grid_selection ? 85U : 170U);
+    }
+    vox_ui_text_center(&demo_ui, 160, 178, 1,
+                       "TYPE OR USE GRID  ESC CANCELS",
+                       DEMO_VGA_DARK_GRAY);
+}
+
 static void demo_draw_options(demo_app *app)
 {
+    char volume[16];
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
     demo_dark_panel(28, 8, 264, 184);
     vox_ui_text_center_shadow(&demo_ui, 160, 14, 2, "OPTIONS",
                               DEMO_VGA_YELLOW);
-    demo_value_line(34, "FRAME CAP", demo_frame_names[app->options.frame_cap_index],
+    sprintf(volume, "%d%%", app->options.master_volume * 10);
+    demo_value_line(30, "FRAME CAP", demo_frame_names[app->options.frame_cap_index],
                     app->selection == 0);
-    demo_value_line(47, "LIGHTFIELD", demo_gi_names[app->options.gi_quality],
+    demo_value_line(42, "LIGHTFIELD", demo_gi_names[app->options.gi_quality],
                     app->selection == 1);
-    demo_value_line(60, "FX PROFILE", demo_fx_names[app->options.fx_profile],
-                    app->selection == 2);
-    demo_value_line(73, "FLASHES", demo_flash_names[app->options.flash_mode],
+    demo_value_line(54, "MASTER VOLUME", volume, app->selection == 2);
+    demo_value_line(66, "FX PROFILE", demo_fx_names[app->options.fx_profile],
                     app->selection == 3);
-    demo_value_line(86, "GORE", demo_gore_names[app->options.gore_level],
+    demo_value_line(78, "FLASHES", demo_flash_names[app->options.flash_mode],
                     app->selection == 4);
-    demo_value_line(99, "CAMERA SHAKE",
-                    demo_toggle_names[app->options.camera_shake],
+    demo_value_line(90, "GORE", demo_gore_names[app->options.gore_level],
                     app->selection == 5);
-    demo_value_line(112, "DAMAGE NUMBERS",
-                    demo_toggle_names[app->options.damage_numbers],
+    demo_value_line(102, "CAMERA SHAKE",
+                    demo_toggle_names[app->options.camera_shake],
                     app->selection == 6);
-    demo_value_line(125, "NUMBER SIZE",
-                    app->options.damage_number_size ? "LARGE" : "SMALL",
+    demo_value_line(114, "DAMAGE NUMBERS",
+                    demo_toggle_names[app->options.damage_numbers],
                     app->selection == 7);
+    demo_value_line(126, "NUMBER SIZE",
+                    app->options.damage_number_size ? "LARGE" : "SMALL",
+                    app->selection == 8);
     demo_value_line(138, "NUMBER COLOR",
                     demo_number_color_names[app->options.damage_number_color],
-                    app->selection == 8);
-    demo_value_line(151, "FULLSCREEN",
-                    demo_toggle_names[app->options.fullscreen],
                     app->selection == 9);
-    demo_menu_item(165, "INPUT & CONTROLLER", app->selection == 10);
-    demo_menu_item(180, "BACK", app->selection == 11);
+    demo_value_line(150, "FULLSCREEN",
+                    demo_toggle_names[app->options.fullscreen],
+                    app->selection == 10);
+    demo_menu_item(164, "INPUT & CONTROLLER", app->selection == 11);
+    demo_menu_item(179, "BACK", app->selection == 12);
 }
 
 static void demo_input_mode_value(demo_app *app, int player,
@@ -1473,6 +2254,7 @@ static SDL_Scancode *demo_keyboard_binding(demo_app *app, int player,
     if (action == 5) return &app->bindings.keyboard_fire[player];
     if (action == 6) return &app->bindings.keyboard_previous[player];
     if (action == 7) return &app->bindings.keyboard_next[player];
+    if (action == 8) return &app->bindings.keyboard_bark[player];
     return 0;
 }
 
@@ -1484,6 +2266,7 @@ static SDL_GameControllerButton *demo_pad_binding(demo_app *app, int action)
     if (action == 5) return &app->bindings.pad_fire;
     if (action == 6) return &app->bindings.pad_previous;
     if (action == 7) return &app->bindings.pad_next;
+    if (action == 8) return &app->bindings.pad_bark;
     return 0;
 }
 
@@ -1494,7 +2277,7 @@ static void demo_assign_keyboard_binding(demo_app *app, int player,
     int other;
     destination = demo_keyboard_binding(app, player, action);
     if (destination == 0 || code == SDL_SCANCODE_UNKNOWN) return;
-    for (other = 0; other < 8; ++other) {
+    for (other = 0; other < 9; ++other) {
         SDL_Scancode *candidate = demo_keyboard_binding(app, player, other);
         if (candidate != 0 && candidate != destination &&
             *candidate == code) {
@@ -1511,7 +2294,7 @@ static void demo_assign_pad_binding(demo_app *app, int action,
     int other;
     destination = demo_pad_binding(app, action);
     if (destination == 0 || button == SDL_CONTROLLER_BUTTON_INVALID) return;
-    for (other = 2; other < 8; ++other) {
+    for (other = 2; other < 9; ++other) {
         SDL_GameControllerButton *candidate = demo_pad_binding(app, other);
         if (candidate != 0 && candidate != destination &&
             *candidate == button) {
@@ -1523,9 +2306,9 @@ static void demo_assign_pad_binding(demo_app *app, int action,
 
 static void demo_draw_controls(demo_app *app)
 {
-    static const char *actions[8] = {
+    static const char *actions[9] = {
         "MOVE LEFT", "MOVE RIGHT", "JUMP", "STEAM", "ROPE", "FIRE",
-        "PREV WEAPON", "NEXT WEAPON"
+        "PREV WEAPON", "NEXT WEAPON", "BARK"
     };
     char line[80];
     int action;
@@ -1539,7 +2322,7 @@ static void demo_draw_controls(demo_app *app)
         app->binding_player == 0 ? "P1 KEYBOARD" :
         (app->binding_player == 1 ? "P2 KEYBOARD" : "CONTROLLER"),
         app->selection == 0);
-    for (action = 0; action < 8; ++action) {
+    for (action = 0; action < 9; ++action) {
         const char *binding_name;
         if (app->binding_player < 2) {
             SDL_Scancode *binding = demo_keyboard_binding(
@@ -1555,11 +2338,11 @@ static void demo_draw_controls(demo_app *app)
             binding_name = pad_name == 0 ? "UNBOUND" : pad_name;
         }
         sprintf(line, "%s", binding_name);
-        demo_value_line(48 + action * 12, actions[action], line,
+        demo_value_line(44 + action * 11, actions[action], line,
                         app->selection == action + 1);
     }
-    demo_menu_item(150, "RESTORE DEFAULTS", app->selection == 9);
-    demo_menu_item(164, "BACK", app->selection == 10);
+    demo_menu_item(148, "RESTORE DEFAULTS", app->selection == 10);
+    demo_menu_item(163, "BACK", app->selection == 11);
     vox_ui_text_center(&demo_ui, 160, 180, 1,
         app->binding_capture ? "PRESS A NEW KEY  ESC CANCELS" :
         "ENTER REBINDS  LEFT RIGHT DEVICE", DEMO_VGA_LIGHT_CYAN);
@@ -1605,7 +2388,7 @@ static void demo_render_voxel(int x, int y, vox_u16 material)
                         demo_material_temperature(material));
 }
 
-static void demo_voxelize_miner(vox_u16 player)
+static void demo_voxelize_miner(const demo_app *app, vox_u16 player)
 {
     static const vox_u16 coats[VOX_DIGS_MAX_SLOTS] = {
         VOX_MAT_METAL, VOX_MAT_BIOMASS, VOX_MAT_COAL, VOX_MAT_STONE
@@ -1618,7 +2401,8 @@ static void demo_voxelize_miner(vox_u16 player)
                                VOX_WORLD_HEIGHT, VOX_WORLD_HEIGHT);
     vox_u16 part;
     digs_miner_pose_default(&pose);
-    pose.coat_material = coats[player];
+    pose.coat_material = app->miner_hit_ttl[player] > 0U ?
+                         VOX_MAT_BLOOD : coats[player];
     pose.facing_right = demo_match.facing_right[player];
     for (part = 0U; part < VOX_DIGS_ANATOMY_PART_COUNT; ++part) {
         if ((demo_match.anatomy[player][part].flags &
@@ -1701,7 +2485,7 @@ static void demo_build_render_world(demo_app *app)
     for (player = 0U; player < VOX_DIGS_MAX_SLOTS; ++player) {
         if (demo_match.alive[player]) {
             demo_voxelize_rope(player);
-            demo_voxelize_miner(player);
+            demo_voxelize_miner(app, player);
         }
     }
     for (index = 0U; index < VOX_DIGS_MAX_PROJECTILES; ++index) {
@@ -1819,51 +2603,6 @@ static void demo_camera_exterior_pixel(vox_u8 *destination, int source_y)
     destination[2] = (vox_u8)(42U + shade_y * 28U / VOX_WORLD_HEIGHT);
 }
 
-static void demo_draw_lava_horizon_footer(const demo_app *app)
-{
-    double presented_y;
-    double projected_y;
-    int footer_bottom;
-    int footer_top;
-    int x;
-    int y;
-    if (app == 0 || demo_match.lava_surface_y >= VOX_WORLD_HEIGHT) {
-        return;
-    }
-    presented_y = app->camera_world_y + app->camera_shake_y;
-    projected_y = (double)DEMO_HEIGHT / 2.0 +
-        ((double)demo_match.lava_surface_y - presented_y) *
-        app->camera_scale * (double)DEMO_HEIGHT /
-        (double)VOX_WORLD_HEIGHT;
-    if (projected_y < (double)DEMO_HEIGHT) {
-        return;
-    }
-    footer_bottom = app->options.debug ? 174 : (int)DEMO_HEIGHT;
-    footer_top = (int)((double)footer_bottom -
-                       DEMO_CAMERA_LAVA_FOOTER_PIXELS);
-    if (footer_top < 0) footer_top = 0;
-    for (y = footer_top; y < footer_bottom; ++y) {
-        for (x = 0; x < (int)DEMO_WIDTH; ++x) {
-            vox_u8 *destination = &demo_pixels[
-                (y * (int)DEMO_WIDTH + x) * VOX_SOFTWARE_RGB_BYTES];
-            int wave = (x / 4 + (int)(demo_match.tick / 6U)) % 11;
-            if (y == footer_top + (wave == 0 ? 0 : 1)) {
-                destination[0] = 255U;
-                destination[1] = 194U;
-                destination[2] = 36U;
-            } else if (y < footer_top + 4) {
-                destination[0] = 255U;
-                destination[1] = 98U;
-                destination[2] = 8U;
-            } else {
-                destination[0] = 198U;
-                destination[1] = 44U;
-                destination[2] = 16U;
-            }
-        }
-    }
-}
-
 static void demo_apply_player_camera(demo_app *app)
 {
     double minimum_x;
@@ -1881,6 +2620,7 @@ static void demo_apply_player_camera(demo_app *app)
     double shake_x;
     double shake_y;
     int active;
+    int alive_local;
     int player;
     int center_x;
     int center_y;
@@ -1892,25 +2632,39 @@ static void demo_apply_player_camera(demo_app *app)
     minimum_y = (double)VOX_WORLD_HEIGHT;
     maximum_y = 0.0;
     active = 0;
+    alive_local = 0;
+    for (player = 0; player < app->local_players; ++player) {
+        if (demo_match.alive[player]) ++alive_local;
+    }
     target_sum_x = 0.0;
     for (player = 0; player < app->local_players; ++player) {
-        if (demo_match.alive[player]) {
+        int hold_dead = alive_local == 0 && !demo_match.alive[player] &&
+                        app->death_camera_hold > 0U &&
+                        app->death_camera_player == (vox_u16)player;
+        int pending_spawn = !demo_match.alive[player] && !hold_dead &&
+                            alive_local == 0;
+        if (demo_match.alive[player] || hold_dead || pending_spawn) {
             double previous_x = (double)app->previous_player_x[player] /
                                 65536.0;
             double previous_y = (double)app->previous_player_y[player] /
                                 65536.0;
-            double current_x = (double)demo_match.players[player].
-                               position_x.value_q16 / 65536.0;
-            double current_y = (double)demo_match.players[player].
-                               position_y.value_q16 / 65536.0;
+            double current_x = pending_spawn ?
+                (double)demo_match.respawn_target_x_q16[player] / 65536.0 :
+                (double)demo_match.players[player].position_x.value_q16 /
+                65536.0;
+            double current_y = pending_spawn ?
+                (double)demo_match.respawn_target_y_q16[player] / 65536.0 :
+                (double)demo_match.players[player].position_y.value_q16 /
+                65536.0;
             double interpolated_x = previous_x +
                                     (current_x - previous_x) *
                                     app->render_alpha;
             double interpolated_y = previous_y +
                                     (current_y - previous_y) *
                                     app->render_alpha;
-            double look_x = (double)demo_match.players[player].
-                            velocity_x.value_q16 / 65536.0 * 2.5;
+            double look_x = pending_spawn ? 0.0 :
+                (double)demo_match.players[player].velocity_x.value_q16 /
+                65536.0 * 2.5;
             if (interpolated_x < minimum_x) minimum_x = interpolated_x;
             if (interpolated_x > maximum_x) maximum_x = interpolated_x;
             if (interpolated_y < minimum_y) minimum_y = interpolated_y;
@@ -2005,10 +2759,6 @@ static void demo_apply_player_camera(demo_app *app)
             }
         }
     }
-    /* At overview scale the physical basin is in frame.  At closer zooms,
-     * keep full player-follow fidelity and draw a thin animated continuation
-     * only while the authoritative horizon is below the viewport. */
-    demo_draw_lava_horizon_footer(app);
 }
 
 static void demo_mouse_world(demo_app *app, vox_u32 *world_x,
@@ -2037,19 +2787,18 @@ static void demo_draw_hud(demo_app *app)
         vox_digs_weapon_get((vox_u16)app->selected_tool[0]);
     vox_u32 remaining = demo_match.tick < demo_match.rules.match_ticks ?
                         demo_match.rules.match_ticks - demo_match.tick : 0U;
-    vox_u32 seconds = remaining /
+    vox_u32 seconds = (remaining + VOX_DIGS_TICKS_PER_SECOND - 1U) /
                       VOX_DIGS_TICKS_PER_SECOND;
     int health_width = (int)((vox_u32)demo_match.health[0] * 42U /
                              VOX_DIGS_MAX_HEALTH);
     int steam_width = (int)((vox_u32)demo_match.steam_q16[0] * 40U / 65535U);
     vox_ui_rect(&demo_ui, 3, 3, 166, 29, DEMO_VGA_BLACK);
     vox_ui_frame(&demo_ui, 3, 3, 166, 29, DEMO_VGA_BROWN);
-    sprintf(text, "P1 K%u D%u HP%u  %lu:%02lu",
+    sprintf(text, "%s K%u D%u HP%u",
+            app->player_names[0],
             (unsigned int)demo_match.scores[0],
             (unsigned int)demo_match.deaths[0],
-            (unsigned int)demo_match.health[0],
-            (unsigned long)(seconds / 60U),
-            (unsigned long)(seconds % 60U));
+            (unsigned int)demo_match.health[0]);
     vox_ui_text(&demo_ui, 7, 7, 1, text, DEMO_VGA_WHITE);
     vox_ui_text(&demo_ui, 7, 18, 1, "HP", DEMO_VGA_LIGHT_RED);
     vox_ui_rect(&demo_ui, 22, 18, 44, 5, DEMO_VGA_BROWN);
@@ -2074,7 +2823,7 @@ static void demo_draw_hud(demo_app *app)
                               VOX_DIGS_MAX_HEALTH);
         vox_ui_rect(&demo_ui, 3, 35, 166, 21, DEMO_VGA_BLACK);
         vox_ui_frame(&demo_ui, 3, 35, 166, 21, DEMO_VGA_CYAN);
-        sprintf(text, "P2 K%u D%u HP%u",
+        sprintf(text, "%s K%u D%u HP%u", app->player_names[1],
                 (unsigned int)demo_match.scores[1],
                 (unsigned int)demo_match.deaths[1],
                 (unsigned int)demo_match.health[1]);
@@ -2088,6 +2837,84 @@ static void demo_draw_hud(demo_app *app)
                     DEMO_VGA_LIGHT_CYAN);
         vox_ui_text(&demo_ui, 179, 48, 1, "PAD 2 OR P2 KEYS",
                     DEMO_VGA_DARK_GRAY);
+    }
+    {
+        int timer_y = app->options.debug ? 153 : 178;
+        vox_u8 red = 170U;
+        vox_u8 green = 255U;
+        vox_u8 blue = 255U;
+        if (demo_match.tick >= demo_match.rules.lava_start_tick) {
+            red = 255U;
+            green = 255U;
+            blue = 85U;
+        }
+        if (seconds <= 10U) {
+            red = 255U;
+            green = 85U;
+            blue = 85U;
+        }
+        vox_ui_rect(&demo_ui, 3, timer_y, 74, 19, DEMO_VGA_BLACK);
+        vox_ui_frame(&demo_ui, 3, timer_y, 74, 19,
+                     red, green, blue);
+        sprintf(text, "TIME %lu:%02lu", (unsigned long)(seconds / 60U),
+                (unsigned long)(seconds % 60U));
+        vox_ui_text(&demo_ui, 8, timer_y + 6, 1, text,
+                    red, green, blue);
+    }
+}
+
+static void demo_draw_notifications(demo_app *app)
+{
+    int line;
+    char text[48];
+    for (line = 0; line < DEMO_KILLFEED_MAX; ++line) {
+        if (app->killfeed[line].ttl > 0U) {
+            int width = vox_ui_text_width(app->killfeed[line].text, 1);
+            int x = (int)DEMO_WIDTH - width - 5;
+            if (x < 4) x = 4;
+            vox_ui_text_shadow(&demo_ui, x, 62 + line * 9, 1,
+                               app->killfeed[line].text,
+                               DEMO_VGA_LIGHT_GRAY);
+        }
+    }
+    for (line = 0; line < 3; ++line) {
+        if (app->banners[line].ttl > 0U) {
+            if (line == 0) {
+                vox_ui_text_center_shadow(&demo_ui, 160, 61, 2,
+                                          app->banners[line].text,
+                                          DEMO_VGA_LIGHT_GRAY);
+            } else {
+                vox_ui_text_center_shadow(&demo_ui, 160,
+                                          61 + line * 14, 2,
+                                          app->banners[line].text,
+                                          DEMO_VGA_YELLOW);
+            }
+        }
+    }
+    for (line = 0; line < app->local_players; ++line) {
+        if (!demo_match.alive[line]) {
+            int y = 142 + line * 11;
+            if (demo_match.respawn_ready[line]) {
+                if (demo_match.rules.respawn_mode ==
+                    VOX_DIGS_RESPAWN_ON_FIRE) {
+                    sprintf(text, "%s  PRESS FIRE",
+                            app->player_names[line]);
+                } else {
+                    sprintf(text, "%s  DEPLOYING",
+                            app->player_names[line]);
+                }
+            } else {
+                vox_u32 tenths = ((vox_u32)demo_match.respawn_ticks[line] *
+                    10U + VOX_DIGS_TICKS_PER_SECOND - 1U) /
+                    VOX_DIGS_TICKS_PER_SECOND;
+                sprintf(text, "%s  RESPAWN %lu.%lu",
+                        app->player_names[line],
+                        (unsigned long)(tenths / 10U),
+                        (unsigned long)(tenths % 10U));
+            }
+            vox_ui_text_center_shadow(&demo_ui, 160, y, 1, text,
+                                      DEMO_VGA_LIGHT_CYAN);
+        }
     }
 }
 
@@ -2154,6 +2981,8 @@ static void demo_draw_world_feedback(demo_app *app)
     for (player = 0; player < (int)demo_match.rules.player_count; ++player) {
         int x;
         int y;
+        int name_x;
+        int name_width;
         demo_world_to_screen(app,
             demo_match.players[player].position_x.value_q16,
             demo_match.players[player].position_y.value_q16, &x, &y);
@@ -2169,6 +2998,44 @@ static void demo_draw_world_feedback(demo_app *app)
             vox_ui_rect(&demo_ui, x - 10, y - 15, 20, 4, DEMO_VGA_BLACK);
             vox_ui_rect(&demo_ui, x - 9, y - 14, width, 2,
                         DEMO_VGA_LIGHT_RED);
+        }
+        if (demo_match.alive[player]) {
+            name_width = vox_ui_text_width(app->player_names[player], 1);
+            name_x = x;
+            if (name_x - name_width / 2 < 2) {
+                name_x = 2 + name_width / 2;
+            }
+            if (name_x + name_width / 2 >= (int)DEMO_WIDTH - 2) {
+                name_x = (int)DEMO_WIDTH - 3 - name_width / 2;
+            }
+            vox_ui_text_center_shadow(&demo_ui, name_x, y - 24, 1,
+                                      app->player_names[player],
+                                      player < app->local_players ?
+                                      255U : 85U,
+                                      player < app->local_players ?
+                                      255U : 255U,
+                                      player < app->local_players ?
+                                      255U : 255U);
+        }
+        if (app->bubbles[player].ttl > 0U) {
+            int bubble_x = x - 66;
+            int bubble_y = y - 47;
+            if (bubble_x < 2) bubble_x = 2;
+            if (bubble_x > (int)DEMO_WIDTH - 136) {
+                bubble_x = (int)DEMO_WIDTH - 136;
+            }
+            if (bubble_y < 35) bubble_y = 35;
+            if (bubble_y > (int)DEMO_HEIGHT - 27) {
+                bubble_y = (int)DEMO_HEIGHT - 27;
+            }
+            vox_ui_rect(&demo_ui, bubble_x, bubble_y, 134, 23,
+                        DEMO_VGA_BLACK);
+            vox_ui_frame(&demo_ui, bubble_x, bubble_y, 134, 23,
+                         DEMO_VGA_LIGHT_GRAY);
+            (void)vox_ui_text_wrap(&demo_ui, bubble_x + 4,
+                                   bubble_y + 3, 126, 2, 1,
+                                   app->bubbles[player].text,
+                                   255U, 255U, 255U);
         }
         if (app->options.debug && vox_digs_player_is_bot(&demo_match,
                                                          (vox_u16)player)) {
@@ -2189,10 +3056,29 @@ static void demo_draw_world_feedback(demo_app *app)
         demo_world_to_screen(app,
             (vox_i32)app->aim_world_x[player] << 16,
             (vox_i32)app->aim_world_y[player] << 16, &x, &y);
-        vox_ui_frame(&demo_ui, x - 3, y - 3, 7, 7,
+        {
+            int pulse = (int)app->crosshair_pulse_ttl[player];
+            int radius = 3 + (pulse + 3) / 4;
+            vox_ui_frame(&demo_ui, x - radius, y - radius,
+                         radius * 2 + 1, radius * 2 + 1,
                      player == 0 ? 255U : 85U,
                      player == 0 ? 255U : 255U,
                      player == 0 ? 85U : 255U);
+        }
+    }
+    for (player = 0; player < app->local_players; ++player) {
+        const demo_hit_marker *marker = &app->hit_markers[player];
+        if (marker->ttl > 0U) {
+            int x;
+            int y;
+            demo_world_to_screen(app, marker->world_x_q16,
+                                 marker->world_y_q16, &x, &y);
+            vox_ui_rect(&demo_ui, x - 4, y, 9, 1, DEMO_VGA_WHITE);
+            vox_ui_rect(&demo_ui, x, y - 4, 1, 9, DEMO_VGA_WHITE);
+            vox_ui_rect(&demo_ui, x - 2, y - 2, 5, 5,
+                        DEMO_VGA_LIGHT_RED);
+            vox_ui_rect(&demo_ui, x, y, 1, 1, DEMO_VGA_WHITE);
+        }
     }
     for (slot = 0; slot < (int)DEMO_DAMAGE_POPUP_MAX; ++slot) {
         const demo_damage_popup *popup = &app->damage_popups[slot];
@@ -2265,13 +3151,16 @@ static void demo_draw_play(demo_app *app)
     }
     if (app->screen == DEMO_PLAY && app->mouse_inside &&
         app->player_input[0].active_source == DEMO_SOURCE_KEYBOARD) {
-        vox_ui_frame(&demo_ui, app->mouse_x - 3, app->mouse_y - 3,
-                     7, 7, DEMO_VGA_YELLOW);
+        int radius = 3 + ((int)app->crosshair_pulse_ttl[0] + 3) / 4;
+        vox_ui_frame(&demo_ui, app->mouse_x - radius,
+                     app->mouse_y - radius, radius * 2 + 1,
+                     radius * 2 + 1, DEMO_VGA_YELLOW);
         vox_ui_rect(&demo_ui, app->mouse_x, app->mouse_y, 1, 1,
                     DEMO_VGA_WHITE);
     }
     demo_draw_world_feedback(app);
     demo_draw_hud(app);
+    demo_draw_notifications(app);
     demo_draw_debug(app);
     if (app->screen == DEMO_PAUSE) {
         demo_dark_panel(88, 65, 144, 70);
@@ -2291,16 +3180,40 @@ static void demo_draw_play(demo_app *app)
 static void demo_draw_results(demo_app *app)
 {
     char line[64];
+    int player;
     demo_draw_play(app);
-    demo_dark_panel(67, 48, 186, 104);
-    vox_ui_text_center_shadow(&demo_ui, 160, 59, 2, "MATCH RESULTS",
+    demo_dark_panel(55, 36, 210, 132);
+    vox_ui_text_center_shadow(&demo_ui, 160, 46, 2, "MATCH RESULTS",
                               DEMO_VGA_YELLOW);
-    sprintf(line, "PLAYER SCORE %u", (unsigned int)demo_match.scores[0]);
-    vox_ui_text_center(&demo_ui, 160, 91, 1, line, DEMO_VGA_WHITE);
+    if (demo_match.result_draw) {
+        strcpy(line, "DRAW");
+    } else if (demo_match.rules.team_mode ==
+               VOX_DIGS_MODE_MINERS_VS_MACHINES) {
+        strcpy(line, demo_match.winner_team == VOX_DIGS_TEAM_MINERS ?
+                     "MINERS WIN" : "MACHINES WIN");
+    } else if (demo_match.winner_player < VOX_DIGS_MAX_SLOTS) {
+        sprintf(line, "%s WINS",
+                app->player_names[demo_match.winner_player]);
+    } else {
+        strcpy(line, "SHIFT COMPLETE");
+    }
+    vox_ui_text_center(&demo_ui, 160, 68, 1, line, DEMO_VGA_WHITE);
+    for (player = 0; player < (int)demo_match.rules.player_count; ++player) {
+        sprintf(line, "%s  K%u D%u", app->player_names[player],
+                (unsigned int)demo_match.scores[player],
+                (unsigned int)demo_match.deaths[player]);
+        vox_ui_text_center(&demo_ui, 160, 84 + player * 11, 1, line,
+                           player == (int)demo_match.winner_player ?
+                           255U : 170U,
+                           player == (int)demo_match.winner_player ?
+                           255U : 170U,
+                           player == (int)demo_match.winner_player ?
+                           85U : 170U);
+    }
     sprintf(line, "STATE HASH %08lX", (unsigned long)demo_match.state_hash);
-    vox_ui_text_center(&demo_ui, 160, 105, 1, line,
+    vox_ui_text_center(&demo_ui, 160, 132, 1, line,
                        DEMO_VGA_LIGHT_CYAN);
-    vox_ui_text_center(&demo_ui, 160, 130, 1,
+    vox_ui_text_center(&demo_ui, 160, 150, 1,
                        "ENTER RETURNS TO TITLE", DEMO_VGA_YELLOW);
 }
 
@@ -2310,6 +3223,10 @@ static void demo_render(demo_app *app)
         demo_draw_title(app);
     } else if (app->screen == DEMO_SETUP) {
         demo_draw_setup(app);
+    } else if (app->screen == DEMO_CUSTOMIZE) {
+        demo_draw_customize(app);
+    } else if (app->screen == DEMO_NAME_EDITOR) {
+        demo_draw_name_editor(app);
     } else if (app->screen == DEMO_OPTIONS) {
         demo_draw_options(app);
     } else if (app->screen == DEMO_FEEDBACK) {
@@ -2412,6 +3329,7 @@ static int demo_start_match(demo_app *app, int foundry)
 {
     vox_digs_rules rules;
     vox_u16 player;
+    demo_refresh_roster(app);
     vox_digs_rules_classic(&rules);
     rules.player_count = (vox_u16)(foundry ? 1 :
                          app->local_players + app->bots);
@@ -2436,9 +3354,16 @@ static int demo_start_match(demo_app *app, int foundry)
         rules.lava_start_tick = rules.match_ticks - 60U;
         rules.score_limit = 100U;
     } else {
-        rules.match_ticks = 2U * 60U * VOX_DIGS_TICKS_PER_SECOND;
+        rules.match_ticks = (vox_u32)app->match_minutes * 60U *
+                            VOX_DIGS_TICKS_PER_SECOND;
         rules.lava_start_tick = rules.match_ticks -
                                 30U * VOX_DIGS_TICKS_PER_SECOND;
+        rules.score_limit = (vox_u32)
+                            demo_score_limits[app->score_limit_index];
+        rules.respawn_mode = (vox_u16)app->respawn_mode;
+        rules.respawn_delay_ticks = (vox_u16)
+            (demo_respawn_delays[app->respawn_delay_index] *
+             (int)VOX_DIGS_TICKS_PER_SECOND);
     }
     if (vox_digs_match_init(&demo_match, &rules) != VOX_OK) {
         return 0;
@@ -2452,6 +3377,21 @@ static int demo_start_match(demo_app *app, int foundry)
     app->selected_tool[0] = demo_first_weapon(rules.weapon_mask);
     app->selected_tool[1] = app->selected_tool[0];
     app->last_event_sequence = 0U;
+    memset(app->damage_popups, 0, sizeof(app->damage_popups));
+    memset(app->hit_markers, 0, sizeof(app->hit_markers));
+    memset(app->killfeed, 0, sizeof(app->killfeed));
+    memset(app->bubbles, 0, sizeof(app->bubbles));
+    memset(app->miner_hit_ttl, 0, sizeof(app->miner_hit_ttl));
+    memset(app->crosshair_pulse_ttl, 0,
+           sizeof(app->crosshair_pulse_ttl));
+    memset(app->multikill_count, 0, sizeof(app->multikill_count));
+    memset(app->spree_count, 0, sizeof(app->spree_count));
+    memset(app->last_kill_tick, 0, sizeof(app->last_kill_tick));
+    memset(app->last_bark_tick, 0, sizeof(app->last_bark_tick));
+    app->global_bark_tick = 0U;
+    memset(app->banners, 0, sizeof(app->banners));
+    app->death_camera_hold = 0U;
+    app->death_camera_player = VOX_DIGS_NO_PLAYER;
     app->camera_velocity_x = 0.0;
     app->camera_velocity_y = 0.0;
     app->camera_scale_velocity = 0.0;
@@ -2492,6 +3432,9 @@ static int demo_start_match(demo_app *app, int foundry)
     app->screen = DEMO_PLAY;
     app->selection = 0;
     demo_audio_play(app, DEMO_SOUND_START);
+    demo_audio_speak_text(app, "GET TO WORK!", VOX_AUDIO_SPEECH_DEEP,
+                          VOX_AUDIO_PRIORITY_ANNOUNCER,
+                          VOX_AUDIO_PAN_CENTER);
     return 1;
 }
 
@@ -2669,6 +3612,7 @@ static void demo_submit_human_input(demo_app *app)
         Sint16 move_x = 0;
         Sint16 move_y = 0;
         int fire = 0;
+        int bark = 0;
         int previous_down = 0;
         int next_down = 0;
         int use_controller;
@@ -2680,6 +3624,7 @@ static void demo_submit_human_input(demo_app *app)
         SDL_Scancode *fire_key = demo_keyboard_binding(app, player, 5);
         SDL_Scancode *previous_key = demo_keyboard_binding(app, player, 6);
         SDL_Scancode *next_key = demo_keyboard_binding(app, player, 7);
+        SDL_Scancode *bark_key = demo_keyboard_binding(app, player, 8);
         if (controller != 0) {
             Sint16 activity_axes[4];
             double activity = 0.0;
@@ -2746,10 +3691,13 @@ static void demo_submit_human_input(demo_app *app)
                                           VOX_DIGS_ACTION_ROPE);
             }
             if (fire_key != 0 && keys[*fire_key]) fire = 1;
+            if (bark_key != 0 && keys[*bark_key]) bark = 1;
             if (player == 0) {
                 if (keys[SDL_SCANCODE_W]) move_y = -32767;
                 if (keys[SDL_SCANCODE_S]) move_y = 32767;
             } else {
+                if (keys[SDL_SCANCODE_UP]) move_y = -32767;
+                if (keys[SDL_SCANCODE_DOWN]) move_y = 32767;
                 if (keys[SDL_SCANCODE_I] &&
                     app->aim_world_y[player] > 0U) {
                     --app->aim_world_y[player];
@@ -2813,6 +3761,8 @@ static void demo_submit_human_input(demo_app *app)
                     SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16000) {
                 fire = 1;
             }
+            if (demo_controller_button(controller,
+                                       app->bindings.pad_bark)) bark = 1;
             demo_update_controller_aim(app, player, controller,
                                        aim_x, aim_y, rope_held);
         }
@@ -2821,6 +3771,7 @@ static void demo_submit_human_input(demo_app *app)
             move_x = 0;
             move_y = 0;
             fire = 0;
+            bark = 0;
             previous_down = 0;
             next_down = 0;
             --app->player_input[player].suppress_ticks;
@@ -2846,7 +3797,16 @@ static void demo_submit_human_input(demo_app *app)
             app->keyboard_previous_down[player] = previous_down;
             app->keyboard_next_down[player] = next_down;
         }
-        if (fire) demo_fire_player(app, player);
+        if (bark && !app->bark_down[player]) {
+            demo_bark(app, player, demo_bark_context(app, player), 0);
+        }
+        app->bark_down[player] = bark;
+        if (demo_match.alive[player]) {
+            if (fire) demo_fire_player(app, player);
+        } else if (fire && !app->fire_down[player]) {
+            (void)vox_digs_request_respawn(&demo_match, (vox_u16)player);
+        }
+        app->fire_down[player] = fire;
     }
 }
 
@@ -2909,6 +3869,116 @@ static void demo_rumble_player(demo_app *app, vox_u16 player,
     }
 }
 
+static const char *demo_player_name(const demo_app *app, vox_u16 player)
+{
+    if (player >= VOX_DIGS_MAX_SLOTS ||
+        app->player_names[player][0] == '\0') return "THE MINE";
+    return app->player_names[player];
+}
+
+static void demo_add_killfeed(demo_app *app, const char *text_value)
+{
+    int line;
+    for (line = DEMO_KILLFEED_MAX - 1; line > 0; --line) {
+        app->killfeed[line] = app->killfeed[line - 1];
+    }
+    demo_copy_text(app->killfeed[0].text,
+                   sizeof(app->killfeed[0].text), text_value);
+    app->killfeed[0].ttl = DEMO_KILLFEED_TICKS;
+}
+
+static void demo_set_banner(demo_app *app, const char *text_value,
+                            int announce)
+{
+    int slot;
+    for (slot = 0; slot < 3; ++slot) {
+        if (app->banners[slot].ttl == 0U) break;
+    }
+    if (slot == 3) {
+        app->banners[0] = app->banners[1];
+        app->banners[1] = app->banners[2];
+        slot = 2;
+    }
+    demo_copy_text(app->banners[slot].text,
+                   sizeof(app->banners[slot].text), text_value);
+    app->banners[slot].ttl = DEMO_BANNER_TICKS;
+    if (announce) {
+        demo_audio_speak_text(app, text_value, VOX_AUDIO_SPEECH_DEEP,
+                              VOX_AUDIO_PRIORITY_ANNOUNCER,
+                              VOX_AUDIO_PAN_CENTER);
+    }
+}
+
+static void demo_register_kill(demo_app *app,
+                               const vox_digs_event *event)
+{
+    char line[48];
+    int source_local = event->source < (vox_u16)app->local_players;
+    int target_local = event->target < (vox_u16)app->local_players;
+    if (event->source < demo_match.rules.player_count &&
+        event->source != event->target) {
+        sprintf(line, "%s > %s", demo_player_name(app, event->source),
+                demo_player_name(app, event->target));
+    } else if (event->target < demo_match.rules.player_count) {
+        sprintf(line, "%s LOST TO THE MINE",
+                demo_player_name(app, event->target));
+    } else {
+        strcpy(line, "THE MINE CLAIMED ANOTHER");
+    }
+    demo_add_killfeed(app, line);
+    if (event->target < DEMO_LOCAL_MAX) {
+        app->spree_count[event->target] = 0U;
+        app->multikill_count[event->target] = 0U;
+    }
+    if (source_local && event->source != event->target &&
+        event->source < DEMO_LOCAL_MAX) {
+        vox_u16 source = event->source;
+        if (app->last_kill_tick[source] != 0U &&
+            event->tick - app->last_kill_tick[source] <=
+            DEMO_MULTIKILL_WINDOW) {
+            ++app->multikill_count[source];
+        } else {
+            app->multikill_count[source] = 1U;
+        }
+        app->last_kill_tick[source] = event->tick;
+        ++app->spree_count[source];
+        if (target_local) {
+            sprintf(line, "%s KILLED %s",
+                    demo_player_name(app, event->source),
+                    demo_player_name(app, event->target));
+        } else {
+            sprintf(line, "YOU KILLED %s",
+                    demo_player_name(app, event->target));
+        }
+        demo_set_banner(app, line, 0);
+        if (app->multikill_count[source] == 2U) {
+            demo_set_banner(app, "DOUBLE KILL!", 1);
+        } else if (app->multikill_count[source] == 3U) {
+            demo_set_banner(app, "TRIPLE KILL!", 1);
+        } else if (app->multikill_count[source] >= 4U) {
+            demo_set_banner(app, "MULTI KILL!", 1);
+        }
+        if (app->spree_count[source] == 5U) {
+            demo_set_banner(app, "KILLING SPREE!", 1);
+        }
+        demo_audio_emit(app, VOX_AUDIO_PRESET_KILL_CONFIRM,
+                        event->variant, VOX_AUDIO_PAN_CENTER);
+    } else if (target_local) {
+        if (event->source < demo_match.rules.player_count &&
+            event->source != event->target) {
+            sprintf(line, "KILLED BY %s",
+                    demo_player_name(app, event->source));
+        } else {
+            strcpy(line, "THE MINE GOT YOU");
+        }
+        demo_set_banner(app, line, 0);
+    }
+    if (target_local) {
+        app->death_camera_hold = 72U;
+        app->death_camera_player = event->target;
+    }
+}
+
 static void demo_process_events(demo_app *app)
 {
     vox_u16 ordinal;
@@ -2928,6 +3998,24 @@ static void demo_process_events(demo_app *app)
             }
             demo_audio_emit(app, VOX_AUDIO_PRESET_HIT,
                             event->variant, pan);
+            if (event->magnitude > 0U &&
+                event->target < VOX_DIGS_MAX_SLOTS) {
+                app->miner_hit_ttl[event->target] = DEMO_MINER_HIT_TICKS;
+            }
+            if (event->magnitude > 0U &&
+                event->source < (vox_u16)app->local_players &&
+                event->source != event->target) {
+                app->hit_markers[event->source].world_x_q16 =
+                    event->position_x_q16;
+                app->hit_markers[event->source].world_y_q16 =
+                    event->position_y_q16;
+                app->hit_markers[event->source].ttl =
+                    DEMO_HIT_MARKER_TICKS;
+                app->crosshair_pulse_ttl[event->source] =
+                    DEMO_HIT_MARKER_TICKS;
+                demo_audio_emit(app, VOX_AUDIO_PRESET_HIT_CONFIRM,
+                                event->variant, VOX_AUDIO_PAN_CENTER);
+            }
             if (event->target < (vox_u16)app->local_players) {
                 app->camera_trauma += (double)event->magnitude / 180.0;
                 app->flash_kind = 1;
@@ -2954,6 +4042,7 @@ static void demo_process_events(demo_app *app)
                                       (app->options.flash_mode == 1 ? 0.30 : 0.0);
             }
             demo_rumble_player(app, event->target, 100U);
+            demo_register_kill(app, event);
         } else if (event->type == VOX_DIGS_EVENT_SPAWN) {
             demo_audio_emit(app, VOX_AUDIO_PRESET_SPAWN,
                             event->variant, pan);
@@ -2965,8 +4054,26 @@ static void demo_process_events(demo_app *app)
             demo_audio_emit(app, VOX_AUDIO_PRESET_ROPE_BREAK,
                             event->variant, pan);
         } else if (event->type == VOX_DIGS_EVENT_AI_BARK) {
-            demo_audio_emit(app, VOX_AUDIO_PRESET_BARK_ALERT,
-                            event->variant, pan);
+            if (event->source < demo_match.rules.player_count &&
+                ((event->sequence + event->source * 7U) & 3U) == 0U) {
+                int context = event->magnitude < 4U ?
+                              (int)event->magnitude :
+                              demo_bark_context(app, (int)event->source);
+                demo_bark(app, (int)event->source, context, 1);
+            }
+        } else if (event->type == VOX_DIGS_EVENT_MATCH_END) {
+            if (demo_match.result_draw) {
+                demo_set_banner(app, "DRAW!", 1);
+            } else if ((demo_match.rules.team_mode ==
+                        VOX_DIGS_MODE_MINERS_VS_MACHINES &&
+                        demo_match.winner_team == VOX_DIGS_TEAM_MINERS) ||
+                       (demo_match.rules.team_mode == VOX_DIGS_MODE_FFA &&
+                        demo_match.winner_player <
+                        (vox_u16)app->local_players)) {
+                demo_set_banner(app, "SHIFT WON!", 1);
+            } else {
+                demo_set_banner(app, "SHIFT LOST!", 1);
+            }
         } else if (event->type == VOX_DIGS_EVENT_WEAPON_FIRE &&
                    event->source >= (vox_u16)app->local_players) {
             demo_audio_emit(app, VOX_AUDIO_PRESET_FIRE,
@@ -2974,6 +4081,57 @@ static void demo_process_events(demo_app *app)
         }
         if (app->camera_trauma > 1.0) app->camera_trauma = 1.0;
     }
+}
+
+static void demo_update_ambience(demo_app *app)
+{
+    int row;
+    int column;
+    vox_u32 depth;
+    vox_u32 water = 0U;
+    vox_u32 lava = 0U;
+    long water_x = 0L;
+    long lava_x = 0L;
+    double span_x;
+    double span_y;
+    if (app->audio_device == 0U || (demo_match.tick % 12U) != 0U) return;
+    span_x = (double)VOX_WORLD_WIDTH / app->camera_scale;
+    span_y = (double)VOX_WORLD_HEIGHT / app->camera_scale;
+    for (row = 0; row < 4; ++row) {
+        for (column = 0; column < 8; ++column) {
+            long x = (long)(app->camera_world_x - span_x * 0.5 +
+                     span_x * ((double)column + 0.5) / 8.0);
+            long y = (long)(app->camera_world_y - span_y * 0.5 +
+                     span_y * ((double)row + 0.5) / 4.0);
+            if (x < 0L) x = 0L;
+            if (y < 0L) y = 0L;
+            if (x >= (long)VOX_WORLD_WIDTH) x = VOX_WORLD_WIDTH - 1L;
+            if (y >= (long)VOX_WORLD_HEIGHT) y = VOX_WORLD_HEIGHT - 1L;
+            for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+                const vox_cell *cell = vox_world_cell(&demo_match.world,
+                    (vox_u32)x, (vox_u32)y, depth);
+                if (cell != 0 && cell->material == VOX_MAT_WATER) {
+                    ++water;
+                    water_x += x;
+                } else if (cell != 0 && cell->material == VOX_MAT_LAVA) {
+                    ++lava;
+                    lava_x += x;
+                }
+            }
+        }
+    }
+    (void)vox_audio_set_ambience(&app->audio, VOX_AUDIO_AMBIENCE_WIND,
+                                  1800U, VOX_AUDIO_PAN_CENTER);
+    (void)vox_audio_set_ambience(&app->audio, VOX_AUDIO_AMBIENCE_WATER,
+        (vox_u16)(water > 20U ? 6000U : water * 300U),
+        water == 0U ? VOX_AUDIO_PAN_CENTER :
+        (vox_i16)((water_x / (long)water) * 65534L /
+                  (long)(VOX_WORLD_WIDTH - 1U) - 32767L));
+    (void)vox_audio_set_ambience(&app->audio, VOX_AUDIO_AMBIENCE_LAVA,
+        (vox_u16)(lava > 20U ? 8000U : lava * 400U),
+        lava == 0U ? VOX_AUDIO_PAN_CENTER :
+        (vox_i16)((lava_x / (long)lava) * 65534L /
+                  (long)(VOX_WORLD_WIDTH - 1U) - 32767L));
 }
 
 static void demo_tick_presentation(demo_app *app)
@@ -2993,7 +4151,34 @@ static void demo_tick_presentation(demo_app *app)
         if (app->bot_health_ttl[slot] > 0U) {
             --app->bot_health_ttl[slot];
         }
+        if (app->miner_hit_ttl[slot] > 0U) {
+            --app->miner_hit_ttl[slot];
+        }
+        if (app->bubbles[slot].ttl > 0U) {
+            --app->bubbles[slot].ttl;
+        }
     }
+    for (slot = 0; slot < (int)DEMO_LOCAL_MAX; ++slot) {
+        if (app->hit_markers[slot].ttl > 0U) {
+            --app->hit_markers[slot].ttl;
+        }
+        if (app->crosshair_pulse_ttl[slot] > 0U) {
+            --app->crosshair_pulse_ttl[slot];
+        }
+        if (app->multikill_count[slot] > 0U &&
+            demo_match.tick - app->last_kill_tick[slot] >
+            DEMO_MULTIKILL_WINDOW) {
+            app->multikill_count[slot] = 0U;
+        }
+    }
+    for (slot = 0; slot < DEMO_KILLFEED_MAX; ++slot) {
+        if (app->killfeed[slot].ttl > 0U) --app->killfeed[slot].ttl;
+    }
+    for (slot = 0; slot < 3; ++slot) {
+        if (app->banners[slot].ttl > 0U) --app->banners[slot].ttl;
+    }
+    if (app->death_camera_hold > 0U) --app->death_camera_hold;
+    demo_update_ambience(app);
 }
 
 static void demo_tick(demo_app *app)
@@ -3117,6 +4302,10 @@ static void demo_fire_at_mouse(demo_app *app)
 {
     vox_u32 world_x;
     vox_u32 world_y;
+    if (!demo_match.alive[0]) {
+        (void)vox_digs_request_respawn(&demo_match, 0U);
+        return;
+    }
     demo_mouse_world(app, &world_x, &world_y);
     if (world_x >= VOX_WORLD_WIDTH) {
         world_x = VOX_WORLD_WIDTH - 1U;
@@ -3175,10 +4364,10 @@ static void demo_handle_setup_key(demo_app *app, SDL_Keycode key)
         app->screen = DEMO_TITLE;
         app->selection = 0;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 8) % 9;
+        app->selection = (app->selection + 9) % 10;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 9;
+        app->selection = (app->selection + 1) % 10;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (direction != 0) {
         demo_audio_play(app, DEMO_SOUND_MOVE);
@@ -3188,8 +4377,10 @@ static void demo_handle_setup_key(demo_app *app, SDL_Keycode key)
                 app->bots = 4 - app->local_players;
             }
             demo_refresh_controller_claims(app);
+            demo_refresh_roster(app);
         } else if (app->selection == 1) {
             app->bots = (app->bots + direction + 3) % 3;
+            demo_refresh_roster(app);
         } else if (app->selection == 2) {
             app->game_mode = 1 - app->game_mode;
         } else if (app->selection == 3) {
@@ -3208,11 +4399,169 @@ static void demo_handle_setup_key(demo_app *app, SDL_Keycode key)
     } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
         demo_audio_play(app, DEMO_SOUND_SELECT);
         if (app->selection == 7) {
-            (void)demo_start_match(app, 0);
+            app->screen = DEMO_CUSTOMIZE;
+            app->selection = 0;
         } else if (app->selection == 8) {
+            (void)demo_start_match(app, 0);
+        } else if (app->selection == 9) {
             app->screen = DEMO_TITLE;
             app->selection = 0;
         }
+    }
+}
+
+static void demo_name_append(demo_app *app, char character)
+{
+    char *name;
+    size_t length;
+    if (app->edit_name_slot < 0 ||
+        app->edit_name_slot >= (int)VOX_DIGS_MAX_SLOTS) return;
+    if (character >= 'a' && character <= 'z') {
+        character = (char)(character - 'a' + 'A');
+    }
+    if (!demo_name_character_allowed(character)) return;
+    name = app->player_names[app->edit_name_slot];
+    length = strlen(name);
+    if (length >= DEMO_NAME_CHARACTERS) return;
+    name[length] = character;
+    name[length + 1U] = '\0';
+}
+
+static void demo_name_delete(demo_app *app)
+{
+    char *name;
+    size_t length;
+    if (app->edit_name_slot < 0 ||
+        app->edit_name_slot >= (int)VOX_DIGS_MAX_SLOTS) return;
+    name = app->player_names[app->edit_name_slot];
+    length = strlen(name);
+    if (length > 0U) name[length - 1U] = '\0';
+}
+
+static void demo_finish_name_editor(demo_app *app, int accept)
+{
+    int slot = app->edit_name_slot;
+    if (slot < 0 || slot >= (int)VOX_DIGS_MAX_SLOTS) return;
+    if (accept) {
+        static const char *human_fallbacks[DEMO_LOCAL_MAX] = {
+            "MINER 1", "MINER 2"
+        };
+        static const char *bot_fallbacks[VOX_DIGS_MAX_BOTS] = {
+            "RIVET", "CINDER"
+        };
+        const char *fallback = "MINER";
+        if (slot < app->local_players && slot < (int)DEMO_LOCAL_MAX) {
+            fallback = human_fallbacks[slot];
+        } else if (slot >= app->local_players &&
+                   slot - app->local_players <
+                   (int)VOX_DIGS_MAX_BOTS) {
+            fallback = bot_fallbacks[slot - app->local_players];
+        }
+        demo_sanitize_name(app->player_names[slot], fallback);
+        if (slot < app->local_players && slot < (int)DEMO_LOCAL_MAX) {
+            strcpy(app->human_names[slot], app->player_names[slot]);
+        } else if (slot >= app->local_players &&
+                   slot - app->local_players < (int)VOX_DIGS_MAX_BOTS) {
+            strcpy(app->bot_names[slot - app->local_players],
+                   app->player_names[slot]);
+        }
+        (void)demo_save_input_settings(app);
+    } else {
+        strcpy(app->player_names[slot], app->edit_name_backup);
+    }
+    SDL_StopTextInput();
+    app->edit_name_slot = -1;
+    app->screen = DEMO_CUSTOMIZE;
+    app->selection = slot;
+}
+
+static void demo_open_name_editor(demo_app *app, int slot)
+{
+    if (slot < 0 || slot >= (int)VOX_DIGS_MAX_SLOTS) return;
+    app->edit_name_slot = slot;
+    strcpy(app->edit_name_backup, app->player_names[slot]);
+    app->name_grid_selection = 0;
+    app->screen = DEMO_NAME_EDITOR;
+    SDL_StartTextInput();
+}
+
+static void demo_handle_customize_key(demo_app *app, SDL_Keycode key)
+{
+    int direction = key == SDLK_LEFT ? -1 : (key == SDLK_RIGHT ? 1 : 0);
+    if (key == SDLK_ESCAPE) {
+        app->screen = DEMO_SETUP;
+        app->selection = 7;
+    } else if (key == SDLK_UP) {
+        app->selection = (app->selection + 9) % 10;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_DOWN) {
+        app->selection = (app->selection + 1) % 10;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (direction != 0) {
+        if (app->selection == 4) {
+            app->match_minutes = app->match_minutes == 2 ? 3 : 2;
+        } else if (app->selection == 5) {
+            app->score_limit_index =
+                (app->score_limit_index + direction + 4) % 4;
+        } else if (app->selection == 6) {
+            app->respawn_mode = 1 - app->respawn_mode;
+        } else if (app->selection == 7) {
+            app->respawn_delay_index =
+                (app->respawn_delay_index + direction + 5) % 5;
+        }
+        (void)demo_save_input_settings(app);
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+        demo_audio_play(app, DEMO_SOUND_SELECT);
+        if (app->selection >= 0 &&
+            app->selection < app->local_players + app->bots) {
+            demo_open_name_editor(app, app->selection);
+        } else if (app->selection == 8) {
+            demo_match_settings_defaults(app);
+            (void)demo_save_input_settings(app);
+        } else if (app->selection == 9) {
+            app->screen = DEMO_SETUP;
+            app->selection = 7;
+        }
+    }
+}
+
+static void demo_handle_name_editor_key(demo_app *app, SDL_Keycode key)
+{
+    if (key == SDLK_ESCAPE) {
+        demo_finish_name_editor(app, 0);
+    } else if (key == SDLK_BACKSPACE) {
+        demo_name_delete(app);
+    } else if (key == SDLK_LEFT) {
+        app->name_grid_selection =
+            (app->name_grid_selection + DEMO_NAME_GRID_ITEMS - 1) %
+            DEMO_NAME_GRID_ITEMS;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_RIGHT) {
+        app->name_grid_selection =
+            (app->name_grid_selection + 1) % DEMO_NAME_GRID_ITEMS;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_UP) {
+        app->name_grid_selection =
+            (app->name_grid_selection + DEMO_NAME_GRID_ITEMS -
+             DEMO_NAME_GRID_COLUMNS) % DEMO_NAME_GRID_ITEMS;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_DOWN) {
+        app->name_grid_selection =
+            (app->name_grid_selection + DEMO_NAME_GRID_COLUMNS) %
+            DEMO_NAME_GRID_ITEMS;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+        int item = app->name_grid_selection;
+        if (item < 38) demo_name_append(app, demo_name_grid[item]);
+        else if (item == 38) demo_name_append(app, ' ');
+        else if (item == 39) demo_name_delete(app);
+        else if (item == 40) {
+            app->player_names[app->edit_name_slot][0] = '\0';
+        } else demo_finish_name_editor(app, 1);
+        demo_audio_play(app, DEMO_SOUND_SELECT);
+    } else if (key == SDLK_SPACE) {
+        demo_name_append(app, ' ');
     }
 }
 
@@ -3224,10 +4573,10 @@ static void demo_handle_options_key(demo_app *app, SDL_Keycode key)
         app->screen = DEMO_TITLE;
         app->selection = 0;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 11) % 12;
+        app->selection = (app->selection + 12) % 13;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 12;
+        app->selection = (app->selection + 1) % 13;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (direction != 0 || key == SDLK_RETURN || key == SDLK_KP_ENTER) {
         demo_audio_play(app, direction == 0 ? DEMO_SOUND_SELECT :
@@ -3239,31 +4588,40 @@ static void demo_handle_options_key(demo_app *app, SDL_Keycode key)
             app->options.gi_quality =
                 (app->options.gi_quality + change + 3) % 3;
         } else if (app->selection == 2) {
+            app->options.master_volume =
+                (app->options.master_volume + change + 11) % 11;
+            if (app->audio_device != 0U) {
+                (void)vox_audio_set_master_gain(&app->audio,
+                    (vox_u16)((vox_u32)app->options.master_volume *
+                              VOX_AUDIO_GAIN_MAX / 10U));
+            }
+            (void)demo_save_input_settings(app);
+        } else if (app->selection == 3) {
             app->options.fx_profile =
                 (app->options.fx_profile + change + 3) % 3;
-        } else if (app->selection == 3) {
+        } else if (app->selection == 4) {
             app->options.flash_mode =
                 (app->options.flash_mode + change + 3) % 3;
-        } else if (app->selection == 4) {
+        } else if (app->selection == 5) {
             app->options.gore_level =
                 (app->options.gore_level + change + 3) % 3;
-        } else if (app->selection == 5) {
-            app->options.camera_shake = !app->options.camera_shake;
         } else if (app->selection == 6) {
-            app->options.damage_numbers = !app->options.damage_numbers;
+            app->options.camera_shake = !app->options.camera_shake;
         } else if (app->selection == 7) {
+            app->options.damage_numbers = !app->options.damage_numbers;
+        } else if (app->selection == 8) {
             app->options.damage_number_size =
                 !app->options.damage_number_size;
-        } else if (app->selection == 8) {
+        } else if (app->selection == 9) {
             app->options.damage_number_color =
                 !app->options.damage_number_color;
-        } else if (app->selection == 9) {
+        } else if (app->selection == 10) {
             app->options.fullscreen = !app->options.fullscreen;
             demo_apply_fullscreen(app);
-        } else if (app->selection == 10 && direction == 0) {
+        } else if (app->selection == 11 && direction == 0) {
             app->screen = DEMO_INPUT_OPTIONS;
             app->selection = 0;
-        } else if (app->selection == 11 && direction == 0) {
+        } else if (app->selection == 12 && direction == 0) {
             app->screen = DEMO_TITLE;
             app->selection = 0;
         }
@@ -3278,7 +4636,7 @@ static void demo_handle_input_options_key(demo_app *app, SDL_Keycode key)
     int field = app->selection - player * 4;
     if (key == SDLK_ESCAPE) {
         app->screen = DEMO_OPTIONS;
-        app->selection = 10;
+        app->selection = 11;
     } else if (key == SDLK_UP) {
         app->selection = (app->selection + 10) % 11;
         demo_audio_play(app, DEMO_SOUND_MOVE);
@@ -3316,7 +4674,7 @@ static void demo_handle_input_options_key(demo_app *app, SDL_Keycode key)
             (void)demo_save_input_settings(app);
         } else if (app->selection == 10 && direction == 0) {
             app->screen = DEMO_OPTIONS;
-            app->selection = 10;
+            app->selection = 11;
         }
     }
 }
@@ -3358,6 +4716,7 @@ static void demo_handle_controls_key(demo_app *app, SDL_Keycode key,
                                          app->binding_capture - 1,
                                          scancode);
             app->binding_capture = 0;
+            (void)demo_save_input_settings(app);
             demo_audio_play(app, DEMO_SOUND_SELECT);
         }
         return;
@@ -3366,10 +4725,10 @@ static void demo_handle_controls_key(demo_app *app, SDL_Keycode key,
         app->screen = DEMO_TITLE;
         app->selection = 0;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 10) % 11;
+        app->selection = (app->selection + 11) % 12;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 11;
+        app->selection = (app->selection + 1) % 12;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (app->selection == 0 &&
                (key == SDLK_LEFT || key == SDLK_RIGHT)) {
@@ -3377,16 +4736,17 @@ static void demo_handle_controls_key(demo_app *app, SDL_Keycode key,
         app->binding_player = (app->binding_player + direction + 3) % 3;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
-        if (app->selection >= 1 && app->selection <= 8) {
+        if (app->selection >= 1 && app->selection <= 9) {
             int action = app->selection - 1;
             if (app->binding_player < 2 || action >= 2) {
                 app->binding_capture = action + 1;
                 demo_audio_play(app, DEMO_SOUND_SELECT);
             }
-        } else if (app->selection == 9) {
-            demo_bindings_default(app);
-            demo_audio_play(app, DEMO_SOUND_SELECT);
         } else if (app->selection == 10) {
+            demo_bindings_default(app);
+            (void)demo_save_input_settings(app);
+            demo_audio_play(app, DEMO_SOUND_SELECT);
+        } else if (app->selection == 11) {
             app->screen = DEMO_TITLE;
             app->selection = 0;
         }
@@ -3417,6 +4777,10 @@ static void demo_handle_key(demo_app *app, SDL_Keycode key,
         demo_handle_title_key(app, key);
     } else if (app->screen == DEMO_SETUP) {
         demo_handle_setup_key(app, key);
+    } else if (app->screen == DEMO_CUSTOMIZE) {
+        demo_handle_customize_key(app, key);
+    } else if (app->screen == DEMO_NAME_EDITOR) {
+        demo_handle_name_editor_key(app, key);
     } else if (app->screen == DEMO_OPTIONS) {
         demo_handle_options_key(app, key);
     } else if (app->screen == DEMO_INPUT_OPTIONS) {
@@ -3455,6 +4819,9 @@ static void demo_handle_key(demo_app *app, SDL_Keycode key,
     } else if (app->screen == DEMO_RESULTS &&
                (key == SDLK_RETURN || key == SDLK_KP_ENTER ||
                 key == SDLK_ESCAPE)) {
+        strcpy(app->bot_names[0], "RIVET");
+        strcpy(app->bot_names[1], "CINDER");
+        demo_refresh_roster(app);
         app->screen = DEMO_TITLE;
         app->selection = 0;
         demo_audio_play(app, DEMO_SOUND_SELECT);
@@ -3476,7 +4843,7 @@ static int demo_keyboard_player_for_scancode(demo_app *app,
     int action;
     for (player = 0; player < app->local_players &&
          player < (int)DEMO_LOCAL_MAX; ++player) {
-        for (action = 0; action < 8; ++action) {
+        for (action = 0; action < 9; ++action) {
             SDL_Scancode *binding = demo_keyboard_binding(app, player,
                                                           action);
             if (binding != 0 && *binding == scancode) return player;
@@ -3520,6 +4887,7 @@ static void demo_handle_controller_button(demo_app *app,
         app->binding_player == 2) {
         demo_assign_pad_binding(app, app->binding_capture - 1, button);
         app->binding_capture = 0;
+        (void)demo_save_input_settings(app);
         demo_audio_play(app, DEMO_SOUND_SELECT);
         return;
     }
@@ -3581,6 +4949,12 @@ static void demo_handle_event(demo_app *app, const SDL_Event *event)
 {
     if (event->type == SDL_QUIT) {
         app->running = 0;
+    } else if (event->type == SDL_TEXTINPUT &&
+               app->screen == DEMO_NAME_EDITOR) {
+        int index;
+        for (index = 0; event->text.text[index] != '\0'; ++index) {
+            demo_name_append(app, event->text.text[index]);
+        }
     } else if (event->type == SDL_MOUSEMOTION) {
         int old_x = app->mouse_activity_x;
         int old_y = app->mouse_activity_y;
@@ -3622,15 +4996,20 @@ static void demo_handle_event(demo_app *app, const SDL_Event *event)
                 return;
             } else if ((SDL_GetModState() & KMOD_SHIFT) != 0) {
                 demo_cycle_weapon(app, 0, direction);
+                demo_audio_play(app, DEMO_SOUND_MOVE);
             } else {
+                int previous_zoom = app->camera_zoom;
                 app->camera_zoom += direction;
                 if (app->camera_zoom < DEMO_CAMERA_ZOOM_MIN) {
                     app->camera_zoom = DEMO_CAMERA_ZOOM_MIN;
                 } else if (app->camera_zoom > DEMO_CAMERA_ZOOM_MAX) {
                     app->camera_zoom = DEMO_CAMERA_ZOOM_MAX;
                 }
+                if (app->camera_zoom != previous_zoom) {
+                    demo_audio_emit(app, VOX_AUDIO_PRESET_ZOOM_CLICK,
+                                    0U, VOX_AUDIO_PAN_CENTER);
+                }
             }
-            demo_audio_play(app, DEMO_SOUND_MOVE);
         }
     } else if (event->type == SDL_CONTROLLERDEVICEADDED ||
                event->type == SDL_JOYDEVICEADDED) {
@@ -3989,6 +5368,116 @@ static int demo_input_self_test(void)
     return 0;
 }
 
+static int demo_write_settings_fixture(const char *path, const char *text)
+{
+    FILE *file = fopen(path, "w");
+    int written;
+    if (file == 0) return 0;
+    written = fputs(text, file) != EOF;
+    if (fclose(file) != 0) written = 0;
+    return written;
+}
+
+static int demo_settings_first_line_equals(const char *path,
+                                           const char *expected)
+{
+    FILE *file = fopen(path, "r");
+    char line[64];
+    int matched;
+    if (file == 0) return 0;
+    matched = fgets(line, (int)sizeof(line), file) != 0 &&
+              strcmp(line, expected) == 0;
+    if (fclose(file) != 0) return 0;
+    return matched;
+}
+
+static void demo_settings_test_defaults(demo_app *app)
+{
+    memset(app, 0, sizeof(*app));
+    app->settings_writable = 1;
+    app->local_players = 1;
+    app->bots = 1;
+    app->options.master_volume = 8;
+    demo_match_settings_defaults(app);
+    demo_input_defaults(app);
+    demo_bindings_default(app);
+}
+
+static int demo_settings_self_test(const char *path)
+{
+    demo_app app;
+    char temporary[1032];
+    char backup[1032];
+    int status = 0;
+
+    if (path == 0 || path[0] == '\0' || strlen(path) + 5U >= 1024U) {
+        fprintf(stderr, "settings self-test requires a short path\n");
+        return 1;
+    }
+    sprintf(temporary, "%s.tmp", path);
+    sprintf(backup, "%s.bak", path);
+    (void)remove(path);
+    (void)remove(temporary);
+    (void)remove(backup);
+    demo_settings_override = path;
+
+    demo_settings_test_defaults(&app);
+    if (!demo_write_settings_fixture(path,
+            "DIGS_SETTINGS=99\nP1_KEY_LEFT=99999\nMASTER_VOLUME=0\n") ||
+        demo_load_input_settings(&app) != 0 ||
+        app.settings_writable != 0 ||
+        app.bindings.keyboard_left[0] != SDL_SCANCODE_A ||
+        app.options.master_volume != 8 ||
+        demo_save_input_settings(&app) != 0) {
+        fprintf(stderr, "settings self-test future-schema guard failed\n");
+        status = 2;
+        goto done;
+    }
+    if (!demo_settings_first_line_equals(path, "DIGS_SETTINGS=99\n")) {
+        fprintf(stderr, "settings self-test overwrote a future schema\n");
+        status = 3;
+        goto done;
+    }
+
+    demo_settings_test_defaults(&app);
+    if (!demo_write_settings_fixture(path,
+            "DIGS_SETTINGS=2\nP1_KEY_LEFT=99999\nMASTER_VOLUME=12\n") ||
+        demo_load_input_settings(&app) != 1 ||
+        app.bindings.keyboard_left[0] != SDL_SCANCODE_A ||
+        app.options.master_volume != 8) {
+        fprintf(stderr, "settings self-test invalid-value fallback failed\n");
+        status = 4;
+        goto done;
+    }
+
+    demo_settings_test_defaults(&app);
+    if (!demo_write_settings_fixture(path,
+            "DIGS_INPUT_SETTINGS=1\nP1_MODE=1\nP1_SENSITIVITY=2\n") ||
+        demo_load_input_settings(&app) != 1 ||
+        app.player_input[0].preference != DEMO_INPUT_KEYBOARD ||
+        app.player_input[0].sensitivity != 2 ||
+        demo_save_input_settings(&app) != 1) {
+        fprintf(stderr, "settings self-test schema-one migration failed\n");
+        status = 5;
+        goto done;
+    }
+    if (!demo_settings_first_line_equals(path, "DIGS_SETTINGS=2\n")) {
+        fprintf(stderr, "settings self-test did not persist schema two\n");
+        status = 6;
+        goto done;
+    }
+
+done:
+    demo_settings_override = 0;
+    (void)remove(path);
+    (void)remove(temporary);
+    (void)remove(backup);
+    if (status == 0) {
+        printf("DIGS settings migration self-test passed\n");
+    }
+    return status;
+}
+
 static int demo_camera_self_test(void)
 {
     demo_app app;
@@ -3997,7 +5486,7 @@ static int demo_camera_self_test(void)
     vox_u32 mouse_world_y;
     vox_u32 pixel;
     vox_u32 lava_y;
-    vox_u32 lava_pixels;
+    vox_u32 false_lava_pixels;
     int player_screen_x;
     int player_screen_y;
     int lava_screen_x;
@@ -4113,18 +5602,18 @@ static int demo_camera_self_test(void)
                 lava_screen_x, lava_screen_y, app.camera_scale);
         return 5;
     }
-    lava_pixels = 0U;
+    false_lava_pixels = 0U;
     for (pixel = 0U; pixel < DEMO_WIDTH * DEMO_HEIGHT; ++pixel) {
         const vox_u8 *sample = &demo_pixels[
             pixel * VOX_SOFTWARE_RGB_BYTES];
         if (sample[0] == 255U && sample[1] == 98U && sample[2] == 8U) {
-            ++lava_pixels;
+            ++false_lava_pixels;
         }
     }
-    if (lava_pixels < DEMO_WIDTH * 2U) {
+    if (false_lava_pixels != 0U) {
         fprintf(stderr,
-                "camera self-test: visible lava footer too small (%lu)\n",
-                (unsigned long)lava_pixels);
+                "camera self-test: false lava outside world view (%lu)\n",
+                (unsigned long)false_lava_pixels);
         return 6;
     }
     app.camera_zoom = DEMO_CAMERA_ZOOM_MIN;
@@ -4160,9 +5649,10 @@ static int demo_camera_self_test(void)
         }
     }
     printf("DIGS camera self-test passed zoom=%d overview-player=%d,%d "
-           "overview-lava=%d,%d footer=%lu\n",
+           "overview-lava=%d,%d false-lava=%lu\n",
            DEMO_CAMERA_ZOOM_MAX, player_screen_x, player_screen_y,
-           lava_screen_x, lava_screen_y, (unsigned long)lava_pixels);
+           lava_screen_x, lava_screen_y,
+           (unsigned long)false_lava_pixels);
     return 0;
 }
 
@@ -4228,6 +5718,11 @@ int main(int argc, char **argv)
     if (argc >= 2 && strcmp(argv[1], "--input-self-test") == 0) {
         return demo_input_self_test();
     }
+    if (argc >= 2 && strcmp(argv[1], "--settings-self-test") == 0) {
+        const char *path = argc >= 3 ? argv[2] :
+                           "/tmp/digs-settings-self-test.cfg";
+        return demo_settings_self_test(path);
+    }
     if (argc >= 2 && strcmp(argv[1], "--camera-self-test") == 0) {
         return demo_camera_self_test();
     }
@@ -4252,6 +5747,7 @@ int main(int argc, char **argv)
     }
     memset(&app, 0, sizeof(app));
     app.running = 1;
+    app.settings_writable = 1;
     app.screen = DEMO_TITLE;
     app.bots = 1;
     app.local_players = 1;
@@ -4276,6 +5772,8 @@ int main(int argc, char **argv)
     app.options.damage_numbers = 1;
     app.options.damage_number_size = 0;
     app.options.fx_profile = 1;
+    app.options.master_volume = 8;
+    demo_match_settings_defaults(&app);
     demo_input_defaults(&app);
     demo_bindings_default(&app);
     for (controller_index = 0;
@@ -4338,6 +5836,9 @@ int main(int argc, char **argv)
         return 6;
     }
     demo_audio_open(&app);
+    demo_audio_speak_text(&app, "DIGS!", VOX_AUDIO_SPEECH_DEEP,
+                          VOX_AUDIO_PRIORITY_ANNOUNCER,
+                          VOX_AUDIO_PAN_CENTER);
     demo_prepare_targets();
     demo_build_title_world();
     if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) != 0U) {

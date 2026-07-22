@@ -78,7 +78,7 @@ vox.define("system", "system.simulation", {
     summary = "A dense deterministic mini-voxel field drives terrain, debris, fluids, gases, heat, blood, and light.",
     detail = "The world advances at sixty fixed ticks independent of presentation rate. Dirty chunk metadata limits work to awake regions while all occupied cells remain individually addressable. Structural failure wakes unsupported material so tunnels cave in instead of preserving perfect blast circles. Identical seed, inputs, rules, and script hashes produce the same state hash.",
     tags = "voxels,determinism,collapse,materials",
-    values = { depth = 10, height = 160, ticks_per_second = 60, width = 256 }
+    values = { cells = 1638400, depth = 10, height = 320, ticks_per_second = 60, width = 512 }
 })
 
 vox.define("system", "system.input", {
@@ -99,4 +99,34 @@ vox.define("system", "system.index", {
     detail = "The left rail shows exactly six rows with arrows indicating entries above and below. Up and Down move one item with a short stepped transition; the right pane updates automatically as selection changes. Back returns to the previous menu. The v0.0.2 catalog is fully unlocked so testing never depends on progression state.",
     tags = "menu,catalog,qa,accessibility",
     values = { transition_ticks = 5, unlocked = 1, visible_rows = 6 }
+})
+
+vox.define("system", "system.match_clock", {
+    order = 18,
+    title = "QUICK MATCH CLOCK",
+    category = "SYSTEMS",
+    summary = "Two- or three-minute regulation matches end with an individual or team winner and permit exact draws.",
+    detail = "Normal matches default to two minutes with an optional five, ten, or twenty-point cap. The engine resolves the complete final simulation tick before declaring the highest FFA score or Miners-versus-Machines team total. The lava endgame begins during the final thirty seconds.",
+    tags = "timer,score,results,lava",
+    values = { default_seconds = 120, lava_final_seconds = 30, maximum_seconds = 180 }
+})
+
+vox.define("system", "system.respawn", {
+    order = 19,
+    title = "RESPAWN MODES",
+    category = "SYSTEMS",
+    summary = "AUTO and ON FIRE modes add a configurable pause before a defeated miner returns.",
+    detail = "The delay may be zero, one, two, three, or five seconds and defaults to three. AUTO returns when ready. ON FIRE waits for a fresh Fire press after the countdown; holding Fire through death cannot skip the gate. Machines request their spawn automatically.",
+    tags = "death,respawn,controls,match-rules",
+    values = { default_ticks = 180, modes = 2, spawn_shield_ticks = 300 }
+})
+
+vox.define("system", "system.combat_feedback", {
+    order = 20,
+    title = "COMBAT FEEDBACK",
+    category = "SYSTEMS",
+    summary = "Names, hit confirms, death notices, multikills, and sprees translate simulation events without altering them.",
+    detail = "A three-second chain produces Double, Triple, and Multi Kill awards while five uninterrupted kills produce Killing Spree. Local hits tint the target, mark the impact, pulse the crosshair, and play a centered confirmation. Bot-only combat stays in the compact feed instead of triggering large local banners.",
+    tags = "hit-marker,killfeed,combo,names",
+    values = { chain_ticks = 180, feed_rows = 6, spree_kills = 5 }
 })

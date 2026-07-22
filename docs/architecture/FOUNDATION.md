@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# v0.0.1 foundation
+# v0.0.2 foundation
 
 The first demo proves a complete bounded path from input to authoritative
 materials and bodies to a lit graphical frame. It does not establish the final
@@ -22,7 +22,7 @@ C89 material world   C++98 fixed-point bodies
  C89 RGB Lightfield software renderer
                |
                v
- SDL2 texture / custom UI / procedural audio
+ SDL2 texture / custom UI / VOX Audio v2
 ```
 
 The active v0.0.2 profile is `512 x 320 x 10`, split into 640
@@ -51,14 +51,22 @@ material, and all work is bounded.
 DIGS builds Coal Ridge, Deepworks, and Furnace Yard from integer-only
 coordinate hashes and a visible seed. The match adds fixed-point players,
 health, damage, cooldowns, deterministic bots, fixed projectile/effect pools,
-scoring, respawn, and rising lava. The graphical host changes presentation
-options and submits input; it does not own a second set of game rules.
+scoring, configurable respawn, authoritative winner/draw results, and rising
+lava. The graphical host changes presentation options and submits input; it
+does not own a second set of game rules.
 
 The renderer consumes a snapshot. Transient miners, projectiles, and effects
 are voxelized into a render-only copy so they can receive the same RGB
 Lightfield as terrain without changing the canonical world or state hash. The
 UI remains a separate custom RGB drawing layer, as documented by the original
 scope.
+
+Names, killfeed entries, hit markers, multikill/spree tracking, speech bubbles,
+and audio scheduling live in bounded caller-owned presentation state. The host
+drains existing simulation events into that state after each completed tick;
+it does not inject feedback-only events into the ring read by AI. These values
+remain outside canonical hashes while producing the same result from the same
+ordered event stream.
 
 ## Determinism rule
 
