@@ -84,18 +84,27 @@ static vox_u16 vox_scan_column(const vox_world *world, vox_u32 x, vox_u32 y,
     return surface_material;
 }
 
-static vox_light_rgb *vox_build_lightfield(const vox_world *world,
-                                            vox_u16 gi_quality)
+static vox_u32 vox_gi_pass_count(vox_u16 gi_quality)
+{
+    return gi_quality == VOX_GI_COMPATIBILITY ? 1U :
+           (gi_quality == VOX_GI_BALANCED ? 3U : 5U);
+}
+
+static vox_light_rgb *vox_build_lightfield_region(const vox_world *world,
+                                                   vox_u16 gi_quality,
+                                                   vox_u32 minimum_x,
+                                                   vox_u32 minimum_y,
+                                                   vox_u32 maximum_x,
+                                                   vox_u32 maximum_y)
 {
     vox_light_rgb *source = vox_light_a;
     vox_light_rgb *destination = vox_light_b;
-    vox_u32 passes = gi_quality == VOX_GI_COMPATIBILITY ? 1U :
-                     (gi_quality == VOX_GI_BALANCED ? 3U : 5U);
+    vox_u32 passes = vox_gi_pass_count(gi_quality);
     vox_u32 x;
     vox_u32 y;
     vox_u32 pass;
-    for (y = 0U; y < VOX_WORLD_HEIGHT; ++y) {
-        for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+    for (y = minimum_y; y < maximum_y; ++y) {
+        for (x = minimum_x; x < maximum_x; ++x) {
             vox_u32 index = y * VOX_WORLD_WIDTH + x;
             vox_light_rgb emission;
             vox_u16 surface_material = vox_scan_column(world, x, y,
@@ -119,13 +128,13 @@ static vox_light_rgb *vox_build_lightfield(const vox_world *world,
         }
     }
     for (pass = 0U; pass < passes; ++pass) {
-        for (y = 0U; y < VOX_WORLD_HEIGHT; ++y) {
-            for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+        for (y = minimum_y; y < maximum_y; ++y) {
+            for (x = minimum_x; x < maximum_x; ++x) {
                 vox_u32 index = y * VOX_WORLD_WIDTH + x;
                 vox_u16 attenuation = vox_light_solid[index] == 0U ?
                                       13U : 24U;
                 vox_light_rgb value = source[index];
-                if (x > 0U) {
+                if (x > minimum_x) {
                     value.red = vox_light_max(value.red,
                         vox_light_decay(source[index - 1U].red, attenuation));
                     value.green = vox_light_max(value.green,
@@ -133,7 +142,7 @@ static vox_light_rgb *vox_build_lightfield(const vox_world *world,
                     value.blue = vox_light_max(value.blue,
                         vox_light_decay(source[index - 1U].blue, attenuation));
                 }
-                if (x + 1U < VOX_WORLD_WIDTH) {
+                if (x + 1U < maximum_x) {
                     value.red = vox_light_max(value.red,
                         vox_light_decay(source[index + 1U].red, attenuation));
                     value.green = vox_light_max(value.green,
@@ -141,7 +150,7 @@ static vox_light_rgb *vox_build_lightfield(const vox_world *world,
                     value.blue = vox_light_max(value.blue,
                         vox_light_decay(source[index + 1U].blue, attenuation));
                 }
-                if (y > 0U) {
+                if (y > minimum_y) {
                     value.red = vox_light_max(value.red,
                         vox_light_decay(source[index - VOX_WORLD_WIDTH].red,
                                         attenuation));
@@ -152,7 +161,7 @@ static vox_light_rgb *vox_build_lightfield(const vox_world *world,
                         vox_light_decay(source[index - VOX_WORLD_WIDTH].blue,
                                         attenuation));
                 }
-                if (y + 1U < VOX_WORLD_HEIGHT) {
+                if (y + 1U < maximum_y) {
                     value.red = vox_light_max(value.red,
                         vox_light_decay(source[index + VOX_WORLD_WIDTH].red,
                                         attenuation));
@@ -186,32 +195,134 @@ void vox_software_config_default(vox_software_config *config)
     config->reserved = 0U;
 }
 
-vox_result vox_software_render_ex(const vox_world *world,
-                                  vox_software_target *target,
-                                  const vox_software_config *config)
+void vox_software_view_full(vox_software_view *view)
+{
+    if (view == 0) {
+        return;
+    }
+    view->abi_version = VOX_ABI_VERSION;
+    view->struct_size = (vox_u32)sizeof(*view);
+    view->origin_x_q16 = 0L;
+    view->origin_y_q16 = 0L;
+    view->width_q16 = (vox_i32)(VOX_WORLD_WIDTH << 16);
+    view->height_q16 = (vox_i32)(VOX_WORLD_HEIGHT << 16);
+}
+
+static int vox_software_arguments_valid(const vox_world *world,
+                                        const vox_software_target *target,
+                                        const vox_software_config *config)
+{
+    return world != 0 && target != 0 && config != 0 &&
+           target->pixels != 0 &&
+           target->abi_version == VOX_ABI_VERSION &&
+           target->struct_size >= (vox_u32)sizeof(*target) &&
+           config->abi_version == VOX_ABI_VERSION &&
+           config->struct_size >= (vox_u32)sizeof(*config) &&
+           config->gi_quality <= VOX_GI_SHOWCASE &&
+           config->reserved == 0U && target->width != 0U &&
+           target->height != 0U && target->width <= (vox_u32)INT_MAX &&
+           target->height <= (vox_u32)INT_MAX &&
+           target->width <= 4294967295UL / VOX_SOFTWARE_RGB_BYTES &&
+           target->stride >= target->width * VOX_SOFTWARE_RGB_BYTES;
+}
+
+static int vox_software_view_valid(const vox_software_view *view)
+{
+    vox_i32 world_width_q16 = (vox_i32)(VOX_WORLD_WIDTH << 16);
+    vox_i32 world_height_q16 = (vox_i32)(VOX_WORLD_HEIGHT << 16);
+    if (view == 0 || view->abi_version != VOX_ABI_VERSION ||
+        view->struct_size < (vox_u32)sizeof(*view) ||
+        view->origin_x_q16 < 0L || view->origin_y_q16 < 0L ||
+        view->width_q16 <= 0L || view->height_q16 <= 0L ||
+        view->origin_x_q16 > world_width_q16 - view->width_q16 ||
+        view->origin_y_q16 > world_height_q16 - view->height_q16) {
+        return 0;
+    }
+    return 1;
+}
+
+static void vox_fixed_advance(vox_i32 *position_q16, vox_u32 *error,
+                              vox_i32 step_q16, vox_u32 remainder,
+                              vox_u32 denominator)
+{
+    *position_q16 += step_q16;
+    if (remainder != 0U && *error >= denominator - remainder) {
+        *error -= denominator - remainder;
+        ++*position_q16;
+    } else {
+        *error += remainder;
+    }
+}
+
+vox_result vox_software_render_view_ex(const vox_world *world,
+                                       vox_software_target *target,
+                                       const vox_software_config *config,
+                                       const vox_software_view *view)
 {
     vox_light_rgb *lightfield;
     vox_u32 pixel_y;
-    vox_u32 pixel_x;
-    if (world == 0 || target == 0 || config == 0 || target->pixels == 0 ||
-        target->abi_version != VOX_ABI_VERSION ||
-        target->struct_size < (vox_u32)sizeof(*target) ||
-        config->abi_version != VOX_ABI_VERSION ||
-        config->struct_size < (vox_u32)sizeof(*config) ||
-        config->gi_quality > VOX_GI_SHOWCASE || config->reserved != 0U ||
-        target->width == 0U || target->height == 0U ||
-        target->stride < target->width * VOX_SOFTWARE_RGB_BYTES) {
+    vox_i32 world_y_q16;
+    vox_i32 step_x_q16;
+    vox_i32 step_y_q16;
+    vox_u32 remainder_x;
+    vox_u32 remainder_y;
+    vox_u32 error_y = 0U;
+    vox_u32 view_minimum_x;
+    vox_u32 view_minimum_y;
+    vox_u32 view_maximum_x;
+    vox_u32 view_maximum_y;
+    vox_u32 light_minimum_x;
+    vox_u32 light_minimum_y;
+    vox_u32 light_maximum_x;
+    vox_u32 light_maximum_y;
+    vox_u32 margin;
+    if (!vox_software_arguments_valid(world, target, config) ||
+        !vox_software_view_valid(view)) {
         return VOX_ERR_INVALID;
     }
-    lightfield = vox_build_lightfield(world, config->gi_quality);
+    view_minimum_x = (vox_u32)view->origin_x_q16 >> 16;
+    view_minimum_y = (vox_u32)view->origin_y_q16 >> 16;
+    view_maximum_x = ((vox_u32)(view->origin_x_q16 + view->width_q16) +
+                      65535U) >> 16;
+    view_maximum_y = ((vox_u32)(view->origin_y_q16 + view->height_q16) +
+                      65535U) >> 16;
+    if (view_maximum_x > VOX_WORLD_WIDTH) view_maximum_x = VOX_WORLD_WIDTH;
+    if (view_maximum_y > VOX_WORLD_HEIGHT) view_maximum_y = VOX_WORLD_HEIGHT;
+    margin = vox_gi_pass_count(config->gi_quality);
+    light_minimum_x = view_minimum_x > margin ?
+                      view_minimum_x - margin : 0U;
+    light_minimum_y = view_minimum_y > margin ?
+                      view_minimum_y - margin : 0U;
+    light_maximum_x = view_maximum_x + margin;
+    light_maximum_y = view_maximum_y + margin;
+    if (light_maximum_x > VOX_WORLD_WIDTH) light_maximum_x = VOX_WORLD_WIDTH;
+    if (light_maximum_y > VOX_WORLD_HEIGHT) light_maximum_y = VOX_WORLD_HEIGHT;
+    lightfield = vox_build_lightfield_region(world, config->gi_quality,
+                                              light_minimum_x,
+                                              light_minimum_y,
+                                              light_maximum_x,
+                                              light_maximum_y);
+    step_x_q16 = view->width_q16 / (vox_i32)target->width;
+    step_y_q16 = view->height_q16 / (vox_i32)target->height;
+    remainder_x = (vox_u32)(view->width_q16 % (vox_i32)target->width);
+    remainder_y = (vox_u32)(view->height_q16 % (vox_i32)target->height);
+    world_y_q16 = view->origin_y_q16;
     for (pixel_y = 0U; pixel_y < target->height; ++pixel_y) {
-        vox_u32 world_y = pixel_y * VOX_WORLD_HEIGHT / target->height;
+        vox_u32 world_y = (vox_u32)world_y_q16 >> 16;
+        vox_i32 world_x_q16 = view->origin_x_q16;
+        vox_u32 error_x = 0U;
+        vox_u32 pixel_x;
+        if (world_y >= VOX_WORLD_HEIGHT) world_y = VOX_WORLD_HEIGHT - 1U;
         for (pixel_x = 0U; pixel_x < target->width; ++pixel_x) {
-            vox_u32 world_x = pixel_x * VOX_WORLD_WIDTH / target->width;
-            vox_u32 light_index = world_y * VOX_WORLD_WIDTH + world_x;
-            vox_u16 surface_material = vox_surface_material[light_index];
-            vox_u8 *destination_pixel = target->pixels +
-                pixel_y * target->stride + pixel_x * VOX_SOFTWARE_RGB_BYTES;
+            vox_u32 world_x = (vox_u32)world_x_q16 >> 16;
+            vox_u32 light_index;
+            vox_u16 surface_material;
+            vox_u8 *destination_pixel;
+            if (world_x >= VOX_WORLD_WIDTH) world_x = VOX_WORLD_WIDTH - 1U;
+            light_index = world_y * VOX_WORLD_WIDTH + world_x;
+            surface_material = vox_surface_material[light_index];
+            destination_pixel = target->pixels + pixel_y * target->stride +
+                pixel_x * VOX_SOFTWARE_RGB_BYTES;
             if (surface_material == VOX_MAT_AIR) {
                 destination_pixel[0] = (vox_u8)(16U + world_y * 18U /
                                                  VOX_WORLD_HEIGHT);
@@ -224,13 +335,27 @@ vox_result vox_software_render_ex(const vox_world *world,
                 destination_pixel[0] = vox_clamp_u8(
                     (vox_u32)base->red * lightfield[light_index].red / 128U);
                 destination_pixel[1] = vox_clamp_u8(
-                    (vox_u32)base->green * lightfield[light_index].green / 128U);
+                    (vox_u32)base->green * lightfield[light_index].green /
+                    128U);
                 destination_pixel[2] = vox_clamp_u8(
                     (vox_u32)base->blue * lightfield[light_index].blue / 128U);
             }
+            vox_fixed_advance(&world_x_q16, &error_x, step_x_q16,
+                              remainder_x, target->width);
         }
+        vox_fixed_advance(&world_y_q16, &error_y, step_y_q16,
+                          remainder_y, target->height);
     }
     return VOX_OK;
+}
+
+vox_result vox_software_render_ex(const vox_world *world,
+                                  vox_software_target *target,
+                                  const vox_software_config *config)
+{
+    vox_software_view view;
+    vox_software_view_full(&view);
+    return vox_software_render_view_ex(world, target, config, &view);
 }
 
 vox_result vox_software_render(const vox_world *world,

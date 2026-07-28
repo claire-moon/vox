@@ -30,7 +30,20 @@ static vox_i32 digs_miner_temperature(vox_u16 material)
     return 20L << 16;
 }
 
-static void digs_miner_set(vox_world *world, int x, int y, vox_u16 material)
+static void digs_miner_world_plot(void *context, int x, int y,
+                                  vox_u16 material)
+{
+    vox_world *world = (vox_world *)context;
+    if (world != 0 && x >= 0 && y >= 0 &&
+        x < (int)VOX_WORLD_WIDTH && y < (int)VOX_WORLD_HEIGHT) {
+        (void)vox_world_set(world, (vox_u32)x, (vox_u32)y,
+                            VOX_WORLD_DEPTH - 1U, material,
+                            digs_miner_temperature(material));
+    }
+}
+
+static void digs_miner_set(digs_miner_plot_fn plot, void *context,
+                           int x, int y, vox_u16 material)
 {
     int offset_x;
     int offset_y;
@@ -38,14 +51,7 @@ static void digs_miner_set(vox_world *world, int x, int y, vox_u16 material)
         for (offset_x = 0; offset_x < 2; ++offset_x) {
             int cell_x = x + offset_x;
             int cell_y = y + offset_y;
-            if (cell_x >= 0 && cell_y >= 0 &&
-                cell_x < (int)VOX_WORLD_WIDTH &&
-                cell_y < (int)VOX_WORLD_HEIGHT) {
-                (void)vox_world_set(world, (vox_u32)cell_x,
-                                    (vox_u32)cell_y,
-                                    VOX_WORLD_DEPTH - 1U, material,
-                                    digs_miner_temperature(material));
-            }
+            plot(context, cell_x, cell_y, material);
         }
     }
 }
@@ -64,52 +70,84 @@ void digs_miner_pose_default(digs_miner_pose *pose)
     pose->coat_material = VOX_MAT_METAL;
     pose->facing_right = 0U;
     pose->severed_mask = 0U;
+    pose->steam_pack = 1U;
+    pose->steam_thrusting = 0U;
+    pose->steam_variant = 0U;
+    pose->reserved = 0U;
+}
+
+vox_result digs_miner_plot(int x, int y, const digs_miner_pose *pose,
+                           digs_miner_plot_fn plot, void *context)
+{
+    int lamp_x;
+    int pack_x;
+    int row;
+    int column;
+    if (plot == 0 || pose == 0 ||
+        pose->coat_material == VOX_MAT_AIR ||
+        pose->coat_material >= VOX_MAT_COUNT || pose->reserved != 0U) {
+        return VOX_ERR_INVALID;
+    }
+    lamp_x = pose->facing_right != 0U ? x + 4 : x - 4;
+    pack_x = pose->facing_right != 0U ? x - 5 : x + 5;
+    if (digs_miner_part_present(pose, VOX_DIGS_PART_HEAD)) {
+        for (column = -1; column <= 1; ++column) {
+            digs_miner_set(plot, context, x + column * 2, y - 8,
+                           VOX_MAT_METAL);
+            digs_miner_set(plot, context, x + column * 2, y - 6,
+                           VOX_MAT_FLESH);
+        }
+        digs_miner_set(plot, context, lamp_x, y - 8, VOX_MAT_LAVA);
+    }
+    for (row = -2; row <= 0; ++row) {
+        for (column = -1; column <= 1; ++column) {
+            digs_miner_set(plot, context, x + column * 2, y + row * 2,
+                           pose->coat_material);
+        }
+    }
+    if (digs_miner_part_present(pose, VOX_DIGS_PART_LEFT_UPPER_ARM)) {
+        digs_miner_set(plot, context, x - 4, y - 2,
+                       pose->coat_material);
+    }
+    if (digs_miner_part_present(pose, VOX_DIGS_PART_RIGHT_UPPER_ARM)) {
+        digs_miner_set(plot, context, x + 4, y - 2,
+                       pose->coat_material);
+    }
+    if (digs_miner_part_present(pose, VOX_DIGS_PART_LEFT_THIGH)) {
+        digs_miner_set(plot, context, x - 2, y + 2, VOX_MAT_METAL);
+    }
+    if (digs_miner_part_present(pose, VOX_DIGS_PART_RIGHT_THIGH)) {
+        digs_miner_set(plot, context, x + 2, y + 2, VOX_MAT_METAL);
+    }
+    if (digs_miner_part_present(pose, VOX_DIGS_PART_LEFT_FOOT)) {
+        digs_miner_set(plot, context, x - 2, y + 4, VOX_MAT_COAL);
+    }
+    if (digs_miner_part_present(pose, VOX_DIGS_PART_RIGHT_FOOT)) {
+        digs_miner_set(plot, context, x + 2, y + 4, VOX_MAT_COAL);
+    }
+    if (pose->steam_pack != 0U) {
+        digs_miner_set(plot, context, pack_x, y - 2, VOX_MAT_METAL);
+        plot(context, pack_x, y + 1, VOX_MAT_COAL);
+        if (pose->steam_thrusting != 0U) {
+            int drift = (int)(pose->steam_variant % 3U) - 1;
+            plot(context, pack_x, y + 2, VOX_MAT_LAVA);
+            plot(context, pack_x + drift, y + 3, VOX_MAT_LAVA);
+            plot(context, pack_x - drift, y + 4, VOX_MAT_SMOKE);
+            if ((pose->steam_variant & 1U) != 0U) {
+                plot(context, pack_x + drift, y + 5, VOX_MAT_SMOKE);
+            }
+        }
+    }
+    return VOX_OK;
 }
 
 vox_result digs_miner_voxelize(vox_world *world, int x, int y,
                                const digs_miner_pose *pose)
 {
-    int lamp_x;
-    int row;
-    int column;
-    if (world == 0 || pose == 0 ||
-        pose->coat_material == VOX_MAT_AIR ||
-        pose->coat_material >= VOX_MAT_COUNT) {
+    if (world == 0) {
         return VOX_ERR_INVALID;
     }
-    lamp_x = pose->facing_right != 0U ? x + 4 : x - 4;
-    if (digs_miner_part_present(pose, VOX_DIGS_PART_HEAD)) {
-        for (column = -1; column <= 1; ++column) {
-            digs_miner_set(world, x + column * 2, y - 8, VOX_MAT_METAL);
-            digs_miner_set(world, x + column * 2, y - 6, VOX_MAT_FLESH);
-        }
-        digs_miner_set(world, lamp_x, y - 8, VOX_MAT_LAVA);
-    }
-    for (row = -2; row <= 0; ++row) {
-        for (column = -1; column <= 1; ++column) {
-            digs_miner_set(world, x + column * 2, y + row * 2,
-                           pose->coat_material);
-        }
-    }
-    if (digs_miner_part_present(pose, VOX_DIGS_PART_LEFT_UPPER_ARM)) {
-        digs_miner_set(world, x - 4, y - 2, pose->coat_material);
-    }
-    if (digs_miner_part_present(pose, VOX_DIGS_PART_RIGHT_UPPER_ARM)) {
-        digs_miner_set(world, x + 4, y - 2, pose->coat_material);
-    }
-    if (digs_miner_part_present(pose, VOX_DIGS_PART_LEFT_THIGH)) {
-        digs_miner_set(world, x - 2, y + 2, VOX_MAT_METAL);
-    }
-    if (digs_miner_part_present(pose, VOX_DIGS_PART_RIGHT_THIGH)) {
-        digs_miner_set(world, x + 2, y + 2, VOX_MAT_METAL);
-    }
-    if (digs_miner_part_present(pose, VOX_DIGS_PART_LEFT_FOOT)) {
-        digs_miner_set(world, x - 2, y + 4, VOX_MAT_COAL);
-    }
-    if (digs_miner_part_present(pose, VOX_DIGS_PART_RIGHT_FOOT)) {
-        digs_miner_set(world, x + 2, y + 4, VOX_MAT_COAL);
-    }
-    return VOX_OK;
+    return digs_miner_plot(x, y, pose, digs_miner_world_plot, world);
 }
 
 static int digs_icon_occupied(const vox_world *world, vox_u32 x, vox_u32 y)

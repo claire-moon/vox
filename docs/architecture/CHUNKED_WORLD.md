@@ -1,11 +1,18 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # Chunked world contract
 
-The active v0.0.2 development profile uses a bounded `512 x 320 x 10`
+The active v0.0.3 development profile uses a bounded `512 x 320 x 10`
 mini-voxel slab: 1,638,400 cells, exactly forty times the original 40,960-cell
 profile and four times the v0.0.1 dense slab. Cells are stored in stable
 `z/y/x` order, while a parallel `32 x 20` grid of `16 x 16 x 10` chunks
 supplies scheduling and renderer-upload metadata.
+
+Loose deposited cells are explicitly classified separately from full-depth
+solid terrain. They retain material simulation and gravity but a single loose
+rear-depth voxel cannot behave like an entire side-view wall against a miner.
+Reaction phases process only awake cells from a frontier captured at phase
+start; work awakened during that phase becomes eligible on the next bounded
+pass instead of cascading across the world immediately.
 
 Each chunk owns occupied and awake counts. `VOX_CHUNK_ACTIVE` is set exactly
 when its awake count is nonzero. A set, clear, phase change, or move marks a

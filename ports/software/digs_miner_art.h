@@ -11,13 +11,22 @@ typedef struct digs_miner_pose {
     vox_u16 coat_material;
     vox_u16 facing_right;
     vox_u32 severed_mask;
+    vox_u16 steam_pack;
+    vox_u16 steam_thrusting;
+    vox_u16 steam_variant;
+    vox_u16 reserved;
 } digs_miner_pose;
+
+typedef void (*digs_miner_plot_fn)(void *context, int x, int y,
+                                   vox_u16 material);
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 void digs_miner_pose_default(digs_miner_pose *pose);
+vox_result digs_miner_plot(int x, int y, const digs_miner_pose *pose,
+                           digs_miner_plot_fn plot, void *context);
 vox_result digs_miner_voxelize(vox_world *world, int x, int y,
                                const digs_miner_pose *pose);
 vox_result digs_miner_write_icon_xpm(const char *path);

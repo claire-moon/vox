@@ -5,7 +5,7 @@
 #include <string.h>
 
 #define DIGS_MANIFEST "games/digs/scripts/manifest.txt"
-#define DIGS_ENTRY_COUNT 86U
+#define DIGS_ENTRY_COUNT 87U
 
 static vox_u32 tested_source_hash;
 static vox_u32 tested_catalog_hash;
@@ -21,7 +21,7 @@ static int test_catalog_shape(const vox_script_catalog *catalog)
         strcmp(catalog->game_id, "digs") != 0 ||
         strcmp(catalog->title, "DIGS MINER'S INDEX") != 0 ||
         catalog->kind_counts[VOX_SCRIPT_KIND_MATERIAL] != 14U ||
-        catalog->kind_counts[VOX_SCRIPT_KIND_WEAPON] != 10U ||
+        catalog->kind_counts[VOX_SCRIPT_KIND_WEAPON] != 11U ||
         catalog->kind_counts[VOX_SCRIPT_KIND_ENTITY] != 9U ||
         catalog->kind_counts[VOX_SCRIPT_KIND_REACTION] != 12U ||
         catalog->kind_counts[VOX_SCRIPT_KIND_ANATOMY] != 15U ||

@@ -336,6 +336,150 @@ static int test_cellular_motion(void)
     return 0;
 }
 
+static int test_loose_debris(void)
+{
+    static vox_world world;
+    const vox_cell *flesh;
+    const vox_cell *soil;
+    const vox_chunk *chunk;
+    vox_u32 generation;
+    vox_u32 x = VOX_WORLD_WIDTH / 2U;
+    vox_u32 i;
+    vox_world_init(&world);
+    if (vox_world_set(&world, x, 2U, 0U, VOX_MAT_FLESH,
+                      TEST_AMBIENT_Q16) != VOX_OK ||
+        vox_world_set(&world, x + 2U, 2U, 0U, VOX_MAT_SOIL,
+                      TEST_AMBIENT_Q16) != VOX_OK ||
+        vox_world_set_loose(&world, x, 2U, 0U, 1U) != VOX_OK ||
+        vox_world_set_loose(&world, x + 2U, 2U, 0U, 1U) != VOX_OK ||
+        vox_world_collision_classify(&world, x, 2U) !=
+            VOX_WORLD_COLLISION_LOOSE ||
+        vox_world_set_loose(&world, x, 3U, 0U, 1U) != VOX_ERR_INVALID ||
+        vox_world_set_loose(&world, x, 2U, 0U, 2U) != VOX_ERR_INVALID) {
+        return 1;
+    }
+    if (vox_world_set(&world, x, 2U, 1U, VOX_MAT_METAL,
+                      TEST_AMBIENT_Q16) != VOX_OK ||
+        vox_world_collision_classify(&world, x, 2U) !=
+            VOX_WORLD_COLLISION_SOLID ||
+        vox_world_set(&world, x, 2U, 1U, VOX_MAT_AIR,
+                      TEST_AMBIENT_Q16) != VOX_OK ||
+        vox_world_collision_classify(&world, x, 2U) !=
+            VOX_WORLD_COLLISION_LOOSE) {
+        return 2;
+    }
+    for (i = 0U; i < 4U; ++i) {
+        if (vox_world_step(&world, 0) != VOX_OK) {
+            return 3;
+        }
+    }
+    flesh = vox_world_cell(&world, x, 6U, 0U);
+    soil = vox_world_cell(&world, x + 2U, 6U, 0U);
+    if (flesh == 0 || flesh->material != VOX_MAT_FLESH ||
+        !(flesh->flags & VOX_CELL_LOOSE) || soil == 0 ||
+        soil->material != VOX_MAT_SOIL ||
+        !(soil->flags & VOX_CELL_LOOSE) ||
+        vox_world_collision_classify(&world, x, 6U) !=
+            VOX_WORLD_COLLISION_LOOSE) {
+        return 4;
+    }
+    if (vox_world_set_loose(&world, x, 6U, 0U, 0U) != VOX_OK ||
+        vox_world_collision_classify(&world, x, 6U) !=
+            VOX_WORLD_COLLISION_SOLID) {
+        return 5;
+    }
+    chunk = vox_world_chunk(&world, x / VOX_CHUNK_WIDTH,
+                            6U / VOX_CHUNK_HEIGHT);
+    if (chunk == 0) {
+        return 6;
+    }
+    generation = chunk->generation;
+    if (vox_world_set_loose(&world, x, 6U, 0U, 0U) != VOX_OK ||
+        chunk->generation != generation || test_validate_world(&world) != 0) {
+        return 7;
+    }
+    return 0;
+}
+
+static int test_reaction_frontier(void)
+{
+    static vox_world world;
+    const vox_cell *cell;
+    vox_u32 x;
+    vox_world_init(&world);
+    for (x = 0U; x < 32U; ++x) {
+        if (vox_world_set(&world, x, 20U, 0U, VOX_MAT_BEDROCK,
+                          TEST_AMBIENT_Q16) != VOX_OK) {
+            return 1;
+        }
+    }
+    if (vox_world_set(&world, 5U, 19U, 0U, VOX_MAT_BIOMASS,
+                      500L << 16) != VOX_OK ||
+        vox_world_set(&world, 6U, 19U, 0U, VOX_MAT_STONE,
+                      TEST_AMBIENT_Q16) != VOX_OK ||
+        vox_world_sleep_all(&world) != VOX_OK ||
+        vox_world_wake(&world, 6U, 19U, 0U) != VOX_OK ||
+        vox_world_step(&world, 0) != VOX_OK) {
+        return 2;
+    }
+    cell = vox_world_cell(&world, 5U, 19U, 0U);
+    if (cell == 0 || cell->damage_q16 != 0L) {
+        return 3;
+    }
+
+    vox_world_init(&world);
+    for (x = 0U; x < 32U; ++x) {
+        if (vox_world_set(&world, x, 20U, 0U, VOX_MAT_BEDROCK,
+                          TEST_AMBIENT_Q16) != VOX_OK) {
+            return 4;
+        }
+    }
+    if (vox_world_set(&world, 15U, 19U, 0U, VOX_MAT_LAVA,
+                      700L << 16) != VOX_OK ||
+        vox_world_set(&world, 16U, 19U, 0U, VOX_MAT_BIOMASS,
+                      TEST_AMBIENT_Q16) != VOX_OK ||
+        vox_world_sleep_all(&world) != VOX_OK ||
+        vox_world_wake(&world, 15U, 19U, 0U) != VOX_OK ||
+        vox_world_step(&world, 0) != VOX_OK) {
+        return 5;
+    }
+    cell = vox_world_cell(&world, 16U, 19U, 0U);
+    if (cell == 0 || cell->damage_q16 != 0L ||
+        !(cell->flags & VOX_CELL_AWAKE)) {
+        return 6;
+    }
+    if (vox_world_step(&world, 0) != VOX_OK) {
+        return 7;
+    }
+    cell = vox_world_cell(&world, 16U, 19U, 0U);
+    if (cell == 0 || cell->damage_q16 == 0L) {
+        return 8;
+    }
+
+    vox_world_init(&world);
+    for (x = 0U; x < 32U; ++x) {
+        if (vox_world_set(&world, x, 20U, 0U, VOX_MAT_BEDROCK,
+                          TEST_AMBIENT_Q16) != VOX_OK) {
+            return 9;
+        }
+    }
+    if (vox_world_set(&world, 15U, 19U, 0U, VOX_MAT_LAVA,
+                      700L << 16) != VOX_OK ||
+        vox_world_set(&world, 16U, 19U, 0U, VOX_MAT_STONE,
+                      TEST_AMBIENT_Q16) != VOX_OK ||
+        vox_world_sleep_all(&world) != VOX_OK ||
+        vox_world_wake(&world, 15U, 19U, 0U) != VOX_OK ||
+        vox_world_step(&world, 0) != VOX_OK) {
+        return 10;
+    }
+    cell = vox_world_cell(&world, 16U, 19U, 0U);
+    if (cell == 0 || (cell->flags & VOX_CELL_AWAKE) ||
+        test_validate_world(&world) != 0) {
+        return 11;
+    }
+    return 0;
+}
+
 static int test_material_reactions(void)
 {
     static vox_world world;
@@ -399,6 +543,7 @@ int main(void)
 {
     vox_u32 first;
     vox_u32 second;
+    int result;
     if (test_materials_and_sleep() != 0) {
         fprintf(stderr, "material/sleep scenario failed\n");
         return 3;
@@ -406,6 +551,16 @@ int main(void)
     if (test_cellular_motion() != 0) {
         fprintf(stderr, "cellular motion scenario failed\n");
         return 4;
+    }
+    result = test_loose_debris();
+    if (result != 0) {
+        fprintf(stderr, "loose debris scenario failed: %d\n", result);
+        return 8;
+    }
+    result = test_reaction_frontier();
+    if (result != 0) {
+        fprintf(stderr, "reaction frontier scenario failed: %d\n", result);
+        return 9;
     }
     if (test_material_reactions() != 0) {
         fprintf(stderr, "material reaction scenario failed\n");

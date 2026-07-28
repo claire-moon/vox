@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # VOX + DIGS testing cockpit
 
-`VOX_QA_FEEDBACK.xlsx` is the portable feedback workbook for the `v0.0.2`
+`VOX_QA_FEEDBACK.xlsx` is the portable feedback workbook for the `v0.0.3`
 demo. It can be filled in with Excel, LibreOffice, OnlyOffice, or another
 application that preserves `.xlsx` files. The repository builds it
 deterministically from `VOX_QA_CHECKPOINTS.csv` with
@@ -18,6 +18,12 @@ The workbook has three sheets:
   alias and general hardware labels; never enter passwords, access tokens,
   email addresses, user names, host names, network addresses, hardware serial
   numbers, or private file paths.
+
+For a fast candidate check, follow `V0.0.3-QUICK-FEEDBACK.txt`. Its base
+keyboard/mouse lane takes about 20 minutes and references the exact workbook
+checkpoint IDs to fill. Controller USB/Bluetooth passes are separate add-ons;
+the quick lane is defect discovery and does not replace the full 88-checkpoint
+release pass or the 15-minute performance soak.
 
 ## Run the cockpit
 
@@ -44,10 +50,11 @@ tools/vox-test-cockpit.sh tester-a.xlsx tester-b.xlsx
 
 The script exports all three known sheets through xleak, combines like sheets,
 records a privacy-conscious system profile, and optionally runs the demo's
-non-windowed smoke test and CPU renderer benchmark. It writes a Markdown
-report, raw CSV exports, copied workbooks, logs, and a compressed evidence
-packet under `qa/out/`. Review the report and every attachment before sharing
-the packet.
+non-windowed smoke, CPU renderer benchmark, input, cap, audio-cadence, bark,
+haptic mixer, portable 600-tick deterministic load, settings, camera, and adjacent
+headless checks. It writes a Markdown report,
+raw CSV exports, copied workbooks, logs, and a compressed evidence packet under
+`qa/out/`. Review the report and every attachment before sharing the packet.
 
 The script does not upload anything. Attach the reviewed `.tar.gz` packet to a
 GitHub issue or release-feedback thread. For a single problem, also copy its
@@ -82,6 +89,21 @@ P2 while P1 remains keyboard/mouse; two pads are exclusive to their claimed
 slots. In a locked controller mode, unplugging the pad must pause safely. In
 AUTO, it must fall back without generating an action. Reconnect and confirm the
 same slot is usable again.
+
+Record Nintendo, Xbox, PlayStation, or generic as the observed prompt family,
+not as an inference from button position. A Switch Pro USB result does not
+cover Bluetooth. At each transport, capture Off/Low/Normal/Heavy haptic level,
+whether SDL/driver rumble is available, and whether nearby/distant events reach
+the correct local controller. Driver-unavailable vibration is `Blocked`, not a
+pass. The Environment sheet also carries rope mode, Laptop/Dummy settings,
+cap-qualification result, audio cadence diagnostics, seed, and state/frame
+hashes so otherwise-similar runs remain distinguishable. Record the automated
+haptic mixer values separately from physical-pad vibration. The default
+`--load-self-test 600` evidence records canonical slots, activity, awake cells,
+and hash without a wall-clock gate. Only on the named i7-10750H laptop bench,
+set `VOX_NAMED_BENCH_QUALIFY=1` when running the cockpit to additionally record
+the strict average, p95, and maximum qualification. A reduced 180-tick
+diagnostic cannot pass either 600-tick checkpoint.
 
 ## Result and severity rules
 

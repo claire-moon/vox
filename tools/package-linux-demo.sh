@@ -7,7 +7,7 @@ umask 022
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 DIST_DIR=${VOX_PACKAGE_DIST_DIR:-"$ROOT/dist"}
-VERSION=${VOX_PACKAGE_VERSION:-v0.0.2}
+VERSION=${VOX_PACKAGE_VERSION:-v0.0.3}
 ARCHIVE_STEM="vox-digs-$VERSION-linux-x86_64"
 SOURCE_STEM="vox-digs-$VERSION-source"
 BINARY_ARCHIVE="$DIST_DIR/$ARCHIVE_STEM.tar.gz"
@@ -17,6 +17,7 @@ ALLOW_DIRTY=${VOX_PACKAGE_ALLOW_DIRTY:-0}
 NASM_ACCEL=${VOX_PACKAGE_NASM:-AUTO}
 BENCHMARK_FRAMES=${VOX_PACKAGE_BENCHMARK_FRAMES:-120}
 BUILD_JOBS=${VOX_BUILD_JOBS:-}
+NAMED_BENCH_QUALIFY=${VOX_NAMED_BENCH_QUALIFY:-0}
 CONTROLLER_DB="$ROOT/third_party/SDL_GameControllerDB/gamecontrollerdb.txt"
 CONTROLLER_DB_SHA256=dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0
 WORK_DIR=
@@ -25,12 +26,14 @@ if [[ -n "$BUILD_JOBS" && ! "$BUILD_JOBS" =~ ^[1-9][0-9]*$ ]]; then
     printf 'package-linux-demo: VOX_BUILD_JOBS must be a positive integer\n' >&2
     exit 1
 fi
-
 die()
 {
     printf 'package-linux-demo: %s\n' "$*" >&2
     exit 1
 }
+
+[[ "$NAMED_BENCH_QUALIFY" == 0 || "$NAMED_BENCH_QUALIFY" == 1 ]] || \
+    die 'VOX_NAMED_BENCH_QUALIFY must be 0 or 1'
 
 cleanup()
 {
@@ -123,6 +126,10 @@ need_command tee
 need_command awk
 need_command cmp
 
+if ! python3 -c 'import openpyxl' >/dev/null 2>&1; then
+    die 'Python module openpyxl is required to verify the packaged QA workbook'
+fi
+
 [[ -r "$CONTROLLER_DB" ]] || \
     die 'the pinned SDL GameControllerDB data file is missing'
 CONTROLLER_DB_ACTUAL_SHA256=$(sha256sum "$CONTROLLER_DB" | awk '{print $1}')
@@ -210,6 +217,8 @@ capture_evidence ctest "$BUILD_DIR" \
 capture_evidence cargo-test "$ROOT" \
     env CARGO_TARGET_DIR="$CARGO_TARGET_DIR" cargo test \
         --manifest-path "$ROOT/Cargo.toml" --workspace --locked
+capture_evidence qa-workbook-current "$ROOT" \
+    python3 "$ROOT/tools/build-qa-workbook.py" --check
 capture_evidence vox-headless "$EVIDENCE_DIR" "$BUILD_DIR/vox_headless"
 capture_evidence digs-headless "$EVIDENCE_DIR" "$BUILD_DIR/digs_headless"
 [[ -f "$BUILD_DIR/share/digs/scripts/manifest.txt" ]] || \
@@ -235,11 +244,28 @@ capture_evidence digs-script-headless "$EVIDENCE_DIR" \
         "$BUILD_DIR/share/digs/scripts/manifest.txt"
 capture_evidence digs-input-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --input-self-test
+capture_evidence digs-cap-self-test "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --cap-self-test
+capture_evidence digs-audio-cadence-self-test "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --audio-cadence-self-test
+capture_evidence digs-bark-self-test "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --bark-self-test
+capture_evidence digs-haptic-self-test "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --haptic-self-test
+capture_evidence digs-load-self-test "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --load-self-test 600
+if [[ "$NAMED_BENCH_QUALIFY" == 1 ]]; then
+    capture_evidence digs-named-bench-performance-qualification \
+        "$EVIDENCE_DIR" \
+        "$BUILD_DIR/digs_demo" --performance-self-test 600
+fi
 capture_evidence digs-settings-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --settings-self-test \
         "$EVIDENCE_DIR/digs-settings-self-test.cfg"
 capture_evidence digs-camera-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --camera-self-test
+capture_evidence digs-fixed-step-self-test "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --fixed-step-self-test
 capture_evidence digs-miner-icon "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --render-miner-icon-xpm \
         digs-miner-generated.xpm
@@ -284,6 +310,8 @@ install -m 0644 -- "$ROOT/packaging/linux/libexec/vox-runtime.sh" \
     "$STAGE_DIR/libexec/vox-runtime.sh"
 copy_file "$ROOT/packaging/linux/START-HERE.txt" "$STAGE_DIR/START-HERE.txt"
 copy_file "$ROOT/CG-README.TXT" "$STAGE_DIR/CG-README.TXT"
+copy_file "$ROOT/qa/V0.0.3-QUICK-FEEDBACK.txt" \
+    "$STAGE_DIR/QUICK-FEEDBACK.txt"
 
 copy_file "$ROOT/LICENSE" "$STAGE_DIR/LICENSE"
 copy_file "$ROOT/THIRD_PARTY.md" "$STAGE_DIR/THIRD_PARTY.md"
@@ -301,6 +329,8 @@ if [[ -d "$ROOT/qa" ]]; then
     copy_tree "$ROOT/qa" "$STAGE_DIR/qa"
     rm -rf -- "$STAGE_DIR/qa/out"
 fi
+[[ -r "$STAGE_DIR/QUICK-FEEDBACK.txt" ]] || \
+    die 'the guided quick-feedback artifact was not packaged'
 mkdir -p -- "$STAGE_DIR/qa/out"
 if [[ -f "$ROOT/tools/vox-test-cockpit.sh" ]]; then
     install -m 0755 -- "$ROOT/tools/vox-test-cockpit.sh" \

@@ -92,6 +92,14 @@ typedef struct vox_material_properties {
 #define VOX_CELL_PHASE_GAS 4U
 #define VOX_CELL_MOVED 8U
 #define VOX_CELL_UNSTABLE 16U
+/* Loose solid cells simulate as debris but do not block character bodies. */
+#define VOX_CELL_LOOSE 32U
+
+typedef enum vox_world_collision_class {
+    VOX_WORLD_COLLISION_EMPTY = 0,
+    VOX_WORLD_COLLISION_LOOSE = 1,
+    VOX_WORLD_COLLISION_SOLID = 2
+} vox_world_collision_class;
 
 #define VOX_CHUNK_ACTIVE 1U
 #define VOX_CHUNK_DIRTY 2U
@@ -141,6 +149,9 @@ void vox_world_init(vox_world *world);
 const vox_material_properties *vox_material_get(vox_u16 material);
 vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
                          vox_u16 material, vox_i32 temperature_q16);
+/* Setting loose is idempotent; AIR may only be cleared, never made loose. */
+vox_result vox_world_set_loose(vox_world *world, vox_u32 x, vox_u32 y,
+                               vox_u32 z, vox_u16 loose);
 vox_result vox_world_wake(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z);
 vox_result vox_world_sleep_all(vox_world *world);
 vox_result vox_world_clear_dirty(vox_world *world);
@@ -150,6 +161,9 @@ vox_result vox_world_step(vox_world *world, const vox_step_command *command);
 vox_u32 vox_world_hash(const vox_world *world);
 const vox_cell *vox_world_cell(const vox_world *world, vox_u32 x, vox_u32 y,
                                vox_u32 z);
+/* A stable solid at any depth makes the whole x/y column body-solid. */
+vox_u16 vox_world_collision_classify(const vox_world *world, vox_u32 x,
+                                     vox_u32 y);
 const vox_chunk *vox_world_chunk(const vox_world *world, vox_u32 chunk_x,
                                  vox_u32 chunk_y);
 

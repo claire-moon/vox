@@ -16,25 +16,83 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Install SDL2 development files
-        run: sudo apt-get update && sudo apt-get install --yes libsdl2-dev nasm
+        run: sudo apt-get update && sudo apt-get install --yes libsdl2-dev nasm python3-openpyxl
       - name: Run strict native, NASM, SDL2, and Rust gate
         env:
           VOX_BUILD_DIR: ${{ runner.temp }}/vox-verify-build
           VOX_CARGO_TARGET_DIR: ${{ runner.temp }}/vox-cargo-target
           VOX_SMOKE_IMAGE: ${{ runner.temp }}/digs-demo-smoke.ppm
           VOX_NASM_ACCEL: ON
+          VOX_NAMED_BENCH_QUALIFY: 0
         run: tools/vox-verify.sh
       - name: Build Linux x86-64 tester and source bundles
         env:
           VOX_PACKAGE_BENCHMARK_FRAMES: 60
+          VOX_NAMED_BENCH_QUALIFY: 0
         run: tools/package-linux-demo.sh
       - name: Upload tester bundles
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: vox-digs-v0.0.2-linux-x86_64
+          name: vox-digs-v0.0.3-linux-x86_64
           path: |
-            dist/vox-digs-v0.0.2-linux-x86_64.tar.gz
-            dist/vox-digs-v0.0.2-source.tar.gz
+            dist/vox-digs-v0.0.3-linux-x86_64.tar.gz
+            dist/vox-digs-v0.0.3-source.tar.gz
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
+
+  portable-core:
+    name: portable core / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64 MSVC
+            os: windows-2022
+          - label: macOS 15 Intel Clang
+            os: macos-15-intel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Configure portable scalar core
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DVOX_BUILD_TESTS=ON
+          -DVOX_BUILD_SDL2_DEMO=OFF
+          -DVOX_BUILD_NASM_ACCEL=OFF
+      - name: Build portable scalar core
+        run: cmake --build build --config Release --parallel 2
+      - name: Run native portable-core tests
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Run Rust boundary tests
+        run: cargo test --workspace --locked
+
+  legacy-i686-core:
+    name: portable core / Linux i686 multilib
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install 32-bit compiler runtime
+        run: sudo apt-get update && sudo apt-get install --yes gcc-multilib g++-multilib
+      - name: Install Rust i686 target
+        run: rustup target add i686-unknown-linux-gnu
+      - name: Configure 32-bit portable scalar core
+        run: >-
+          cmake -S . -B build-i686
+          -DCMAKE_BUILD_TYPE=Release
+          -DVOX_BUILD_TESTS=ON
+          -DVOX_BUILD_SDL2_DEMO=OFF
+          -DVOX_BUILD_NASM_ACCEL=OFF
+          -DCMAKE_C_FLAGS=-m32
+          -DCMAKE_CXX_FLAGS=-m32
+      - name: Build and run 32-bit native tests
+        run: |
+          cmake --build build-i686 --parallel 2
+          ctest --test-dir build-i686 --output-on-failure
+      - name: Run 32-bit Rust boundary tests
+        run: cargo test --workspace --locked --target i686-unknown-linux-gnu

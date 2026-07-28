@@ -41,11 +41,17 @@ the same authored mix for the same events.
 
 ## Speech boundary
 
-The engine synthesizes supplied allophone IDs; it does not perform arbitrary
-text-to-phoneme conversion. DIGS pairs every shipped speech-bubble string with
-an authored pronunciation stream. Custom player names are visual only in
-v0.0.2. The implementation and phrase data are original GPL-3.0-or-later work
-and contain no recorded samples or imported speech tables.
+The engine synthesizes supplied allophone IDs. DIGS combines authored phrases
+with a small deterministic letter-pattern converter and spelled fallback for
+unknown custom names. The result deliberately retains a period Speak & Spell
+character rather than claiming natural speech. The implementation and phrase
+data are original GPL-3.0-or-later work and contain no recorded samples or
+imported speech tables.
+
+The SDL adapter renders continuously from the audio-device callback. Main
+thread event and configuration changes are serialized with the device lock;
+presentation frame rate therefore cannot alter sample pitch, phrase duration,
+menu cadence, or ambience time.
 
 ## Determinism and tests
 

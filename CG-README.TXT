@@ -1,7 +1,7 @@
-DIGS v0.0.2 - CG QUICK-START AND TEST GUIDE
+DIGS v0.0.3 - CG QUICK-START AND TEST GUIDE
 ===========================================
 
-This is the Linux x86-64 CPU-rendered v0.0.2 demo candidate. DIGS uses the
+This is the Linux x86-64 CPU-rendered v0.0.3 demo candidate. DIGS uses the
 VOX simulation engine, but the game title is simply DIGS. The game does not
 use the GTX 1660 Ti yet; this build is deliberately testing the portable CPU
 software path.
@@ -131,11 +131,12 @@ Player 1 keyboard and mouse:
   A / D             Move left/right.
   Space             Jump.
   Left Shift        Steam pack.
-  Q                 Hold/release rope.
+  Q                 Operate rope in the selected Hold/Toggle mode.
   E or left mouse   Fire/use selected tool.
   Mouse             Aim exactly through the current camera transform.
   W / S             Reel an attached rope shorter/longer.
-  1 through 0       Direct-select weapon on key press.
+  1 through 0       Direct-select the original ten tools.
+  -                 Direct-select the charged Mining Rail.
   Mouse wheel       Change camera zoom.
   Shift+wheel       Cycle allowed weapons.
   C                 Speak a contextual miner bark.
@@ -146,21 +147,22 @@ Player 2 keyboard:
   Up                Jump; reel shorter while attached.
   Down              Reel longer while attached.
   Right Shift       Steam pack.
-  /                 Hold/release rope.
+  /                 Operate rope in the selected Hold/Toggle mode.
   Right Ctrl        Fire/use selected tool.
   I / J / K / L     Aim up/left/down/right.
   , / .             Previous/next allowed weapon.
   M                 Speak a contextual miner bark.
 
-Xbox-style and normalized controller defaults:
+Detected controller defaults (labels follow Nintendo/Xbox/PlayStation/generic):
 
   Left stick        Move; vertical input reels an attached rope.
   Right stick       Radial player-relative aim.
-  A                 Jump.
-  X                 Steam pack.
-  Left bumper       Hold/release rope.
-  Right bumper/RT   Fire/use selected tool.
-  Y / B             Previous/next allowed weapon during play.
+  Shown face button Jump.
+  Shown face button Steam pack.
+  Left shoulder     Operate rope in the selected Hold/Toggle mode.
+  Right shoulder/ZR Fire/use selected tool.
+  Shown face buttons Previous/next allowed weapon during play.
+  Hold ZL + R-stick Zoom out/in with vertical stick input.
   Right stick click Speak a contextual miner bark.
   Start             Pause.
 
@@ -182,11 +184,17 @@ Global match keys:
 5. USING THE ROPE
 -----------------
 
-Aim at solid rock, metal, bedrock, or another valid support and hold the rope
-action. The line attaches to the first valid anchor in range. Keep moving to
-swing; P1 W/S or a controller's vertical left-stick input changes rope length.
-Release the rope action to detach while preserving momentum. A destroyed
-anchor breaks the rope, so blasts can cut both escape routes and bot routes.
+Aim at stable rock, metal, bedrock, coal, or another valid support and cast the
+rope. The swept hook stops at blockers, attaches to the first eligible anchor,
+and the segmented cable wraps and unwraps around terrain corners. Keep moving
+to swing; P1 W/S or a controller's vertical left-stick input changes rope
+length. Hold mode detaches on release; Toggle mode detaches on the next press.
+A destroyed anchor breaks the rope, so blasts can cut escape and bot routes.
+
+A hook-head strike against an unshielded enemy sets that miner to exactly one
+health, applies bounded knockback, and ends the cast without killing or
+severing them. The cable itself never damages. A spawn shield fully blocks the
+hook strike, knockback, and attribution and gives distinct shield feedback.
 
 The generated maps include sparse high rail, gantry, and natural-rock anchors
 within the 48-cell rope reach without placing solid legs or low ceilings across
@@ -197,13 +205,19 @@ traversal routes.
 6. COMBAT, EFFECTS, AND ACCESSIBILITY
 -------------------------------------
 
-The ten-tool Full Works arsenal remains:
+The eleven-tool Full Works arsenal is:
 
   1  Pick                         6  Sledge
   2  Blast Charge                 7  Nail Gun
   3  Smoke Pot                    8  Boiler Shotgun
   4  Cinder Flask                 9  Concussion Grenade
   5  Pressure Hose                0  Nail Bomb
+  -  Mining Rail (hold to charge, release to fire)
+
+The Mining Rail loses energy while piercing soft terrain and aligned miners;
+sufficient stone and bedrock stop it. A maximum-charge head or torso hit is
+lethal, limbs can sever, and later targets receive less energy. Its charge
+tell, recoil, cooldown, beam afterimage, and haptics make the shot readable.
 
 Explosions, impacts, deaths, blood, smoke, embers, fragments, and bot barks
 use seeded variants. RETRO, STANDARD, and CARNAGE set explicit bounded pools
@@ -214,7 +228,8 @@ particle density for CPU headroom; they are not competitive replay equivalents.
 
 OPTIONS also provides Full/Reduced/Off local-event flashes, Full/Reduced/Off
 gore, camera shake, damage numbers, number size/color, Lightfield tier, and
-30/60/90/120/144/Unlimited presentation caps. White explosion flashes and red
+15/30/60/90/120/144/Unlimited presentation caps, Laptop Mode, per-player rope
+mode, Dummy Mode, and Off/Low/Normal/Heavy haptics. White explosion flashes and red
 kill flashes are limited to events involving a local player. Choose Reduced
 or Off if flashes are uncomfortable.
 
@@ -233,12 +248,15 @@ death; local players receive named kill/death banners. Kills inside three
 seconds produce DOUBLE KILL, TRIPLE KILL, and MULTI KILL; five uninterrupted
 kills produce KILLING SPREE.
 
-The Audio v2 engine generates an eight-note menu motif, a quiet click only when
+The audio-device-clock engine generates an eight-note menu motif, a quiet click only when
 unmodified mouse-wheel zoom really changes, original hit/kill sounds, and
 world-aware wind/water/lava ambience. Authored allophones provide a deep
-announcer and high miner voices without samples or external TTS. Human speech
-is manual; bots use long deterministic cooldowns. OPTIONS exposes one audio
-setting only: persistent MASTER VOLUME from 0 through 100 percent.
+announcer and high miner voices without samples or external TTS. Curated PG-13
+lines and seeded lexical pools react to state, rival names, weapons, materials,
+and hazards. Human barks use a three-second cooldown; Dummy Mode removes only
+that local-human cooldown. Bots react sparsely under global spacing. OPTIONS
+exposes one audio setting only: persistent MASTER VOLUME from 0 through 100
+percent.
 
 
 7. MINER'S INDEX AND LUA DATA
@@ -272,6 +290,13 @@ Run these from the extracted demo directory:
   ./smoke-test.sh
   ./benchmark.sh 240
   ./bin/digs_demo --input-self-test
+  ./bin/digs_demo --cap-self-test
+  ./bin/digs_demo --audio-cadence-self-test
+  ./bin/digs_demo --bark-self-test
+  ./bin/digs_demo --haptic-self-test
+  ./bin/digs_demo --load-self-test 600
+  ./bin/digs_demo --performance-self-test 600
+  ./bin/digs_demo --settings-self-test qa/out/digs-settings-test.cfg
   ./bin/digs_demo --camera-self-test
   ./bin/digs_demo --render-miner-icon-xpm qa/out/digs-miner-test.xpm
   ./bin/vox_headless
@@ -280,7 +305,16 @@ Run these from the extracted demo directory:
 
 The smoke test is non-windowed and writes qa/out/digs-demo-smoke.ppm. The
 input self-test checks radial normalization and weapon-aware aim ranges. The
-camera self-test checks every zoom and world edge for black exposure, verifies
+cap test validates deterministic cap qualification, the cadence test proves
+audio sample timing is independent of rendered frames, the bark test checks
+all curated slots and unknown-word phonetics, the haptic test checks mixer
+levels and isolation without requiring a pad, the performance test enforces
+the v0.0.3 four-miner simulation budget only on the named laptop bench, and
+the settings test checks schema migration without changing real user settings.
+The load test is the portable gate: at 600 ticks it validates exact activity
+and state hash f3924b81 without applying machine timing limits. Run the strict
+performance test only on the i7-10750H laptop qualification bench. The camera
+self-test checks every zoom and world edge for black exposure, verifies
 true close zoom plus full-world player/lava framing and the offscreen lava
 horizon, and rechecks the mouse transform. The icon command
 re-renders the same miner emitter used in play; compare it with
@@ -292,20 +326,31 @@ The package-time versions of these checks, CTest, Cargo tests, script
 validation, and raw exit statuses are under evidence/.
 
 
-9. MANUAL v0.0.2 PLAYTEST
+9. MANUAL v0.0.3 PLAYTEST
 -------------------------
+
+For a shorter first report, use qa/V0.0.3-QUICK-FEEDBACK.txt (or the packaged
+QUICK-FEEDBACK.txt). It is a guided 20-minute keyboard/mouse lane with separate
+F310 and Switch Pro USB/Bluetooth additions and exact workbook checkpoint IDs.
+It finds regressions quickly but does not replace the complete list below.
 
 Please check at least these paths:
 
   [ ] Keyboard-only P1 can cross each map, jump, steam, rope, aim, and fire.
   [ ] AUTO/KEYBOARD/CONTROLLER modes never mix gameplay sources or crosshairs.
   [ ] Logitech F310 X and D modes both work after centered calibration.
+  [ ] Switch Pro labels, controls, and haptics work over USB and Bluetooth.
+  [ ] Nintendo/Xbox/PlayStation/generic prompts match the detected controller.
   [ ] One pad defaults to P2 in two-player play; two pads remain isolated.
   [ ] AUTO pad loss falls back safely; locked CONTROLLER loss pauses safely.
   [ ] Circular deadzone, response presets, aim slowdown, and tool reach agree.
   [ ] Rebinding, conflict swaps, and RESTORE DEFAULTS work for the run.
-  [ ] Rope attaches only to valid solid material, reels, swings, detaches,
-      preserves release momentum, and breaks when its anchor is destroyed.
+  [ ] Hold and Toggle ropes cast once, sweep blockers, wrap/reel/swing,
+      preserve release momentum, and break when their anchor is destroyed.
+  [ ] Hook hits set unshielded enemies to 1 HP; shields block every side effect.
+  [ ] Mining Rail charge, penetration, anatomy damage, recoil, audio, beam, and
+      haptics are readable and deterministic.
+  [ ] Steampack lift/glide feels controllable and its lit exhaust stays visual.
   [ ] Five-second spawn protection is visible and attacking cancels it.
   [ ] AUTO and ON FIRE honor every delay and ON FIRE requires a fresh press.
   [ ] Two/three-minute clocks, optional caps, FFA/team winners, and draws work.
@@ -321,12 +366,18 @@ Please check at least these paths:
       never become spawn floors, and never wall off the walk lane.
   [ ] Each FX profile changes density without changing terrain or damage.
   [ ] Repeated explosions and deaths visibly vary and collapse supports.
+  [ ] Digging/collapse never teleports a living miner across the map.
+  [ ] Nails, pellets, melee, blasts, and rail shots match visible anatomy.
+  [ ] Gore/debris falls or disperses and never builds one-cell vertical towers.
   [ ] Gore, flashes, camera shake, and damage-number options work.
   [ ] Local hit/kill feedback triggers; unrelated bot fights do not flash.
   [ ] Hit markers, crosshair pulses, killfeed, multikills, and sprees are clear.
-  [ ] Audio v2 motif, speech, ambience, confirms, and master volume work.
+  [ ] Audio timing/pitch remain stable at 15 through Unlimited presentation.
+  [ ] Motif, contextual speech, ambience, confirms, and master volume work.
   [ ] C, M, and controller R3 barks match their visible speech bubbles.
-  [ ] MINER'S INDEX has 86 readable entries, six rows, arrows, and back only.
+  [ ] Dummy Mode removes only local bark cooldown; bots remain sparse.
+  [ ] Laptop Mode and each qualified cap preserve match results and 60 Hz time.
+  [ ] MINER'S INDEX has 87 readable entries, six rows, arrows, and back only.
   [ ] F5 reloads valid Lua data and rejects invalid data without corruption.
   [ ] Rising lava, water cooling, fire, firedamp, liquids, and collapse work.
   [ ] Pause/results/restart/fullscreen/quit paths remain stable.
@@ -335,7 +386,7 @@ Please check at least these paths:
 10. RECORD AND SHARE QA FEEDBACK
 --------------------------------
 
-The included 65-checkpoint workbook is:
+The included 88-checkpoint workbook is:
 
   qa/VOX_QA_FEEDBACK.xlsx
 
@@ -396,10 +447,14 @@ Create clean Linux tester archives with:
 
   tools/package-linux-demo.sh
 
+The packager requires Python 3 with openpyxl and verifies that the committed
+QA workbook byte-matches a fresh deterministic build from its checkpoint CSV.
+On Debian-family systems the package name is python3-openpyxl.
+
 For an explicitly non-release package from a dirty development tree only:
 
   VOX_PACKAGE_ALLOW_DIRTY=1 \
-  VOX_PACKAGE_VERSION=v0.0.2-dev \
+  VOX_PACKAGE_VERSION=v0.0.3-dev \
   tools/package-linux-demo.sh
 
 
@@ -414,7 +469,7 @@ Both archives must report OK. The binary bundle contains SBOM.spdx.json, raw
 package-time evidence, GPL notices, the Lua catalog, and launch/test scripts.
 The matching Corresponding Source archive is distributed beside it.
 
-v0.0.2 is still the Linux CPU-software vertical slice. Windows, macOS,
+v0.0.3 is still the Linux CPU-software vertical slice. Windows, macOS,
 historical operating systems, a GPU renderer, network multiplayer, a complete
 rigid-body solver, device-specific remapping wizards for every unknown pad, and
 final competitive bot quality remain planned/evidence-gated work. Record only

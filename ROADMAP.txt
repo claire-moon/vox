@@ -24,6 +24,22 @@ v0.0.2 DEVELOPMENT CANDIDATE:
   validation, repeatable hashes per simulation profile, controller/manual
   acceptance, reviewed QA workbook, source archive, SBOM, and checksums.
 
+v0.0.3 STABILITY AND SYSTEMS CANDIDATE:
+  Preserve the complete v0.0.2 match while correcting and extending:
+  - bounded collision recovery instead of living-player spawn teleports;
+  - swept anatomy hits, natural loose debris, and bounded awake reactions;
+  - casting/attached rope physics, Hold/Toggle policy, and nonlethal hook hits;
+  - lift-and-glide steampack feedback and a charged piercing Mining Rail;
+  - device-clock audio, expanded contextual speech, controller-family prompts,
+    Switch Pro haptics, 15 FPS, Laptop Mode, and close-zoom native detail;
+  - camera-visible work and hard frame-cap qualification without changing the
+    fixed 60 Hz match or deterministic FX profile.
+
+  ABI 9 and settings schema 3 are intentional compatibility boundaries. This
+  row remains a candidate until the v0.0.3 checklist, Linux bundle, manual
+  controller/audio pass, performance soak, QA workbook, and source evidence
+  are complete.
+
 Modern future targets:
   Windows 10/11 x86-64
   macOS 11+ Intel/Apple Silicon
@@ -44,7 +60,7 @@ No platform becomes VERIFIED from a compile alone. Record the exact OS,
 CPU, GPU/API, compiler, build, boot, input, render, match-completion, and
 performance evidence before advertising support.
 
-Engine milestones after the v0.0.2 acceptance gate:
+Engine milestones after the v0.0.3 acceptance gate:
   - replay/input-log format and deterministic network research;
   - broader rigid-body/joint/constraint physics behind the stable C ABI;
   - renderer-neutral snapshots plus measured OpenGL/D3D/Metal adapters;
