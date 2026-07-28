@@ -38,6 +38,15 @@
 #define DIGS_RAIL_STONE_COST 72U
 #define DIGS_RAIL_RECOIL_Q16 98304L
 #define DIGS_PROJECTILE_GRAVITY_Q16 6144L
+#define DIGS_PULASKI_CHARGE_TICKS 30U
+#define DIGS_PULASKI_RETURN_TICKS 24U
+#define DIGS_BOLT_CHARGE_TICKS 30U
+#define DIGS_BOLT_OVERHEAT_TICKS 150U
+#define DIGS_BOLT_STREAK_LIMIT 4U
+#define DIGS_FIRECRACKER_CHARGE_TICKS 60U
+#define DIGS_SMOKER_TRAIL_TICKS 4U
+#define DIGS_HOT_RAIL_RANGE_CELLS 14U
+#define DIGS_HYDROSHOT_RANGE_CELLS 18U
 #define DIGS_REACTION_SAMPLES 128U
 #define DIGS_AI_MEMORY_TICKS 180U
 #define DIGS_AI_HEARING_TICKS 120U
@@ -50,29 +59,32 @@
 #define DIGS_MUZZLE_CLEARANCE_Q16 16384L
 
 static const vox_digs_weapon_properties digs_weapons[VOX_DIGS_TOOL_COUNT] = {
-    {"PICK", 10U, 28U, 2U, 0U, 0U, VOX_DIGS_WEAPON_MELEE, 0U, 0U},
-    {"BLAST CHARGE", 45U, 72U, 8U, 512U, 60U,
-     VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_EXPLOSIVE |
-     VOX_DIGS_WEAPON_GRAVITY, 0U, 0U},
-    {"SMOKE POT", 35U, 0U, 4U, 640U, 45U,
+    /* The direct swing remains melee.  The charged release shares this slot
+     * but is a gravity-driven returning projectile, hence the gravity flag. */
+    {"PULASKI", 8U, 32U, 2U, 1152U, 0U,
+     VOX_DIGS_WEAPON_MELEE | VOX_DIGS_WEAPON_GRAVITY,
+     DIGS_PULASKI_CHARGE_TICKS, 0U},
+    {"POPPER", 6U, 18U, 2U, 0U, 0U,
+     VOX_DIGS_WEAPON_HITSCAN | VOX_DIGS_WEAPON_EXPLOSIVE, 0U, 0U},
+    {"SMOKER", 32U, 1U, 5U, 768U, 90U,
      VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_DEPOSIT |
      VOX_DIGS_WEAPON_GRAVITY, 0U, 0U},
-    {"CINDER FLASK", 30U, 12U, 4U, 768U, 40U,
-     VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_DEPOSIT |
-     VOX_DIGS_WEAPON_GRAVITY, 0U, 0U},
-    {"PRESSURE HOSE", 4U, 4U, 0U, 1536U, 12U,
+    {"HOT RAIL", 5U, 10U, 2U, 0U, 0U,
+     VOX_DIGS_WEAPON_HITSCAN | VOX_DIGS_WEAPON_DEPOSIT, 0U, 0U},
+    {"HYDROSHOT", 7U, 0U, 0U, 1664U, 14U,
      VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_DEPOSIT, 0U, 0U},
-    {"SLEDGE", 28U, 48U, 4U, 0U, 0U, VOX_DIGS_WEAPON_MELEE, 0U, 0U},
-    {"NAIL GUN", 5U, 18U, 0U, 2048U, 40U,
+    {"GIANT FUCKING HAMMER", 50U, 100U, 7U, 0U, 0U,
+     VOX_DIGS_WEAPON_MELEE | VOX_DIGS_WEAPON_EXPLOSIVE, 0U, 0U},
+    {"BOLT ACTION", 38U, 100U, 2U, 0U, 0U,
+     VOX_DIGS_WEAPON_HITSCAN | VOX_DIGS_WEAPON_PENETRATING,
+     DIGS_BOLT_CHARGE_TICKS, 0U},
+    {"SCATTERBRAIN", 120U, 28U, 3U, 2048U, 20U,
      VOX_DIGS_WEAPON_PROJECTILE, 0U, 0U},
-    {"BOILER SHOTGUN", 36U, 14U, 2U, 1792U, 20U,
-     VOX_DIGS_WEAPON_PROJECTILE, 0U, 0U},
-    {"CONCUSSION GRENADE", 46U, 38U, 10U, 768U, 50U,
+    {"FIRECRACKER", 48U, 42U, 8U, 768U, 50U,
      VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_EXPLOSIVE |
-     VOX_DIGS_WEAPON_GRAVITY, 0U, 0U},
-    {"NAIL BOMB", 56U, 62U, 8U, 640U, 55U,
-     VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_EXPLOSIVE |
-     VOX_DIGS_WEAPON_GRAVITY, 0U, 0U},
+     VOX_DIGS_WEAPON_GRAVITY, DIGS_FIRECRACKER_CHARGE_TICKS, 0U},
+    {"BORE DRILL", 10U, 100U, 3U, 0U, 0U,
+     VOX_DIGS_WEAPON_MELEE | VOX_DIGS_WEAPON_PENETRATING, 0U, 0U},
     {"MINING RAIL", DIGS_RAIL_COOLDOWN_TICKS, DIGS_RAIL_MAX_DAMAGE, 0U,
      0U, 0U, VOX_DIGS_WEAPON_HITSCAN | VOX_DIGS_WEAPON_PENETRATING,
      DIGS_RAIL_MAX_CHARGE_TICKS, DIGS_RAIL_START_ENERGY}
@@ -119,6 +131,8 @@ static int digs_segment_is_clear(const vox_world *world,
                                  vox_i32 to_y_q16,
                                  vox_i32 *last_x_q16,
                                  vox_i32 *last_y_q16);
+static int digs_projectile_hits_solid(const vox_world *world, vox_u32 x,
+                                      vox_u32 y);
 static void digs_step_weapon_input(vox_digs_match *match, vox_u16 player);
 static vox_result digs_fire_rail(vox_digs_match *match, vox_u16 player,
                                  vox_u16 charge_ticks,
@@ -1659,6 +1673,9 @@ vox_result vox_digs_match_init(vox_digs_match *match,
         match->last_damage_part[i] = VOX_DIGS_NO_PART;
         match->rail_charge_ticks[i] = 0U;
         match->rail_charging[i] = 0U;
+        match->weapon_charge_ticks[i] = 0U;
+        match->weapon_charging[i] = 0U;
+        match->bolt_shot_streak[i] = 0U;
         match->ropes[i].anchor_x_q16 = 0L;
         match->ropes[i].anchor_y_q16 = 0L;
         match->ropes[i].length_q16 = DIGS_ROPE_MIN_LENGTH_Q16;
@@ -1888,6 +1905,9 @@ static void digs_try_respawn(vox_digs_match *match, vox_u16 player)
         match->last_damage_part[player] = VOX_DIGS_NO_PART;
         match->rail_charge_ticks[player] = 0U;
         match->rail_charging[player] = 0U;
+        match->weapon_charge_ticks[player] = 0U;
+        match->weapon_charging[player] = 0U;
+        match->bolt_shot_streak[player] = 0U;
         match->respawn_ticks[player] = 0U;
         match->respawn_ready[player] = 0U;
         match->respawn_requested[player] = 0U;
@@ -2434,6 +2454,75 @@ static vox_u16 digs_choose_hit_part(const vox_digs_match *match,
                      VOX_DIGS_ANATOMY_PART_COUNT);
 }
 
+static int digs_part_descends_from(vox_u16 candidate, vox_u16 ancestor)
+{
+    if (candidate == ancestor) {
+        return 1;
+    }
+    if ((ancestor == VOX_DIGS_PART_LEFT_UPPER_ARM &&
+         (candidate == VOX_DIGS_PART_LEFT_FOREARM ||
+          candidate == VOX_DIGS_PART_LEFT_HAND)) ||
+        (ancestor == VOX_DIGS_PART_RIGHT_UPPER_ARM &&
+         (candidate == VOX_DIGS_PART_RIGHT_FOREARM ||
+          candidate == VOX_DIGS_PART_RIGHT_HAND)) ||
+        (ancestor == VOX_DIGS_PART_LEFT_FOREARM &&
+         candidate == VOX_DIGS_PART_LEFT_HAND) ||
+        (ancestor == VOX_DIGS_PART_RIGHT_FOREARM &&
+         candidate == VOX_DIGS_PART_RIGHT_HAND) ||
+        (ancestor == VOX_DIGS_PART_LEFT_THIGH &&
+         (candidate == VOX_DIGS_PART_LEFT_SHIN ||
+          candidate == VOX_DIGS_PART_LEFT_FOOT)) ||
+        (ancestor == VOX_DIGS_PART_RIGHT_THIGH &&
+         (candidate == VOX_DIGS_PART_RIGHT_SHIN ||
+          candidate == VOX_DIGS_PART_RIGHT_FOOT)) ||
+        (ancestor == VOX_DIGS_PART_LEFT_SHIN &&
+         candidate == VOX_DIGS_PART_LEFT_FOOT) ||
+        (ancestor == VOX_DIGS_PART_RIGHT_SHIN &&
+         candidate == VOX_DIGS_PART_RIGHT_FOOT)) {
+        return 1;
+    }
+    return 0;
+}
+
+static void digs_sever_limb_chain(vox_digs_match *match, vox_u16 attacker,
+                                  vox_u16 victim, vox_u16 weapon,
+                                  vox_u16 part, vox_u16 damage_flags,
+                                  vox_i32 wound_x_q16, vox_i32 wound_y_q16)
+{
+    vox_u16 candidate;
+    for (candidate = 0U; candidate < VOX_DIGS_ANATOMY_PART_COUNT;
+         ++candidate) {
+        vox_digs_anatomy_part *anatomy = &match->anatomy[victim][candidate];
+        vox_u16 gib;
+        if (!digs_part_descends_from(candidate, part) ||
+            (anatomy->flags & VOX_DIGS_PART_VITAL) != 0U ||
+            (anatomy->flags & VOX_DIGS_PART_SEVERED) != 0U) {
+            continue;
+        }
+        anatomy->flags = (vox_u16)(anatomy->flags |
+                                   VOX_DIGS_PART_SEVERED |
+                                   VOX_DIGS_PART_BLEEDING);
+        anatomy->health = 0U;
+        if (anatomy->bleed_rate_q8 < 12U) {
+            anatomy->bleed_rate_q8 = 12U;
+        }
+        for (gib = 0U; gib < 4U; ++gib) {
+            vox_u32 noise = digs_noise(match->rules.seed, match->tick + gib,
+                                       candidate, victim + weapon * 41U);
+            digs_spawn_effect_variant(match, VOX_MAT_FLESH,
+                wound_x_q16 + ((vox_i32)(noise % 7U) - 3L) * 4096L,
+                wound_y_q16 + ((vox_i32)((noise >> 5) % 5U) - 2L) * 4096L,
+                ((vox_i32)((noise >> 9) % 17U) - 8L) * 6144L,
+                -12288L - (vox_i32)((noise >> 15) % 10U) * 4096L,
+                (vox_u16)(54U + noise % 72U), victim,
+                (vox_u16)((candidate << 3) | gib));
+        }
+        digs_emit_event(match, VOX_DIGS_EVENT_LIMB_SEVER, attacker, victim,
+                        weapon, VOX_MAT_FLESH, wound_x_q16, wound_y_q16,
+                        candidate, (vox_u16)(damage_flags & 15U));
+    }
+}
+
 vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
                               vox_u16 victim, vox_u16 weapon,
                               vox_u16 part, vox_u16 damage,
@@ -2444,6 +2533,9 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
     vox_u16 i;
     vox_u16 fatal = 0U;
     vox_u16 aggregate_damage = damage;
+    vox_digs_hurtbox wound_box;
+    vox_i32 wound_x_q16;
+    vox_i32 wound_y_q16;
     if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
         !vox_digs_player_is_active(match, victim) ||
         !match->alive[victim] || damage == 0U ||
@@ -2474,6 +2566,13 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
     if (part == VOX_DIGS_NO_PART) {
         part = digs_choose_hit_part(match, attacker, victim, weapon, damage);
     }
+    if (vox_digs_anatomy_hurtbox(part, &wound_box) != VOX_OK) {
+        return VOX_ERR_INVALID;
+    }
+    wound_x_q16 = match->players[victim].position_x.value_q16 +
+                   wound_box.offset_x_q16;
+    wound_y_q16 = match->players[victim].position_y.value_q16 +
+                   wound_box.offset_y_q16;
     anatomy = &match->anatomy[victim][part];
     if (weapon == VOX_DIGS_TOOL_RAIL_GUN &&
         part >= VOX_DIGS_PART_LEFT_UPPER_ARM) {
@@ -2503,8 +2602,7 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
         vox_i32 spread_y = -10240L -
             (vox_i32)((noise >> 8) % 13U) * 4096L;
         digs_spawn_effect_variant(match, VOX_MAT_BLOOD,
-            match->players[victim].position_x.value_q16,
-            match->players[victim].position_y.value_q16,
+            wound_x_q16, wound_y_q16,
             spread_x, spread_y, (vox_u16)(34U + noise % 60U), victim,
             (vox_u16)((part << 4) | (noise & 15U)));
     }
@@ -2515,18 +2613,8 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
         if (anatomy->flags & VOX_DIGS_PART_VITAL) {
             fatal = 1U;
         } else if (!(anatomy->flags & VOX_DIGS_PART_SEVERED)) {
-            anatomy->flags = (vox_u16)(anatomy->flags |
-                                       VOX_DIGS_PART_SEVERED);
-            digs_spawn_effect_variant(match, VOX_MAT_FLESH,
-                match->players[victim].position_x.value_q16,
-                match->players[victim].position_y.value_q16,
-                ((vox_i32)(part & 3U) - 1L) * 16384L,
-                -32768L - (vox_i32)part * 1024L, 100U, victim, part);
-            digs_emit_event(match, VOX_DIGS_EVENT_LIMB_SEVER, attacker,
-                            victim, weapon, VOX_MAT_FLESH,
-                            match->players[victim].position_x.value_q16,
-                            match->players[victim].position_y.value_q16,
-                            part, (vox_u16)(damage_flags & 15U));
+            digs_sever_limb_chain(match, attacker, victim, weapon, part,
+                                  damage_flags, wound_x_q16, wound_y_q16);
         }
     }
     if (damage_flags & VOX_DIGS_DAMAGE_HEAT) {
@@ -2551,8 +2639,7 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
     }
     digs_emit_event(match, VOX_DIGS_EVENT_DAMAGE, attacker, victim,
                     weapon, VOX_MAT_BLOOD,
-                    match->players[victim].position_x.value_q16,
-                    match->players[victim].position_y.value_q16,
+                    wound_x_q16, wound_y_q16,
                     damage, (vox_u16)((part << 4) |
                                       (damage_flags & 15U)));
     if (aggregate_damage < match->health[victim]) {
@@ -2603,17 +2690,17 @@ vox_result vox_digs_apply_damage(vox_digs_match *match, vox_u16 attacker,
 
 static vox_u16 digs_projectile_material(vox_u16 weapon)
 {
-    if (weapon == VOX_DIGS_TOOL_SMOKE_POT) {
+    if (weapon == VOX_DIGS_TOOL_SMOKER) {
         return VOX_MAT_SMOKE;
     }
-    if (weapon == VOX_DIGS_TOOL_CINDER_FLASK) {
+    if (weapon == VOX_DIGS_TOOL_HOT_RAIL) {
         return VOX_MAT_LAVA;
     }
-    if (weapon == VOX_DIGS_TOOL_PRESSURE_HOSE) {
+    if (weapon == VOX_DIGS_TOOL_HYDROSHOT) {
         return VOX_MAT_WATER;
     }
-    if (weapon == VOX_DIGS_TOOL_BLAST_CHARGE ||
-        weapon == VOX_DIGS_TOOL_NAIL_BOMB) {
+    if (weapon == VOX_DIGS_TOOL_POPPER ||
+        weapon == VOX_DIGS_TOOL_FIRECRACKER) {
         return VOX_MAT_COAL;
     }
     return VOX_MAT_METAL;
@@ -2622,7 +2709,8 @@ static vox_u16 digs_projectile_material(vox_u16 weapon)
 static vox_result digs_spawn_projectile(vox_digs_match *match,
                                         vox_u16 player, vox_u16 weapon,
                                         vox_u32 target_x,
-                                        vox_u32 target_y)
+                                        vox_u32 target_y,
+                                        vox_u16 speed_scale_q8)
 {
     const vox_digs_weapon_properties *properties = &digs_weapons[weapon];
     vox_digs_projectile *projectile = 0;
@@ -2663,7 +2751,8 @@ static vox_result digs_spawn_projectile(vox_digs_match *match,
     if (divisor == 0U) {
         divisor = 1U;
     }
-    speed_q16 = (vox_i32)properties->projectile_speed_q8 << 8;
+    speed_q16 = ((vox_i32)properties->projectile_speed_q8 << 8) *
+                (vox_i32)speed_scale_q8 / 256L;
     center_x_q16 = match->players[player].position_x.value_q16;
     center_y_q16 = match->players[player].position_y.value_q16;
     distance_x_q16 = 2147483647L;
@@ -2776,7 +2865,8 @@ static vox_i32 digs_nearest_hurtbox_distance(const vox_digs_match *match,
 
 static void digs_damage_radius(vox_digs_match *match, vox_u16 attacker,
                                vox_u32 x, vox_u32 y, vox_u16 radius,
-                               vox_u16 damage, vox_u16 weapon)
+                               vox_u16 damage, vox_u16 weapon,
+                               vox_u16 ignore_attacker)
 {
     vox_u16 player;
     vox_i32 radius_q16 = (vox_i32)radius << 16;
@@ -2789,7 +2879,8 @@ static void digs_damage_radius(vox_digs_match *match, vox_u16 attacker,
         vox_i32 delta_x;
         vox_u16 dealt;
         vox_u16 part;
-        if (!match->alive[player]) {
+        if (!match->alive[player] ||
+            (ignore_attacker && player == attacker)) {
             continue;
         }
         distance = digs_nearest_hurtbox_distance(
@@ -2831,10 +2922,11 @@ static vox_result digs_fire_melee(vox_digs_match *match, vox_u16 player,
     vox_i32 delta_x = (vox_i32)target_x - player_x;
     vox_i32 delta_y = (vox_i32)target_y - player_y;
     vox_u16 victim;
+    vox_u16 reach = weapon == VOX_DIGS_TOOL_GIANT_HAMMER ?
+                    DIGS_SCALE(5U) : DIGS_SCALE(4U);
     int terrain_blocked = digs_cell_is_solid(&match->world, target_x,
                                               target_y);
-    if (digs_abs_i32(delta_x) > DIGS_SCALE(4U) ||
-        digs_abs_i32(delta_y) > DIGS_SCALE(4U)) {
+    if (digs_abs_i32(delta_x) > reach || digs_abs_i32(delta_y) > reach) {
         return VOX_ERR_INVALID;
     }
     if (target_x > 0U && target_y > 0U &&
@@ -2855,8 +2947,18 @@ static vox_result digs_fire_melee(vox_digs_match *match, vox_u16 player,
             (void)vox_digs_apply_hit(match, player, victim, weapon,
                                      part,
                                      properties->damage,
+                                     weapon == VOX_DIGS_TOOL_PULASKI ?
+                                     VOX_DIGS_DAMAGE_BALLISTIC :
                                      VOX_DIGS_DAMAGE_BLUNT);
         }
+    }
+    if (weapon == VOX_DIGS_TOOL_GIANT_HAMMER) {
+        digs_damage_radius(match, player, target_x, target_y,
+                           DIGS_SCALE(4U), (vox_u16)(properties->damage / 2U),
+                           weapon, 1U);
+        match->players[player].velocity_x.value_q16 -=
+            delta_x < 0L ? -65536L : 65536L;
+        match->players[player].velocity_y.value_q16 = -49152L;
     }
     digs_spawn_effect(match, VOX_MAT_METAL,
                       (vox_i32)(target_x << 16),
@@ -3053,6 +3155,294 @@ static vox_result digs_fire_rail(vox_digs_match *match, vox_u16 player,
     return VOX_OK;
 }
 
+static void digs_commit_weapon_fire(vox_digs_match *match, vox_u16 player,
+                                    vox_u16 weapon, vox_u32 target_x,
+                                    vox_u32 target_y, vox_u16 magnitude,
+                                    vox_u16 variant)
+{
+    const vox_digs_weapon_properties *properties = &digs_weapons[weapon];
+    match->selected_weapon[player] = weapon;
+    match->weapon_cooldown[player] = properties->cooldown_ticks;
+    match->aim_x[player] = (vox_u16)target_x;
+    match->aim_y[player] = (vox_u16)target_y;
+    match->facing_right[player] =
+        target_x >= (vox_u32)digs_q16_to_cell(
+            match->players[player].position_x.value_q16) ? 1U : 0U;
+    digs_end_spawn_shield(match, player);
+    digs_emit_event(match, VOX_DIGS_EVENT_WEAPON_FIRE, player,
+                    VOX_DIGS_NO_PLAYER, weapon,
+                    digs_projectile_material(weapon),
+                    match->players[player].position_x.value_q16,
+                    match->players[player].position_y.value_q16,
+                    magnitude, variant);
+}
+
+static void digs_trace_direction(const vox_digs_match *match, vox_u16 player,
+                                 vox_u32 target_x, vox_u32 target_y,
+                                 vox_i32 *step_x_out, vox_i32 *step_y_out,
+                                 vox_i32 *trace_x_out, vox_i32 *trace_y_out)
+{
+    vox_i32 source_x = match->players[player].position_x.value_q16;
+    vox_i32 source_y = match->players[player].position_y.value_q16;
+    vox_i32 delta_x = ((vox_i32)target_x << 16) + 32768L - source_x;
+    vox_i32 delta_y = ((vox_i32)target_y << 16) + 32768L - source_y;
+    vox_i32 distance = digs_distance_approx(delta_x, delta_y);
+    vox_i32 divisor;
+    vox_i32 direction_x_q8;
+    vox_i32 direction_y_q8;
+    if (distance <= 0L) {
+        delta_x = match->facing_right[player] ? 65536L : -65536L;
+        delta_y = 0L;
+        distance = 65536L;
+    }
+    divisor = distance / 256L;
+    if (divisor <= 0L) {
+        divisor = 1L;
+    }
+    direction_x_q8 = delta_x / divisor;
+    direction_y_q8 = delta_y / divisor;
+    if (direction_x_q8 > 256L) direction_x_q8 = 256L;
+    if (direction_x_q8 < -256L) direction_x_q8 = -256L;
+    if (direction_y_q8 > 256L) direction_y_q8 = 256L;
+    if (direction_y_q8 < -256L) direction_y_q8 = -256L;
+    *step_x_out = (DIGS_SWEEP_STEP_Q16 * direction_x_q8) / 256L;
+    *step_y_out = (DIGS_SWEEP_STEP_Q16 * direction_y_q8) / 256L;
+    if (*step_x_out == 0L && *step_y_out == 0L) {
+        *step_x_out = match->facing_right[player] ? 1L : -1L;
+    }
+    *trace_x_out = source_x;
+    *trace_y_out = source_y;
+}
+
+static vox_result digs_fire_popper(vox_digs_match *match, vox_u16 player,
+                                   vox_u32 target_x, vox_u32 target_y)
+{
+    const vox_digs_weapon_properties *properties =
+        &digs_weapons[VOX_DIGS_TOOL_POPPER];
+    vox_i32 step_x;
+    vox_i32 step_y;
+    vox_i32 trace_x;
+    vox_i32 trace_y;
+    vox_u32 step;
+    digs_trace_direction(match, player, target_x, target_y, &step_x,
+                         &step_y, &trace_x, &trace_y);
+    for (step = 0U; step < 128U; ++step) {
+        vox_i32 x_cell;
+        vox_i32 y_cell;
+        vox_u16 victim;
+        trace_x += step_x;
+        trace_y += step_y;
+        x_cell = digs_q16_to_cell(trace_x);
+        y_cell = digs_q16_to_cell(trace_y);
+        if (x_cell < 0L || y_cell < 0L ||
+            x_cell >= (vox_i32)VOX_WORLD_WIDTH ||
+            y_cell >= (vox_i32)VOX_WORLD_HEIGHT) {
+            break;
+        }
+        if (digs_projectile_hits_solid(&match->world, (vox_u32)x_cell,
+                                       (vox_u32)y_cell)) {
+            (void)vox_world_blast(&match->world, (vox_u32)x_cell,
+                                  (vox_u32)y_cell, VOX_WORLD_DEPTH - 1U,
+                                  properties->blast_radius, 550L << 16);
+            digs_damage_radius(match, player, (vox_u32)x_cell,
+                               (vox_u32)y_cell, properties->blast_radius,
+                               properties->damage, VOX_DIGS_TOOL_POPPER,
+                               1U);
+            break;
+        }
+        for (victim = 0U; victim < match->rules.player_count; ++victim) {
+            vox_u16 part = VOX_DIGS_NO_PART;
+            if (victim == player || !match->alive[victim] ||
+                !digs_point_hits_player(match, victim, trace_x, trace_y,
+                                        &part)) {
+                continue;
+            }
+            (void)vox_digs_apply_hit(match, player, victim,
+                                     VOX_DIGS_TOOL_POPPER, part,
+                                     properties->damage,
+                                     VOX_DIGS_DAMAGE_BALLISTIC);
+            (void)vox_world_blast(&match->world, (vox_u32)x_cell,
+                                  (vox_u32)y_cell, VOX_WORLD_DEPTH - 1U,
+                                  1U, 550L << 16);
+            return VOX_OK;
+        }
+    }
+    return VOX_OK;
+}
+
+static vox_result digs_fire_hot_rail(vox_digs_match *match, vox_u16 player,
+                                     vox_u32 target_x, vox_u32 target_y)
+{
+    const vox_digs_weapon_properties *properties =
+        &digs_weapons[VOX_DIGS_TOOL_HOT_RAIL];
+    vox_i32 step_x;
+    vox_i32 step_y;
+    vox_i32 trace_x;
+    vox_i32 trace_y;
+    vox_u32 step;
+    digs_trace_direction(match, player, target_x, target_y, &step_x,
+                         &step_y, &trace_x, &trace_y);
+    for (step = 0U; step < DIGS_HOT_RAIL_RANGE_CELLS * 8U; ++step) {
+        vox_i32 x_cell;
+        vox_i32 y_cell;
+        vox_u16 victim;
+        trace_x += step_x;
+        trace_y += step_y;
+        x_cell = digs_q16_to_cell(trace_x);
+        y_cell = digs_q16_to_cell(trace_y);
+        if (x_cell < 0L || y_cell < 0L ||
+            x_cell >= (vox_i32)VOX_WORLD_WIDTH ||
+            y_cell >= (vox_i32)VOX_WORLD_HEIGHT) {
+            break;
+        }
+        if (digs_projectile_hits_solid(&match->world, (vox_u32)x_cell,
+                                       (vox_u32)y_cell)) {
+            vox_u32 z;
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                const vox_cell *cell = vox_world_cell(&match->world,
+                    (vox_u32)x_cell, (vox_u32)y_cell, z);
+                if (cell == 0 || cell->material == VOX_MAT_AIR ||
+                    cell->material == VOX_MAT_BEDROCK) {
+                    continue;
+                }
+                if (cell->material == VOX_MAT_BIOMASS ||
+                    cell->material == VOX_MAT_COAL) {
+                    (void)vox_world_set(&match->world, (vox_u32)x_cell,
+                                        (vox_u32)y_cell, z, VOX_MAT_LAVA,
+                                        850L << 16);
+                } else {
+                    (void)vox_world_set(&match->world, (vox_u32)x_cell,
+                                        (vox_u32)y_cell, z,
+                                        cell->material, 850L << 16);
+                }
+            }
+            if ((step & 7U) == 0U) {
+                (void)vox_world_blast(&match->world, (vox_u32)x_cell,
+                                      (vox_u32)y_cell,
+                                      VOX_WORLD_DEPTH - 1U, 1U,
+                                      800L << 16);
+            }
+        }
+        for (victim = 0U; victim < match->rules.player_count; ++victim) {
+            vox_u16 part = VOX_DIGS_NO_PART;
+            if (victim == player || !match->alive[victim] ||
+                !digs_point_hits_player(match, victim, trace_x, trace_y,
+                                        &part)) {
+                continue;
+            }
+            (void)vox_digs_apply_hit(match, player, victim,
+                                     VOX_DIGS_TOOL_HOT_RAIL, part,
+                                     properties->damage,
+                                     VOX_DIGS_DAMAGE_HEAT);
+            return VOX_OK;
+        }
+    }
+    digs_spawn_effect_variant(match, VOX_MAT_LAVA, trace_x, trace_y,
+                              0L, -2048L, 8U, player,
+                              (vox_u16)(match->tick & 15U));
+    return VOX_OK;
+}
+
+static vox_result digs_fire_bore_drill(vox_digs_match *match,
+                                       vox_u16 player)
+{
+    const vox_digs_weapon_properties *properties =
+        &digs_weapons[VOX_DIGS_TOOL_BORE_DRILL];
+    vox_i32 source_x = digs_q16_to_cell(
+        match->players[player].position_x.value_q16);
+    vox_i32 source_y = digs_q16_to_cell(
+        match->players[player].position_y.value_q16);
+    vox_u16 step;
+    for (step = 1U; step <= DIGS_SCALE(12U); ++step) {
+        vox_i32 y_cell = source_y + (vox_i32)step;
+        vox_u16 victim;
+        if (source_x < 0L || y_cell < 0L ||
+            source_x >= (vox_i32)VOX_WORLD_WIDTH ||
+            y_cell >= (vox_i32)VOX_WORLD_HEIGHT) {
+            break;
+        }
+        if (digs_projectile_hits_solid(&match->world, (vox_u32)source_x,
+                                       (vox_u32)y_cell)) {
+            (void)vox_world_blast(&match->world, (vox_u32)source_x,
+                                  (vox_u32)y_cell, VOX_WORLD_DEPTH - 1U,
+                                  1U, 500L << 16);
+        }
+        if (match->players[player].velocity_y.value_q16 <= 0L) {
+            continue;
+        }
+        for (victim = 0U; victim < match->rules.player_count; ++victim) {
+            vox_u16 part = VOX_DIGS_NO_PART;
+            if (victim == player || !match->alive[victim] ||
+                !digs_point_hits_player(match, victim,
+                    (source_x << 16) + 32768L,
+                    (y_cell << 16) + 32768L, &part)) {
+                continue;
+            }
+            (void)vox_digs_apply_hit(match, player, victim,
+                                     VOX_DIGS_TOOL_BORE_DRILL, part,
+                                     properties->damage,
+                                     VOX_DIGS_DAMAGE_BLUNT);
+            return VOX_OK;
+        }
+    }
+    return VOX_OK;
+}
+
+static vox_result digs_fire_bolt_action(vox_digs_match *match,
+                                        vox_u16 player, vox_u32 target_x,
+                                        vox_u32 target_y)
+{
+    const vox_digs_weapon_properties *properties =
+        &digs_weapons[VOX_DIGS_TOOL_BOLT_ACTION];
+    vox_i32 step_x;
+    vox_i32 step_y;
+    vox_i32 trace_x;
+    vox_i32 trace_y;
+    vox_u16 bores = 0U;
+    vox_u32 step;
+    digs_trace_direction(match, player, target_x, target_y, &step_x,
+                         &step_y, &trace_x, &trace_y);
+    for (step = 0U; step < 224U; ++step) {
+        vox_i32 x_cell;
+        vox_i32 y_cell;
+        vox_u16 victim;
+        trace_x += step_x;
+        trace_y += step_y;
+        x_cell = digs_q16_to_cell(trace_x);
+        y_cell = digs_q16_to_cell(trace_y);
+        if (x_cell < 0L || y_cell < 0L ||
+            x_cell >= (vox_i32)VOX_WORLD_WIDTH ||
+            y_cell >= (vox_i32)VOX_WORLD_HEIGHT) {
+            break;
+        }
+        if (digs_projectile_hits_solid(&match->world, (vox_u32)x_cell,
+                                       (vox_u32)y_cell)) {
+            (void)vox_world_blast(&match->world, (vox_u32)x_cell,
+                                  (vox_u32)y_cell, VOX_WORLD_DEPTH - 1U,
+                                  1U, 900L << 16);
+            bores++;
+            if (bores >= 6U) {
+                break;
+            }
+            continue;
+        }
+        for (victim = 0U; victim < match->rules.player_count; ++victim) {
+            vox_u16 part = VOX_DIGS_NO_PART;
+            if (victim == player || !match->alive[victim] ||
+                !digs_point_hits_player(match, victim, trace_x, trace_y,
+                                        &part)) {
+                continue;
+            }
+            (void)vox_digs_apply_hit(match, player, victim,
+                                     VOX_DIGS_TOOL_BOLT_ACTION, part,
+                                     properties->damage,
+                                     VOX_DIGS_DAMAGE_BALLISTIC);
+            return VOX_OK;
+        }
+    }
+    return VOX_OK;
+}
+
 vox_result vox_digs_fire_weapon(vox_digs_match *match, vox_u16 player,
                                 vox_u16 weapon, vox_u32 target_x,
                                 vox_u32 target_y)
@@ -3075,11 +3465,19 @@ vox_result vox_digs_fire_weapon(vox_digs_match *match, vox_u16 player,
         result = digs_fire_rail(match, player,
                                 DIGS_RAIL_MAX_CHARGE_TICKS,
                                 target_x, target_y);
+    } else if (weapon == VOX_DIGS_TOOL_POPPER) {
+        result = digs_fire_popper(match, player, target_x, target_y);
+    } else if (weapon == VOX_DIGS_TOOL_HOT_RAIL) {
+        result = digs_fire_hot_rail(match, player, target_x, target_y);
+    } else if (weapon == VOX_DIGS_TOOL_BORE_DRILL) {
+        result = digs_fire_bore_drill(match, player);
+    } else if (weapon == VOX_DIGS_TOOL_BOLT_ACTION) {
+        result = digs_fire_bolt_action(match, player, target_x, target_y);
     } else if (properties->flags & VOX_DIGS_WEAPON_MELEE) {
         result = digs_fire_melee(match, player, weapon, target_x, target_y);
-    } else if (weapon == VOX_DIGS_TOOL_BOILER_SHOTGUN) {
+    } else if (weapon == VOX_DIGS_TOOL_SCATTERBRAIN) {
         spawned = 0U;
-        for (offset = -2; offset <= 2; ++offset) {
+        for (offset = -4; offset <= 4; ++offset) {
             long pellet_y = (long)target_y + (long)offset;
             if (pellet_y < 0L) {
                 pellet_y = 0L;
@@ -3088,35 +3486,24 @@ vox_result vox_digs_fire_weapon(vox_digs_match *match, vox_u16 player,
                 pellet_y = (long)VOX_WORLD_HEIGHT - 1L;
             }
             if (digs_spawn_projectile(match, player, weapon, target_x,
-                                      (vox_u32)pellet_y) == VOX_OK) {
+                                      (vox_u32)pellet_y, 256U) == VOX_OK) {
                 spawned++;
             }
         }
         result = spawned == 0U ? VOX_ERR_CAPACITY : VOX_OK;
     } else {
         result = digs_spawn_projectile(match, player, weapon,
-                                       target_x, target_y);
+                                       target_x, target_y, 256U);
     }
     if (result != VOX_OK) {
         return result;
     }
-    match->selected_weapon[player] = weapon;
-    match->weapon_cooldown[player] = properties->cooldown_ticks;
-    match->aim_x[player] = (vox_u16)target_x;
-    match->aim_y[player] = (vox_u16)target_y;
-    match->facing_right[player] =
-        target_x >= (vox_u32)digs_q16_to_cell(
-            match->players[player].position_x.value_q16) ? 1U : 0U;
-    digs_end_spawn_shield(match, player);
-    digs_emit_event(match, VOX_DIGS_EVENT_WEAPON_FIRE, player,
-                    VOX_DIGS_NO_PLAYER, weapon,
-                    digs_projectile_material(weapon),
-                    match->players[player].position_x.value_q16,
-                    match->players[player].position_y.value_q16,
-                    properties->damage,
-                    (vox_u16)(digs_noise(match->rules.seed, match->tick,
-                                         player,
-                                         (vox_u32)weapon * 19U) & 31U));
+    digs_commit_weapon_fire(match, player, weapon, target_x, target_y,
+                            properties->damage,
+                            (vox_u16)(digs_noise(match->rules.seed,
+                                                 match->tick, player,
+                                                 (vox_u32)weapon * 19U) &
+                                      31U));
     match->state_hash = vox_digs_hash(match);
     return VOX_OK;
 }
@@ -3154,6 +3541,52 @@ static void digs_release_rail(vox_digs_match *match, vox_u16 player)
     }
     match->rail_charge_ticks[player] = 0U;
     match->rail_charging[player] = 0U;
+}
+
+static void digs_release_charged_weapon(vox_digs_match *match,
+                                        vox_u16 player)
+{
+    vox_u16 weapon = match->selected_weapon[player];
+    vox_u16 charge = match->weapon_charge_ticks[player];
+    vox_u32 target_x = match->aim_x[player];
+    vox_u32 target_y = match->aim_y[player];
+    vox_result result = VOX_ERR_INVALID;
+    if (weapon == VOX_DIGS_TOOL_PULASKI) {
+        if (charge >= DIGS_PULASKI_CHARGE_TICKS &&
+            match->weapon_cooldown[player] == 0U) {
+            result = digs_spawn_projectile(match, player, weapon, target_x,
+                                           target_y, 256U);
+        }
+    } else if (weapon == VOX_DIGS_TOOL_BOLT_ACTION) {
+        if (charge >= DIGS_BOLT_CHARGE_TICKS &&
+            match->weapon_cooldown[player] == 0U) {
+            result = digs_fire_bolt_action(match, player, target_x, target_y);
+        }
+    } else if (weapon == VOX_DIGS_TOOL_FIRECRACKER) {
+        vox_u16 scale_q8 = (vox_u16)(128U +
+            ((vox_u32)charge * 256U) / DIGS_FIRECRACKER_CHARGE_TICKS);
+        if (scale_q8 > 384U) {
+            scale_q8 = 384U;
+        }
+        if (match->weapon_cooldown[player] == 0U) {
+            result = digs_spawn_projectile(match, player, weapon, target_x,
+                                           target_y, scale_q8);
+        }
+    }
+    if (result == VOX_OK) {
+        const vox_digs_weapon_properties *properties = &digs_weapons[weapon];
+        digs_commit_weapon_fire(match, player, weapon, target_x, target_y,
+                                properties->damage, charge);
+        if (weapon == VOX_DIGS_TOOL_BOLT_ACTION) {
+            match->bolt_shot_streak[player]++;
+            if (match->bolt_shot_streak[player] >= DIGS_BOLT_STREAK_LIMIT) {
+                match->bolt_shot_streak[player] = 0U;
+                match->weapon_cooldown[player] = DIGS_BOLT_OVERHEAT_TICKS;
+            }
+        }
+    }
+    match->weapon_charge_ticks[player] = 0U;
+    match->weapon_charging[player] = 0U;
 }
 
 static void digs_step_weapon_input(vox_digs_match *match, vox_u16 player)
@@ -3195,6 +3628,34 @@ static void digs_step_weapon_input(vox_digs_match *match, vox_u16 player)
     if (match->rail_charging[player]) {
         match->rail_charge_ticks[player] = 0U;
         match->rail_charging[player] = 0U;
+    }
+    if (weapon == VOX_DIGS_TOOL_PULASKI ||
+        weapon == VOX_DIGS_TOOL_BOLT_ACTION ||
+        weapon == VOX_DIGS_TOOL_FIRECRACKER) {
+        if ((actions & VOX_DIGS_ACTION_FIRE) != 0U) {
+            if (!match->weapon_charging[player]) {
+                match->weapon_charging[player] = 1U;
+                match->weapon_charge_ticks[player] = 0U;
+                if (weapon == VOX_DIGS_TOOL_PULASKI &&
+                    match->weapon_cooldown[player] == 0U) {
+                    (void)vox_digs_fire_weapon(match, player, weapon,
+                                               match->aim_x[player],
+                                               match->aim_y[player]);
+                }
+                digs_end_spawn_shield(match, player);
+            }
+            if (match->weapon_charge_ticks[player] <
+                digs_weapons[weapon].charge_ticks) {
+                match->weapon_charge_ticks[player]++;
+            }
+        } else if (match->weapon_charging[player]) {
+            digs_release_charged_weapon(match, player);
+        }
+        return;
+    }
+    if (match->weapon_charging[player]) {
+        match->weapon_charge_ticks[player] = 0U;
+        match->weapon_charging[player] = 0U;
     }
     if ((actions & VOX_DIGS_ACTION_FIRE) != 0U &&
         match->weapon_cooldown[player] == 0U) {
@@ -3625,7 +4086,20 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
         }
         digs_damage_radius(match, projectile.owner, x, y,
                            projectile.blast_radius, projectile.damage,
-                           projectile.weapon);
+                           projectile.weapon,
+                           projectile.arming_ticks > 0U ? 1U : 0U);
+        if (projectile.weapon == VOX_DIGS_TOOL_FIRECRACKER) {
+            for (spark = 0U; spark < 18U; ++spark) {
+                vox_u32 flame_noise = digs_noise(explosion_noise, spark,
+                                                  x, y + 17U);
+                digs_spawn_effect_variant(match, VOX_MAT_LAVA,
+                    (vox_i32)(x << 16), (vox_i32)(y << 16),
+                    ((vox_i32)(flame_noise % 13U) - 6L) * 4096L,
+                    -4096L - (vox_i32)((flame_noise >> 8) % 9U) * 3072L,
+                    (vox_u16)(18U + flame_noise % 24U), projectile.owner,
+                    (vox_u16)(flame_noise & 15U));
+            }
+        }
         digs_emit_event(match, VOX_DIGS_EVENT_EXPLOSION,
                         projectile.owner, hit_player, projectile.weapon,
                         projectile.material, (vox_i32)(x << 16),
@@ -3654,7 +4128,7 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
         vox_i32 velocity_y = -6144L -
                              (vox_i32)((noise >> 7) % 20U) * 4608L;
         vox_u16 material = debris_materials[spark];
-        if (projectile.weapon == VOX_DIGS_TOOL_NAIL_BOMB &&
+        if (projectile.weapon == VOX_DIGS_TOOL_BORE_DRILL &&
             (noise & 1U) == 0U) {
             material = VOX_MAT_METAL;
         } else if ((properties->flags & VOX_DIGS_WEAPON_EXPLOSIVE) &&
@@ -3685,6 +4159,38 @@ static void digs_step_projectiles(vox_digs_match *match)
             continue;
         }
         properties = &digs_weapons[projectile->weapon];
+        if (projectile->weapon == VOX_DIGS_TOOL_SMOKER &&
+            projectile->age_ticks % DIGS_SMOKER_TRAIL_TICKS == 0U) {
+            vox_u16 cloud;
+            for (cloud = 0U; cloud < 3U; ++cloud) {
+                vox_u32 noise = digs_noise(match->rules.seed, match->tick,
+                                           slot, cloud + projectile->age_ticks);
+                digs_spawn_effect_variant(match, VOX_MAT_SMOKE,
+                    projectile->position_x_q16, projectile->position_y_q16,
+                    ((vox_i32)(noise % 5U) - 2L) * 2048L,
+                    -2048L - (vox_i32)((noise >> 7) % 3U) * 1024L,
+                    (vox_u16)(36U + noise % 32U), projectile->owner,
+                    (vox_u16)(noise & 15U));
+            }
+        }
+        if (projectile->weapon == VOX_DIGS_TOOL_PULASKI &&
+            projectile->age_ticks >= DIGS_PULASKI_RETURN_TICKS) {
+            vox_i32 return_x = match->players[projectile->owner]
+                               .position_x.value_q16 -
+                               projectile->position_x_q16;
+            vox_i32 return_y = match->players[projectile->owner]
+                               .position_y.value_q16 -
+                               projectile->position_y_q16;
+            if (digs_distance_approx(return_x, return_y) < (2L << 16)) {
+                projectile->active = 0U;
+                if (match->projectile_count > 0U) {
+                    match->projectile_count--;
+                }
+                continue;
+            }
+            projectile->velocity_x_q16 = return_x / 5L;
+            projectile->velocity_y_q16 = return_y / 5L;
+        }
         if (properties->flags & VOX_DIGS_WEAPON_GRAVITY) {
             projectile->velocity_y_q16 += DIGS_PROJECTILE_GRAVITY_Q16;
         }
@@ -3702,7 +4208,12 @@ static void digs_step_projectiles(vox_digs_match *match)
         for (substep = 0U; substep < substeps; ++substep) {
             vox_i32 x_cell;
             vox_i32 y_cell;
+            vox_i32 previous_x_q16;
+            vox_i32 previous_y_q16;
             vox_u16 player;
+            int bounced = 0;
+            previous_x_q16 = projectile->position_x_q16;
+            previous_y_q16 = projectile->position_y_q16;
             projectile->position_x_q16 += digs_div_trunc_positive(
                 projectile->velocity_x_q16, substeps);
             projectile->position_y_q16 += digs_div_trunc_positive(
@@ -3732,12 +4243,41 @@ static void digs_step_projectiles(vox_digs_match *match)
                                         projectile->position_x_q16,
                                         projectile->position_y_q16, 0)) {
                 projectile->owner_clear = 0U;
-                projectile->arming_ticks = 0U;
             }
             if (!projectile->owner_clear &&
                 digs_projectile_hits_solid(&match->world,
                                            (vox_u32)x_cell,
                                            (vox_u32)y_cell)) {
+                if (projectile->weapon == VOX_DIGS_TOOL_SMOKER) {
+                    projectile->position_x_q16 = previous_x_q16;
+                    projectile->position_y_q16 = previous_y_q16;
+                    projectile->velocity_x_q16 =
+                        -(projectile->velocity_x_q16 * 3L / 5L);
+                    projectile->velocity_y_q16 =
+                        -(projectile->velocity_y_q16 * 2L / 5L) - 4096L;
+                    break;
+                }
+                if (projectile->weapon == VOX_DIGS_TOOL_PULASKI) {
+                    /* A charged Pulaski shaves a small, noisy notch into a
+                     * wall before it turns around.  It is intentionally not
+                     * an explosion: the axe stays in flight and returns. */
+                    (void)vox_world_blast(&match->world,
+                                          (vox_u32)x_cell,
+                                          (vox_u32)y_cell,
+                                          VOX_WORLD_DEPTH - 1U,
+                                          projectile->blast_radius,
+                                          360L << 16);
+                    digs_spawn_effect_variant(match, VOX_MAT_METAL,
+                        projectile->position_x_q16,
+                        projectile->position_y_q16,
+                        projectile->velocity_x_q16 / -4L,
+                        -8192L, 12U, projectile->owner,
+                        (vox_u16)(projectile->age_ticks & 15U));
+                    projectile->position_x_q16 = previous_x_q16;
+                    projectile->position_y_q16 = previous_y_q16;
+                    projectile->age_ticks = DIGS_PULASKI_RETURN_TICKS;
+                    break;
+                }
                 digs_detonate_projectile(match, slot, (vox_u32)x_cell,
                                          (vox_u32)y_cell,
                                          VOX_DIGS_NO_PLAYER,
@@ -3749,13 +4289,60 @@ static void digs_step_projectiles(vox_digs_match *match)
                 vox_u16 hit_part = VOX_DIGS_NO_PART;
                 if (!match->alive[player] ||
                     (player == projectile->owner &&
-                     projectile->owner_clear)) {
+                     projectile->arming_ticks > 0U &&
+                     !(projectile->weapon == VOX_DIGS_TOOL_PULASKI &&
+                       projectile->age_ticks >=
+                       DIGS_PULASKI_RETURN_TICKS))) {
                     continue;
                 }
                 if (digs_point_hits_player(match, player,
                                            projectile->position_x_q16,
                                            projectile->position_y_q16,
                                            &hit_part)) {
+                    if (projectile->weapon == VOX_DIGS_TOOL_SMOKER) {
+                        /* The canister is utility first: a direct body
+                         * strike is only a tiny bump, then it ricochets
+                         * instead of vanishing before it can lay smoke. */
+                        if (projectile->damage > 0U) {
+                            (void)vox_digs_apply_hit(match,
+                                projectile->owner, player,
+                                projectile->weapon, hit_part,
+                                projectile->damage,
+                                VOX_DIGS_DAMAGE_BLUNT);
+                        }
+                        projectile->position_x_q16 = previous_x_q16;
+                        projectile->position_y_q16 = previous_y_q16;
+                        projectile->velocity_x_q16 =
+                            -(projectile->velocity_x_q16 * 3L / 5L);
+                        projectile->velocity_y_q16 =
+                            -(projectile->velocity_y_q16 * 2L / 5L) -
+                            4096L;
+                        bounced = 1;
+                        break;
+                    }
+                    if (projectile->weapon == VOX_DIGS_TOOL_PULASKI) {
+                        if (player != projectile->owner) {
+                            (void)vox_digs_apply_hit(match, projectile->owner,
+                                player, projectile->weapon, hit_part,
+                                projectile->damage,
+                                VOX_DIGS_DAMAGE_BALLISTIC);
+                            projectile->age_ticks =
+                                DIGS_PULASKI_RETURN_TICKS;
+                        } else {
+                            projectile->active = 0U;
+                            if (match->projectile_count > 0U) {
+                                match->projectile_count--;
+                            }
+                        }
+                        detonated = 1;
+                        break;
+                    }
+                    if (projectile->weapon == VOX_DIGS_TOOL_HYDROSHOT) {
+                        match->players[player].velocity_x.value_q16 +=
+                            projectile->velocity_x_q16 / 3L;
+                        match->players[player].velocity_y.value_q16 +=
+                            projectile->velocity_y_q16 / 4L - 8192L;
+                    }
                     digs_detonate_projectile(match, slot,
                                              (vox_u32)x_cell,
                                              (vox_u32)y_cell, player,
@@ -3763,6 +4350,9 @@ static void digs_step_projectiles(vox_digs_match *match)
                     detonated = 1;
                     break;
                 }
+            }
+            if (bounced) {
+                break;
             }
             if (detonated) {
                 break;
@@ -3774,9 +4364,6 @@ static void digs_step_projectiles(vox_digs_match *match)
         projectile->age_ticks++;
         if (projectile->arming_ticks > 0U) {
             projectile->arming_ticks--;
-            if (projectile->arming_ticks == 0U) {
-                projectile->owner_clear = 0U;
-            }
         }
         if (projectile->fuse_ticks > 0U) {
             projectile->fuse_ticks--;
@@ -3947,6 +4534,7 @@ static void digs_step_bleeding(vox_digs_match *match)
         vox_u16 part;
         vox_u16 total_rate = 0U;
         vox_u16 damage;
+        vox_u32 accumulated;
         if (!match->alive[player]) {
             continue;
         }
@@ -3977,12 +4565,12 @@ static void digs_step_bleeding(vox_digs_match *match)
         if (match->spawn_shield_ticks[player] > 0U) {
             continue;
         }
-        if (match->bleed_accumulator_q8[player] >
-            (vox_u16)(65535U - total_rate)) {
+        accumulated = (vox_u32)match->bleed_accumulator_q8[player] +
+                      (vox_u32)total_rate;
+        if (accumulated > 65535U) {
             match->bleed_accumulator_q8[player] = 65535U;
         } else {
-            match->bleed_accumulator_q8[player] = (vox_u16)(
-                match->bleed_accumulator_q8[player] + total_rate);
+            match->bleed_accumulator_q8[player] = (vox_u16)accumulated;
         }
         damage = (vox_u16)(match->bleed_accumulator_q8[player] / 256U);
         match->bleed_accumulator_q8[player] = (vox_u16)(
@@ -4194,6 +4782,9 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
         hash = digs_hash_mix(hash, (vox_u32)match->last_damage_part[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->rail_charge_ticks[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->rail_charging[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->weapon_charge_ticks[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->weapon_charging[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->bolt_shot_streak[i]);
         hash = digs_hash_mix(hash,
                              (vox_u32)match->bleed_accumulator_q8[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->clot_ticks[i]);

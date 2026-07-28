@@ -36,9 +36,11 @@ remain under `docs/releasing/` and are not retroactively changed by this work.
   can resolve into an archipelago, continent, or twin-hill macro landform.
   Sparse rope fixtures sit high above the complete jump envelope and never
   place support legs across the ground route.
-- Eleven steampunk tools and weapons: Pick, Blast Charge, Smoke Pot, Cinder Flask,
-  Pressure Hose, Sledge, Nail Gun, Boiler Shotgun, Concussion Grenade, and Nail
-  Bomb, plus the charged, energy-piercing Mining Rail.
+- Eleven steampunk tools and weapons: Pulaski, Popper, Smoker, Hot Rail,
+  Hydroshot, Giant Fucking Hammer, Bolt Action, Scatterbrain, Firecracker,
+  and Bore Drill, plus the charged, energy-piercing Mining Rail. Charged
+  releases, bouncing smoke trails, water knockback, returning axe throws, and
+  terrain-boring hitscan tools are all fixed-step simulation behavior.
 - Accelerated/coyote/buffered movement, a swept casting hook and stable
   terrain-wrapping segmented rope with reel/break rules, lift-and-glide steam
   traversal, fixed-pool projectiles, destructible and collapsing terrain,
@@ -233,7 +235,7 @@ weapon-aware reach without opening a window. Cap qualification, audio cadence,
 bark/G2P coverage, haptic mixing, the canonical four-player simulation load,
 settings migration, and camera transforms also have non-windowed deterministic
 checks. `--load-self-test 600` is the host-independent correctness gate: it
-checks exact activity and state hash `f3924b81` without judging wall-clock
+checks exact activity and state hash `c37e44b6` without judging wall-clock
 speed. `--performance-self-test 600` retains the strict 5 ms average, 8 ms p95,
 and 16.67 ms maximum qualification and is release evidence only on the named
 i7-10750H laptop bench. Hosted CI never treats shared-runner timing as that
@@ -263,9 +265,9 @@ exercise the identical scalar fallback explicitly.
 - Menus: arrow keys or controller D-pad/left stick move; `Enter`, controller
   A, or Start confirms; `Esc` or controller B goes back.
 - Player 1 keyboard/mouse: `A`/`D` run, `Space` jumps, left `Shift` uses the
-  steam pack, `Q` operates the rope, `W`/`S` reel an attached rope, mouse aims,
+  steam pack, right mouse operates the rope, `W`/`S` reel an attached rope, mouse aims,
   `C` barks, and `E` or left mouse fires. Number keys `1` through `0` select
-  the original tools and `-` selects the Mining Rail.
+  the current tools and `-` selects the Mining Rail.
 - Player 2 keyboard: left/right run, up jumps, right `Shift` uses steam, `/`
   holds the rope, right `Ctrl` fires, `I`/`J`/`K`/`L` aims, and `,`/`.` cycles
   tools; `M` barks.

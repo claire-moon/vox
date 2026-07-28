@@ -21,7 +21,7 @@ int main(void)
         return 1;
     }
     vox_world_init(&world);
-    if (VOX_ABI_VERSION != 9U || VOX_ERR_COLLISION == VOX_ERR_INVALID ||
+    if (VOX_ABI_VERSION != 10U || VOX_ERR_COLLISION == VOX_ERR_INVALID ||
         vox_world_set(&world, 4U, 4U, 0U, VOX_MAT_FLESH,
                       20L << 16) != VOX_OK ||
         vox_world_collision_classify(&world, 4U, 4U) !=

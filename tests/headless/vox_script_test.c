@@ -38,11 +38,11 @@ static int test_catalog_shape(const vox_script_catalog *catalog)
     }
     entry = vox_script_catalog_find(catalog, "weapon.nail_bomb");
     if (entry == 0 || entry->kind != VOX_SCRIPT_KIND_WEAPON ||
-        strcmp(entry->title, "NAIL BOMB") != 0) {
+        strcmp(entry->title, "BORE DRILL") != 0) {
         return 3;
     }
-    value = vox_script_entry_value(entry, "fragment_count");
-    if (value == 0 || value->value != 24) {
+    value = vox_script_entry_value(entry, "damage");
+    if (value == 0 || value->value != 100) {
         return 4;
     }
     entry = vox_script_catalog_find(catalog, "system.index");

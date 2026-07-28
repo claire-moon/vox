@@ -1427,20 +1427,21 @@ static int test_weapon_table_and_pool(void)
     target_x = (vox_u32)(player_x + 8L < (vox_i32)VOX_WORLD_WIDTH ?
                          player_x + 8L : player_x - 8L);
     target_y = (vox_u32)(player_y > 6L ? player_y - 6L : player_y);
-    if (vox_digs_fire_weapon(&match, 0U, VOX_DIGS_TOOL_NAIL_GUN,
+    if (vox_digs_fire_weapon(&match, 0U, VOX_DIGS_TOOL_PRESSURE_HOSE,
                              target_x, target_y) != VOX_OK ||
         match.projectile_count != 1U ||
-        match.selected_weapon[0] != VOX_DIGS_TOOL_NAIL_GUN ||
+        match.selected_weapon[0] != VOX_DIGS_TOOL_PRESSURE_HOSE ||
         match.weapon_cooldown[0] == 0U) {
         return 9;
     }
-    if (vox_digs_fire_weapon(&match, 0U, VOX_DIGS_TOOL_NAIL_GUN,
+    if (vox_digs_fire_weapon(&match, 0U, VOX_DIGS_TOOL_PRESSURE_HOSE,
                              target_x, target_y) != VOX_ERR_INVALID) {
         return 10;
     }
     for (shot = 1U; shot < VOX_DIGS_MAX_PROJECTILES; ++shot) {
         match.weapon_cooldown[0] = 0U;
-        if (vox_digs_fire_weapon(&match, 0U, VOX_DIGS_TOOL_NAIL_GUN,
+        if (vox_digs_fire_weapon(&match, 0U,
+                                 VOX_DIGS_TOOL_PRESSURE_HOSE,
                                  target_x, target_y) != VOX_OK) {
             return 11;
         }
@@ -1450,7 +1451,7 @@ static int test_weapon_table_and_pool(void)
     }
     match.weapon_cooldown[0] = 0U;
     hash_before = vox_digs_hash(&match);
-    if (vox_digs_fire_weapon(&match, 0U, VOX_DIGS_TOOL_NAIL_GUN,
+    if (vox_digs_fire_weapon(&match, 0U, VOX_DIGS_TOOL_PRESSURE_HOSE,
                              target_x, target_y) != VOX_ERR_CAPACITY ||
         match.projectile_count != VOX_DIGS_MAX_PROJECTILES ||
         vox_digs_hash(&match) != hash_before) {
@@ -1458,7 +1459,7 @@ static int test_weapon_table_and_pool(void)
     }
     rules.weapon_mask = (vox_u16)(1U << VOX_DIGS_TOOL_PICK);
     if (vox_digs_match_init(&match, &rules) != VOX_OK ||
-        vox_digs_fire_weapon(&match, 0U, VOX_DIGS_TOOL_NAIL_GUN,
+        vox_digs_fire_weapon(&match, 0U, VOX_DIGS_TOOL_PRESSURE_HOSE,
                              target_x, target_y) != VOX_ERR_INVALID) {
         return 14;
     }
@@ -1850,7 +1851,7 @@ static int test_projectile_owner_clearance(void)
     target_x = (vox_u32)(player_x + 12L < (vox_i32)VOX_WORLD_WIDTH ?
                          player_x + 12L : player_x - 12L);
     target_y = (vox_u32)(player_y > 10L ? player_y - 10L : 0L);
-    if (vox_digs_fire_weapon(&match, 0U, VOX_DIGS_TOOL_BLAST_CHARGE,
+    if (vox_digs_fire_weapon(&match, 0U, VOX_DIGS_TOOL_CONCUSSION_GRENADE,
                              target_x, target_y) != VOX_OK) {
         return 2;
     }
@@ -1882,7 +1883,9 @@ static int test_projectile_owner_clearance(void)
     }
     health_before = match.health[0];
     if (vox_digs_match_step(&match) != VOX_OK ||
-        match.health[0] != health_before) {
+        match.health[0] != health_before || !match.projectiles[slot].active ||
+        match.projectiles[slot].arming_ticks !=
+            VOX_DIGS_PROJECTILE_OWNER_CLEAR_TICKS - 1U) {
         return 4;
     }
     if (match.projectiles[slot].active) {
@@ -1893,14 +1896,41 @@ static int test_projectile_owner_clearance(void)
         match.projectiles[slot].velocity_x_q16 = 0L;
         match.projectiles[slot].velocity_y_q16 = 0L;
         match.projectiles[slot].owner_clear = 0U;
-        match.projectiles[slot].arming_ticks = 0U;
         match.projectiles[slot].fuse_ticks = 1U;
         if (vox_digs_match_step(&match) != VOX_OK ||
-            match.health[0] >= health_before) {
+            match.health[0] != health_before) {
             return 5;
         }
     } else {
         return 6;
+    }
+    match.weapon_cooldown[0] = 0U;
+    if (vox_digs_fire_weapon(&match, 0U, VOX_DIGS_TOOL_CONCUSSION_GRENADE,
+                             target_x, target_y) != VOX_OK) {
+        return 7;
+    }
+    found = 0U;
+    for (slot = 0U; slot < VOX_DIGS_MAX_PROJECTILES; ++slot) {
+        if (match.projectiles[slot].active) {
+            found = 1U;
+            break;
+        }
+    }
+    if (!found) {
+        return 8;
+    }
+    match.projectiles[slot].position_x_q16 =
+        match.players[0].position_x.value_q16;
+    match.projectiles[slot].position_y_q16 =
+        match.players[0].position_y.value_q16;
+    match.projectiles[slot].velocity_x_q16 = 0L;
+    match.projectiles[slot].velocity_y_q16 = 0L;
+    match.projectiles[slot].owner_clear = 0U;
+    match.projectiles[slot].arming_ticks = 0U;
+    match.projectiles[slot].fuse_ticks = 1U;
+    if (vox_digs_match_step(&match) != VOX_OK ||
+        match.health[0] >= health_before) {
+        return 9;
     }
     return 0;
 }

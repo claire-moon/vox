@@ -338,7 +338,68 @@ static int check_all_presets(void)
     return 1;
 }
 
-static int check_v2_contract(void)
+static int check_weapon_palette(void)
+{
+    static const vox_u16 presets[] = {
+        VOX_AUDIO_PRESET_PULASKI,
+        VOX_AUDIO_PRESET_POPPER,
+        VOX_AUDIO_PRESET_SMOKER,
+        VOX_AUDIO_PRESET_HOT_RAIL,
+        VOX_AUDIO_PRESET_HYDROSHOT,
+        VOX_AUDIO_PRESET_GIANT_HAMMER,
+        VOX_AUDIO_PRESET_BOLT_ACTION,
+        VOX_AUDIO_PRESET_SCATTERBRAIN,
+        VOX_AUDIO_PRESET_FIRECRACKER,
+        VOX_AUDIO_PRESET_BORE_DRILL
+    };
+    vox_u32 hashes[sizeof(presets) / sizeof(presets[0])];
+    vox_i16 pcm[1024U * 2U];
+    vox_u32 preset_index;
+    vox_u32 compare_index;
+
+    for (preset_index = 0U;
+         preset_index < (vox_u32)(sizeof(presets) / sizeof(presets[0]));
+         ++preset_index) {
+        vox_audio_engine engine;
+        vox_u32 sample;
+        vox_u32 energy;
+
+        if (vox_audio_init(&engine, TEST_RATE, 0x4404U) != VOX_OK ||
+            !emit(&engine, presets[preset_index], 9U, 0,
+                  0x9000U + preset_index) ||
+            vox_audio_render(&engine, pcm, 1024U) != VOX_OK) {
+            fprintf(stderr, "weapon palette setup failed at %lu\n",
+                    (unsigned long)preset_index);
+            return 0;
+        }
+        energy = 0U;
+        for (sample = 0U; sample < 1024U * 2U; ++sample) {
+            vox_i32 value;
+
+            value = pcm[sample];
+            energy += (vox_u32)(value < 0L ? -value : value);
+        }
+        if (energy == 0U) {
+            fprintf(stderr, "weapon palette preset %u was silent\n",
+                    (unsigned int)presets[preset_index]);
+            return 0;
+        }
+        hashes[preset_index] = hash_pcm(pcm, 1024U * 2U);
+        for (compare_index = 0U; compare_index < preset_index;
+             ++compare_index) {
+            if (hashes[compare_index] == hashes[preset_index]) {
+                fprintf(stderr,
+                        "weapon palette presets %u and %u matched\n",
+                        (unsigned int)presets[compare_index],
+                        (unsigned int)presets[preset_index]);
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+static int check_v3_contract(void)
 {
     vox_audio_engine engine;
     vox_audio_config config;
@@ -346,12 +407,15 @@ static int check_v2_contract(void)
     vox_audio_speech speech;
     vox_u8 token;
 
-    if (VOX_AUDIO_VERSION != 2U ||
+    if (VOX_AUDIO_VERSION != 3U ||
         VOX_AUDIO_PRESET_FIRE != 1 ||
         VOX_AUDIO_PRESET_BARK_KILL != 14 ||
         VOX_AUDIO_PRESET_ZOOM_CLICK != 15 ||
+        VOX_AUDIO_PRESET_PULASKI != 21 ||
+        VOX_AUDIO_PRESET_BORE_DRILL != 30 ||
+        VOX_AUDIO_PRESET_COUNT != 31 ||
         sizeof(engine) > VOX_AUDIO_ENGINE_BYTES_MAX) {
-        fprintf(stderr, "audio v2 ABI constants changed\n");
+        fprintf(stderr, "audio v3 ABI constants changed\n");
         return 0;
     }
     vox_audio_config_init(&config, TEST_RATE, 0x901U);
@@ -770,7 +834,8 @@ int main(void)
         !check_saturation() ||
         !check_effects_finish() ||
         !check_all_presets() ||
-        !check_v2_contract() ||
+        !check_weapon_palette() ||
+        !check_v3_contract() ||
         !check_note_scheduler() ||
         !check_master_volume() ||
         !check_speech_queue() ||
@@ -779,6 +844,6 @@ int main(void)
         !check_state_hash_contract()) {
         return 1;
     }
-    printf("VOX Audio v2 deterministic synthesis contract passed\n");
+    printf("VOX Audio v3 deterministic synthesis contract passed\n");
     return 0;
 }

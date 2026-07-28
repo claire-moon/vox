@@ -15,7 +15,7 @@ extern "C" {
  * an operating-system audio device.  Emit and render calls for one engine must
  * be serialized by its owner if a backend uses more than one thread.
  */
-#define VOX_AUDIO_VERSION 2U
+#define VOX_AUDIO_VERSION 3U
 #define VOX_AUDIO_VOICE_COUNT 8U
 #define VOX_AUDIO_OUTPUT_CHANNELS 2U
 #define VOX_AUDIO_NOTE_CAPACITY 32U
@@ -60,7 +60,23 @@ typedef enum vox_audio_preset {
     VOX_AUDIO_PRESET_AMBIENCE_WIND = 18,
     VOX_AUDIO_PRESET_AMBIENCE_WATER = 19,
     VOX_AUDIO_PRESET_AMBIENCE_LAVA = 20,
-    VOX_AUDIO_PRESET_COUNT = 21
+    /*
+     * DIGS v0.0.4 weapon palette.  These are source-native patch IDs rather
+     * than recorded samples: callers may use event_id and variant to make
+     * repeated shots differ deterministically without changing the patch's
+     * recognizable identity.
+     */
+    VOX_AUDIO_PRESET_PULASKI = 21,
+    VOX_AUDIO_PRESET_POPPER = 22,
+    VOX_AUDIO_PRESET_SMOKER = 23,
+    VOX_AUDIO_PRESET_HOT_RAIL = 24,
+    VOX_AUDIO_PRESET_HYDROSHOT = 25,
+    VOX_AUDIO_PRESET_GIANT_HAMMER = 26,
+    VOX_AUDIO_PRESET_BOLT_ACTION = 27,
+    VOX_AUDIO_PRESET_SCATTERBRAIN = 28,
+    VOX_AUDIO_PRESET_FIRECRACKER = 29,
+    VOX_AUDIO_PRESET_BORE_DRILL = 30,
+    VOX_AUDIO_PRESET_COUNT = 31
 } vox_audio_preset;
 
 typedef enum vox_audio_bus {

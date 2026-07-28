@@ -131,11 +131,11 @@ Player 1 keyboard and mouse:
   A / D             Move left/right.
   Space             Jump.
   Left Shift        Steam pack.
-  Q                 Operate rope in the selected Hold/Toggle mode.
+  Right mouse       Operate rope in the selected Hold/Toggle mode.
   E or left mouse   Fire/use selected tool.
   Mouse             Aim exactly through the current camera transform.
   W / S             Reel an attached rope shorter/longer.
-  1 through 0       Direct-select the original ten tools.
+  1 through 0       Direct-select the ten tools.
   -                 Direct-select the charged Mining Rail.
   Mouse wheel       Change camera zoom.
   Shift+wheel       Cycle allowed weapons.
@@ -207,11 +207,11 @@ traversal routes.
 
 The eleven-tool Full Works arsenal is:
 
-  1  Pick                         6  Sledge
-  2  Blast Charge                 7  Nail Gun
-  3  Smoke Pot                    8  Boiler Shotgun
-  4  Cinder Flask                 9  Concussion Grenade
-  5  Pressure Hose                0  Nail Bomb
+  1  Pulaski                      6  Giant Fucking Hammer
+  2  Popper                       7  Bolt Action
+  3  Smoker                       8  Scatterbrain
+  4  Hot Rail                     9  Firecracker
+  5  Hydroshot                    0  Bore Drill
   -  Mining Rail (hold to charge, release to fire)
 
 The Mining Rail loses energy while piercing soft terrain and aligned miners;
@@ -238,13 +238,14 @@ look-ahead, and uses momentum, contextual zoom, and optional shake. Mouse aim
 is transformed through the same camera and shake values used to draw the
 software cursor.
 
-Projectiles start at a body-relative muzzle and receive six simulation ticks
-of owner/launch-envelope clearance. Open shots leave the miner cleanly while
-an external wall still collides and ordinary self-damage returns afterward.
-The bottom-left match clock and names above every living miner make the match
-state visible. Local hits tint the victim red, mark the impact, pulse the
-attacker's crosshair, and play a hit confirm. A six-line feed records every
-death; local players receive named kill/death banners. Kills inside three
+Projectiles start at a body-relative muzzle. Their launch-envelope clearance
+is separate from 45 fixed ticks (0.75 seconds) of owner-only hit and splash
+immunity, so firing a weapon cannot instantly kill its miner while terrain and
+other miners still resolve normally. The bottom-left match clock and names
+above every living miner make the match state visible. Local hits tint the
+victim red, mark the impact, pulse the attacker crosshair, and play a hit
+confirm. A compact boxed feed records every death; local players receive named
+kill/death banners. Kills inside three
 seconds produce DOUBLE KILL, TRIPLE KILL, and MULTI KILL; five uninterrupted
 kills produce KILLING SPREE.
 
@@ -312,7 +313,7 @@ levels and isolation without requiring a pad, the performance test enforces
 the v0.0.3 four-miner simulation budget only on the named laptop bench, and
 the settings test checks schema migration without changing real user settings.
 The load test is the portable gate: at 600 ticks it validates exact activity
-and state hash f3924b81 without applying machine timing limits. Run the strict
+and state hash c37e44b6 without applying machine timing limits. Run the strict
 performance test only on the i7-10750H laptop qualification bench. The camera
 self-test checks every zoom and world edge for black exposure, verifies
 true close zoom plus full-world player/lava framing and the offscreen lava

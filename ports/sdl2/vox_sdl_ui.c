@@ -1,6 +1,13 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "vox_sdl_ui.h"
 
+/*
+ * Original, compact DOS-VGA-inspired bitmap face.  This is intentionally
+ * project-native data: DIGS neither loads nor redistributes a system font.
+ * The five-pixel advance leaves the glyphs tightly kerned at scale one while
+ * their one-pixel side bearings keep words readable at larger integer scales.
+ */
+
 static const vox_u8 vox_ui_letters[26][7] = {
     {14U,17U,17U,31U,17U,17U,17U},
     {30U,17U,17U,30U,17U,17U,30U},
@@ -200,7 +207,8 @@ int vox_ui_text_width(const char *text, int scale)
         ++count;
         ++text;
     }
-    return count == 0 ? 0 : count * 6 * scale - scale;
+    return count == 0 ? 0 :
+        count * VOX_UI_DOS_ADVANCE * scale;
 }
 
 void vox_ui_text(vox_ui_surface *surface, int x, int y, int scale,
@@ -215,21 +223,22 @@ void vox_ui_text(vox_ui_surface *surface, int x, int y, int scale,
         int column;
         if (*text == '\n') {
             x = origin_x;
-            y += 8 * scale;
+            y += VOX_UI_DOS_LINE_HEIGHT * scale;
             ++text;
             continue;
         }
-        for (row = 0; row < 7; ++row) {
+        for (row = 0; row < VOX_UI_DOS_GLYPH_HEIGHT; ++row) {
             vox_u8 bits = vox_ui_glyph_row(*text, row);
-            for (column = 0; column < 5; ++column) {
-                if (bits & (vox_u8)(1U << (4 - column))) {
+            for (column = 0; column < VOX_UI_DOS_GLYPH_WIDTH; ++column) {
+                if (bits & (vox_u8)(1U <<
+                                     (VOX_UI_DOS_GLYPH_WIDTH - 1 - column))) {
                     vox_ui_rect(surface, x + column * scale,
                                 y + row * scale, scale, scale,
                                 red, green, blue);
                 }
             }
         }
-        x += 6 * scale;
+        x += VOX_UI_DOS_ADVANCE * scale;
         ++text;
     }
 }
@@ -273,7 +282,7 @@ int vox_ui_text_wrap(vox_ui_surface *surface, int x, int y, int width,
         scale <= 0) {
         return 0;
     }
-    max_characters = (width + scale) / (6 * scale);
+    max_characters = width / (VOX_UI_DOS_ADVANCE * scale);
     if (max_characters < 1) {
         return 0;
     }
@@ -310,7 +319,8 @@ int vox_ui_text_wrap(vox_ui_surface *surface, int x, int y, int width,
                 line[index] = cursor[index];
             }
             line[candidate_length] = '\0';
-            vox_ui_text(surface, x, y + line_count * 9 * scale, scale,
+            vox_ui_text(surface, x, y + line_count *
+                        VOX_UI_DOS_LINE_HEIGHT * scale, scale,
                         line, red, green, blue);
         }
         consumed = line_length;

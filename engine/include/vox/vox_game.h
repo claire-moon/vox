@@ -23,7 +23,14 @@
 #define VOX_DIGS_RESPAWN_TICKS 180U
 #define VOX_DIGS_SPAWN_SHIELD_TICKS 300U
 #define VOX_DIGS_LAST_ATTACKER_TICKS 300U
-#define VOX_DIGS_PROJECTILE_OWNER_CLEAR_TICKS 6U
+/*
+ * Projectiles leave a miner's muzzle inside the same fixed simulation tick
+ * that their launch-volume clearance is resolved.  Keep the owner immunity
+ * independent from that geometric clearance so a weapon cannot immediately
+ * strike (or splash-damage) its shooter.  Forty-five ticks is 0.75 seconds
+ * at the authoritative 60 Hz rate.
+ */
+#define VOX_DIGS_PROJECTILE_OWNER_CLEAR_TICKS 45U
 #define VOX_DIGS_MAX_PROJECTILES 64U
 #define VOX_DIGS_FX_RETRO 768U
 #define VOX_DIGS_FX_STANDARD 1536U
@@ -108,6 +115,18 @@ typedef enum vox_digs_tool {
     VOX_DIGS_TOOL_RAIL_GUN = 10,
     VOX_DIGS_TOOL_COUNT = 11
 } vox_digs_tool;
+
+/* Stable numeric slots with v0.0.4 gameplay names. */
+#define VOX_DIGS_TOOL_PULASKI VOX_DIGS_TOOL_PICK
+#define VOX_DIGS_TOOL_POPPER VOX_DIGS_TOOL_BLAST_CHARGE
+#define VOX_DIGS_TOOL_SMOKER VOX_DIGS_TOOL_SMOKE_POT
+#define VOX_DIGS_TOOL_HOT_RAIL VOX_DIGS_TOOL_CINDER_FLASK
+#define VOX_DIGS_TOOL_HYDROSHOT VOX_DIGS_TOOL_PRESSURE_HOSE
+#define VOX_DIGS_TOOL_GIANT_HAMMER VOX_DIGS_TOOL_SLEDGE
+#define VOX_DIGS_TOOL_BOLT_ACTION VOX_DIGS_TOOL_NAIL_GUN
+#define VOX_DIGS_TOOL_SCATTERBRAIN VOX_DIGS_TOOL_BOILER_SHOTGUN
+#define VOX_DIGS_TOOL_FIRECRACKER VOX_DIGS_TOOL_CONCUSSION_GRENADE
+#define VOX_DIGS_TOOL_BORE_DRILL VOX_DIGS_TOOL_NAIL_BOMB
 
 typedef enum vox_digs_rope_state {
     VOX_DIGS_ROPE_IDLE = 0,
@@ -353,6 +372,10 @@ typedef struct vox_digs_match {
     vox_u16 last_damage_part[VOX_DIGS_MAX_SLOTS];
     vox_u16 rail_charge_ticks[VOX_DIGS_MAX_SLOTS];
     vox_u16 rail_charging[VOX_DIGS_MAX_SLOTS];
+    /* Generic held-tool presentation and release state. */
+    vox_u16 weapon_charge_ticks[VOX_DIGS_MAX_SLOTS];
+    vox_u16 weapon_charging[VOX_DIGS_MAX_SLOTS];
+    vox_u16 bolt_shot_streak[VOX_DIGS_MAX_SLOTS];
     vox_u16 bleed_accumulator_q8[VOX_DIGS_MAX_SLOTS];
     vox_u16 clot_ticks[VOX_DIGS_MAX_SLOTS];
     vox_u32 lava_level_q16;
