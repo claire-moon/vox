@@ -2411,7 +2411,29 @@ static int test_v003_rail_steam_and_replay(void)
     vox_digs_input input_a;
     vox_digs_input input_b;
     vox_u16 tick;
+    vox_u16 shield_before;
     vox_i32 release_velocity_x;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    rules.weapon_mask = (vox_u16)(rules.weapon_mask &
+        (vox_u16)~(vox_u16)(1U << VOX_DIGS_TOOL_RAIL_GUN));
+    if (vox_digs_match_init(&v003_match_a, &rules) != VOX_OK) {
+        return 19;
+    }
+    shield_before = v003_match_a.spawn_shield_ticks[0];
+    init_test_input(&input_a, 0U, 180U, 98U);
+    input_a.selected_weapon = VOX_DIGS_TOOL_RAIL_GUN;
+    input_a.actions = VOX_DIGS_ACTION_FIRE;
+    if (vox_digs_submit_input(&v003_match_a, &input_a) != VOX_OK ||
+        vox_digs_match_step(&v003_match_a) != VOX_OK ||
+        v003_match_a.rail_charging[0] != 0U ||
+        v003_match_a.rail_charge_ticks[0] != 0U ||
+        v003_match_a.spawn_shield_ticks[0] !=
+            (vox_u16)(shield_before - 1U) ||
+        event_type_seen(&v003_match_a, VOX_DIGS_EVENT_RAIL_CHARGE)) {
+        return 20;
+    }
     vox_digs_rules_classic(&rules);
     rules.player_count = 3U;
     rules.bot_mask = 0x0004U;

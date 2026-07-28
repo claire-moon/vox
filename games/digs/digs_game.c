@@ -3164,6 +3164,12 @@ static void digs_step_weapon_input(vox_digs_match *match, vox_u16 player)
         return;
     }
     if (weapon == VOX_DIGS_TOOL_RAIL_GUN) {
+        if ((match->rules.weapon_mask &
+             (vox_u16)(1U << VOX_DIGS_TOOL_RAIL_GUN)) == 0U) {
+            match->rail_charge_ticks[player] = 0U;
+            match->rail_charging[player] = 0U;
+            return;
+        }
         if ((actions & VOX_DIGS_ACTION_FIRE) != 0U &&
             match->weapon_cooldown[player] == 0U) {
             if (!match->rail_charging[player]) {
