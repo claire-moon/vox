@@ -17,6 +17,7 @@ typedef struct vox_fixed_point {
 #define VOX_PHYSICS_BODY_HIT_LEFT 4U
 #define VOX_PHYSICS_BODY_HIT_RIGHT 8U
 #define VOX_PHYSICS_BODY_HIT_CEILING 16U
+#define VOX_PHYSICS_BODY_RECOVERED 32U
 #define VOX_PHYSICS_BODY_HIT_FLOOR VOX_PHYSICS_BODY_GROUNDED
 
 typedef struct vox_physics_body {
@@ -48,6 +49,9 @@ vox_result vox_physics_step(vox_physics_body *body, vox_i32 gravity_q16);
 vox_result vox_physics_step_world(vox_physics_body *body,
                                   const vox_world *world,
                                   const vox_physics_step_config *config);
+/* Deterministically searches at most two cells without respawn semantics. */
+vox_result vox_physics_recover_overlap(vox_physics_body *body,
+                                       const vox_world *world);
 void vox_physics_accelerate_x(vox_physics_body *body, vox_i32 target_q16,
                               vox_i32 acceleration_q16,
                               vox_i32 deceleration_q16);

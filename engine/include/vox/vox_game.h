@@ -14,9 +14,10 @@
 #define VOX_DIGS_ACTION_JUMP 4U
 #define VOX_DIGS_ACTION_STEAM 8U
 #define VOX_DIGS_ACTION_ROPE 16U
+#define VOX_DIGS_ACTION_FIRE 32U
 #define VOX_DIGS_ACTION_MASK (VOX_DIGS_ACTION_LEFT | VOX_DIGS_ACTION_RIGHT | \
                               VOX_DIGS_ACTION_JUMP | VOX_DIGS_ACTION_STEAM | \
-                              VOX_DIGS_ACTION_ROPE)
+                              VOX_DIGS_ACTION_ROPE | VOX_DIGS_ACTION_FIRE)
 
 #define VOX_DIGS_MAX_HEALTH 100U
 #define VOX_DIGS_RESPAWN_TICKS 180U
@@ -30,6 +31,7 @@
 #define VOX_DIGS_MAX_EFFECTS VOX_DIGS_FX_CARNAGE
 #define VOX_DIGS_MAX_EVENTS 128U
 #define VOX_DIGS_ANATOMY_PART_COUNT 15U
+#define VOX_DIGS_ROPE_MAX_POINTS 12U
 #define VOX_DIGS_NO_PLAYER 65535U
 #define VOX_DIGS_NO_TEAM 65535U
 #define VOX_DIGS_NO_PART 65535U
@@ -42,6 +44,8 @@
 #define VOX_DIGS_WEAPON_EXPLOSIVE 4U
 #define VOX_DIGS_WEAPON_DEPOSIT 8U
 #define VOX_DIGS_WEAPON_GRAVITY 16U
+#define VOX_DIGS_WEAPON_HITSCAN 32U
+#define VOX_DIGS_WEAPON_PENETRATING 64U
 
 #define VOX_DIGS_DAMAGE_BALLISTIC 1U
 #define VOX_DIGS_DAMAGE_BLUNT 2U
@@ -101,8 +105,15 @@ typedef enum vox_digs_tool {
     VOX_DIGS_TOOL_BOILER_SHOTGUN = 7,
     VOX_DIGS_TOOL_CONCUSSION_GRENADE = 8,
     VOX_DIGS_TOOL_NAIL_BOMB = 9,
-    VOX_DIGS_TOOL_COUNT = 10
+    VOX_DIGS_TOOL_RAIL_GUN = 10,
+    VOX_DIGS_TOOL_COUNT = 11
 } vox_digs_tool;
+
+typedef enum vox_digs_rope_state {
+    VOX_DIGS_ROPE_IDLE = 0,
+    VOX_DIGS_ROPE_CASTING = 1,
+    VOX_DIGS_ROPE_ATTACHED = 2
+} vox_digs_rope_state;
 
 typedef enum vox_digs_anatomy_id {
     VOX_DIGS_PART_HEAD = 0,
@@ -145,7 +156,13 @@ typedef enum vox_digs_event_type {
     VOX_DIGS_EVENT_LIMB_SEVER = 12,
     VOX_DIGS_EVENT_BLEED = 13,
     VOX_DIGS_EVENT_RESPAWN_READY = 14,
-    VOX_DIGS_EVENT_MATCH_END = 15
+    VOX_DIGS_EVENT_MATCH_END = 15,
+    VOX_DIGS_EVENT_SHIELD_BLOCK = 16,
+    VOX_DIGS_EVENT_ROPE_CAST = 17,
+    VOX_DIGS_EVENT_ROPE_HIT = 18,
+    VOX_DIGS_EVENT_RAIL_CHARGE = 19,
+    VOX_DIGS_EVENT_RAIL_TRACE = 20,
+    VOX_DIGS_EVENT_CRUSH = 21
 } vox_digs_event_type;
 
 typedef struct vox_digs_weapon_properties {
@@ -156,6 +173,8 @@ typedef struct vox_digs_weapon_properties {
     vox_u16 projectile_speed_q8;
     vox_u16 fuse_ticks;
     vox_u16 flags;
+    vox_u16 charge_ticks;
+    vox_u16 penetration;
 } vox_digs_weapon_properties;
 
 typedef struct vox_digs_projectile {
@@ -189,7 +208,8 @@ typedef struct vox_digs_effect {
     vox_u16 ttl_ticks;
     vox_u16 variant;
     vox_u16 source;
-    vox_u16 reserved;
+    vox_u16 depth;
+    vox_u16 flags;
 } vox_digs_effect;
 
 typedef struct vox_digs_anatomy_part {
@@ -199,13 +219,39 @@ typedef struct vox_digs_anatomy_part {
     vox_u16 bleed_rate_q8;
 } vox_digs_anatomy_part;
 
+typedef struct vox_digs_hurtbox {
+    vox_i32 offset_x_q16;
+    vox_i32 offset_y_q16;
+    vox_i32 half_width_q16;
+    vox_i32 half_height_q16;
+    vox_u16 part;
+    vox_u16 reserved;
+} vox_digs_hurtbox;
+
+typedef struct vox_digs_rope_point {
+    vox_i32 position_x_q16;
+    vox_i32 position_y_q16;
+    vox_i32 previous_x_q16;
+    vox_i32 previous_y_q16;
+} vox_digs_rope_point;
+
 typedef struct vox_digs_rope {
     vox_i32 anchor_x_q16;
     vox_i32 anchor_y_q16;
     vox_i32 length_q16;
     vox_i32 tension_q16;
+    vox_i32 hook_x_q16;
+    vox_i32 hook_y_q16;
+    vox_i32 hook_velocity_x_q16;
+    vox_i32 hook_velocity_y_q16;
+    vox_i32 hook_travel_q16;
+    vox_digs_rope_point points[VOX_DIGS_ROPE_MAX_POINTS];
     vox_u16 active;
     vox_u16 integrity;
+    vox_u16 state;
+    vox_u16 point_count;
+    vox_u16 target_player;
+    vox_u16 flags;
 } vox_digs_rope;
 
 typedef struct vox_digs_ai_state {
@@ -262,6 +308,8 @@ typedef struct vox_digs_input {
     vox_u16 aim_y;
     vox_i16 move_x_q15;
     vox_i16 move_y_q15;
+    vox_u16 selected_weapon;
+    vox_u16 reserved;
 } vox_digs_input;
 
 typedef struct vox_digs_match {
@@ -301,6 +349,10 @@ typedef struct vox_digs_match {
     vox_u16 facing_right[VOX_DIGS_MAX_SLOTS];
     vox_u16 last_attacker[VOX_DIGS_MAX_SLOTS];
     vox_u32 last_attacker_tick[VOX_DIGS_MAX_SLOTS];
+    vox_u16 last_damage_weapon[VOX_DIGS_MAX_SLOTS];
+    vox_u16 last_damage_part[VOX_DIGS_MAX_SLOTS];
+    vox_u16 rail_charge_ticks[VOX_DIGS_MAX_SLOTS];
+    vox_u16 rail_charging[VOX_DIGS_MAX_SLOTS];
     vox_u16 bleed_accumulator_q8[VOX_DIGS_MAX_SLOTS];
     vox_u16 clot_ticks[VOX_DIGS_MAX_SLOTS];
     vox_u32 lava_level_q16;
@@ -345,6 +397,8 @@ vox_result vox_digs_submit_input(vox_digs_match *match,
 vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
                              vox_u16 tool, vox_u32 x, vox_u32 y, vox_u32 z);
 const vox_digs_weapon_properties *vox_digs_weapon_get(vox_u16 weapon);
+vox_result vox_digs_anatomy_hurtbox(vox_u16 part,
+                                    vox_digs_hurtbox *hurtbox);
 vox_result vox_digs_fire_weapon(vox_digs_match *match, vox_u16 player,
                                 vox_u16 weapon, vox_u32 target_x,
                                 vox_u32 target_y);

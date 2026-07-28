@@ -6,6 +6,7 @@ ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 OUT_ROOT=$ROOT/qa/out
 BINARY=
 BENCHMARK_FRAMES=240
+NAMED_BENCH_QUALIFY=${VOX_NAMED_BENCH_QUALIFY:-0}
 WORKBOOK_LIST=
 FAILURES=0
 
@@ -23,6 +24,8 @@ Options:
 
 Requires xleak and tar. Nothing is uploaded. Output is written under qa/out/.
 Review every generated file for private information before sharing the packet.
+Set VOX_NAMED_BENCH_QUALIFY=1 only on the named i7-10750H laptop bench to
+run and record the strict wall-clock performance qualification.
 EOF
 }
 
@@ -94,6 +97,10 @@ if ! { [ "$BENCHMARK_FRAMES" -ge 1 ] 2>/dev/null &&
        [ "$BENCHMARK_FRAMES" -le 100000 ] 2>/dev/null; }; then
     die "--benchmark-frames must be an integer from 1 to 100000"
 fi
+case "$NAMED_BENCH_QUALIFY" in
+    0|1) ;;
+    *) die "VOX_NAMED_BENCH_QUALIFY must be 0 or 1" ;;
+esac
 
 need_command xleak
 need_command tar
@@ -119,6 +126,11 @@ REPORT=$RUN_DIR/REPORT.md
 SYSTEM=$RUN_DIR/system.txt
 mkdir -p "$EXPORT_DIR" "$WORKBOOK_DIR" "$LOG_DIR" ||
     die "cannot create output directory: $RUN_DIR"
+if [ -r "$ROOT/qa/V0.0.3-QUICK-FEEDBACK.txt" ]; then
+    cp "$ROOT/qa/V0.0.3-QUICK-FEEDBACK.txt" \
+        "$RUN_DIR/QUICK-FEEDBACK.txt" ||
+        die "cannot copy the guided quick-feedback artifact"
+fi
 
 printf '%s\n' \
     'VOX QA system profile' \
@@ -256,6 +268,15 @@ SMOKE_STATUS="Skipped (no --binary supplied)"
 BENCHMARK_STATUS="Skipped (no --binary supplied)"
 VOX_HEADLESS_STATUS="Skipped (not found beside demo binary)"
 DIGS_HEADLESS_STATUS="Skipped (not found beside demo binary)"
+INPUT_STATUS="Skipped (no --binary supplied)"
+CAP_STATUS="Skipped (no --binary supplied)"
+AUDIO_CADENCE_STATUS="Skipped (no --binary supplied)"
+BARK_STATUS="Skipped (no --binary supplied)"
+HAPTIC_STATUS="Skipped (no --binary supplied)"
+LOAD_STATUS="Skipped (no --binary supplied)"
+NAMED_BENCH_STATUS="Skipped (set VOX_NAMED_BENCH_QUALIFY=1 on named bench)"
+SETTINGS_STATUS="Skipped (no --binary supplied)"
+CAMERA_STATUS="Skipped (no --binary supplied)"
 
 if [ -n "$BINARY" ]; then
     BINARY_BASE=$(basename "$BINARY")
@@ -284,6 +305,63 @@ if [ -n "$BINARY" ]; then
         FAILURES=$((FAILURES + 1))
     fi
 
+    if "$BINARY" --input-self-test >"$LOG_DIR/input-self-test.log" 2>&1; then
+        INPUT_STATUS=Pass
+    else
+        INPUT_STATUS=Fail
+        FAILURES=$((FAILURES + 1))
+    fi
+    if "$BINARY" --cap-self-test >"$LOG_DIR/cap-self-test.log" 2>&1; then
+        CAP_STATUS=Pass
+    else
+        CAP_STATUS=Fail
+        FAILURES=$((FAILURES + 1))
+    fi
+    if "$BINARY" --audio-cadence-self-test >"$LOG_DIR/audio-cadence-self-test.log" 2>&1; then
+        AUDIO_CADENCE_STATUS=Pass
+    else
+        AUDIO_CADENCE_STATUS=Fail
+        FAILURES=$((FAILURES + 1))
+    fi
+    if "$BINARY" --bark-self-test >"$LOG_DIR/bark-self-test.log" 2>&1; then
+        BARK_STATUS=Pass
+    else
+        BARK_STATUS=Fail
+        FAILURES=$((FAILURES + 1))
+    fi
+    if "$BINARY" --haptic-self-test >"$LOG_DIR/haptic-self-test.log" 2>&1; then
+        HAPTIC_STATUS=Pass
+    else
+        HAPTIC_STATUS=Fail
+        FAILURES=$((FAILURES + 1))
+    fi
+    if "$BINARY" --load-self-test 600 >"$LOG_DIR/load-self-test-600.log" 2>&1; then
+        LOAD_STATUS=Pass
+    else
+        LOAD_STATUS=Fail
+        FAILURES=$((FAILURES + 1))
+    fi
+    if [ "$NAMED_BENCH_QUALIFY" = 1 ]; then
+        if "$BINARY" --performance-self-test 600 >"$LOG_DIR/named-bench-performance-qualification-600.log" 2>&1; then
+            NAMED_BENCH_STATUS=Pass
+        else
+            NAMED_BENCH_STATUS=Fail
+            FAILURES=$((FAILURES + 1))
+        fi
+    fi
+    if "$BINARY" --settings-self-test "$RUN_DIR/settings-self-test.cfg" >"$LOG_DIR/settings-self-test.log" 2>&1; then
+        SETTINGS_STATUS=Pass
+    else
+        SETTINGS_STATUS=Fail
+        FAILURES=$((FAILURES + 1))
+    fi
+    if "$BINARY" --camera-self-test >"$LOG_DIR/camera-self-test.log" 2>&1; then
+        CAMERA_STATUS=Pass
+    else
+        CAMERA_STATUS=Fail
+        FAILURES=$((FAILURES + 1))
+    fi
+
     if [ -x "$BINARY_DIR/vox_headless" ]; then
         if "$BINARY_DIR/vox_headless" >"$LOG_DIR/vox-headless.log" 2>&1; then
             VOX_HEADLESS_STATUS=Pass
@@ -307,7 +385,7 @@ fi
     printf '%s\n\n' '> Review this report, copied workbooks, logs, screenshots, and videos for private information before sharing. This script intentionally does not collect environment variables, host names, user names, network identifiers, or hardware serial numbers.'
     printf '%s\n\n' '## Run summary'
     printf '%s\n' "- Run ID: \`$RUN_ID\`" "- Workbooks: $WORKBOOK_COUNT" "- xleak: \`$(xleak --version 2>/dev/null || printf unknown)\`"
-    printf '%s\n' "- Smoke test: $SMOKE_STATUS" "- Benchmark ($BENCHMARK_FRAMES frames per tier): $BENCHMARK_STATUS" "- VOX headless proof: $VOX_HEADLESS_STATUS" "- DIGS headless proof: $DIGS_HEADLESS_STATUS" "- Failed automation/export steps: $FAILURES"
+    printf '%s\n' "- Smoke test: $SMOKE_STATUS" "- Benchmark ($BENCHMARK_FRAMES frames per tier): $BENCHMARK_STATUS" "- Input self-test: $INPUT_STATUS" "- Cap qualification self-test: $CAP_STATUS" "- Audio cadence self-test: $AUDIO_CADENCE_STATUS" "- Bark/G2P self-test: $BARK_STATUS" "- Haptic mixer self-test: $HAPTIC_STATUS" "- Deterministic load self-test (600 ticks): $LOAD_STATUS" "- Named-bench performance qualification (600 ticks): $NAMED_BENCH_STATUS" "- Settings migration self-test: $SETTINGS_STATUS" "- Camera/zoom self-test: $CAMERA_STATUS" "- VOX headless proof: $VOX_HEADLESS_STATUS" "- DIGS headless proof: $DIGS_HEADLESS_STATUS" "- Failed automation/export steps: $FAILURES"
     printf '\n%s\n\n' '## System profile'
     sed 's/^/    /' "$SYSTEM"
     for sheet_key in checkpoints issues environment; do
@@ -326,7 +404,7 @@ fi
     printf '\n%s\n\n' '## Evidence index'
     # Backticks are intentional Markdown, not shell substitutions.
     # shellcheck disable=SC2016
-    printf '%s\n' '- `workbooks/`: exact local copies supplied to this run.' '- `exports/`: per-workbook CSV exported by xleak.' '- `combined-*.csv`: merged sheet exports with source workbook labels.' '- `logs/`: xleak diagnostics plus optional smoke, benchmark, and headless output.' '- `smoke.ppm`: deterministic non-windowed frame when the smoke test passed.' '- `system.txt`: privacy-conscious machine and binary profile.'
+    printf '%s\n' '- `QUICK-FEEDBACK.txt`: the versioned human-in-the-loop instructions, when present.' '- `workbooks/`: exact local copies supplied to this run.' '- `exports/`: per-workbook CSV exported by xleak.' '- `combined-*.csv`: merged sheet exports with source workbook labels.' '- `logs/`: xleak diagnostics plus optional smoke, benchmark, self-test, and headless output.' '- `smoke.ppm`: deterministic non-windowed frame when the smoke test passed.' '- `settings-self-test.cfg`: isolated settings-migration fixture, when generated.' '- `system.txt`: privacy-conscious machine and binary profile.'
     printf '\nGenerated locally; no files were uploaded.\n'
 } >"$REPORT"
 

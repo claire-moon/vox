@@ -1,5 +1,6 @@
 -- SPDX-License-Identifier: GPL-3.0-or-later
--- Flags: melee 1, projectile 2, explosive 4, deposit 8, gravity 16.
+-- Flags: melee 1, projectile 2, explosive 4, deposit 8, gravity 16,
+-- hitscan 32, penetrating 64.
 
 vox.define("weapon", "weapon.pick", {
     order = 200, title = "PICK", category = "TOOLS & WEAPONS",
@@ -79,4 +80,12 @@ vox.define("weapon", "weapon.nail_bomb", {
     detail = "The core produces an irregular excavation and pressure wave, then launches deterministic nails across open paths. Fragment count, velocity bands, sampled debris, heat, and anatomy targets derive from the event seed, giving each use a distinct but replayable signature. Metal persists after the smoke clears.",
     tags = "explosive,shrapnel,gore,terrain",
     values = { blast_radius = 8, cooldown_ticks = 56, damage = 62, damage_flags = 5, flags = 22, fragment_count = 24, fuse_ticks = 55, projectile_speed_q8 = 640 }
+})
+
+vox.define("weapon", "weapon.mining_rail", {
+    order = 210, title = "MINING RAIL", category = "TOOLS & WEAPONS",
+    summary = "A charged industrial rail that drills soft strata and resolves every pierced miner against exact anatomy.",
+    detail = "Hold fire for up to 1.2 seconds, then release a deterministic line through loose soil, sand, coal, biomass, bounded stone strata, and exposed miners. Energy falls after every body and material column. Bedrock, metal, and sufficient stone stop the trace. A maximum-charge hit is precision-lethal after exact anatomy resolves; a direct uncharged anatomy primitive can still sever a limb without inventing charge state.",
+    tags = "hitscan,charged,penetrating,precision,mining",
+    values = { charge_ticks = 72, cooldown_ticks = 75, damage = 100, damage_flags = 1, flags = 96, minimum_damage = 20, penetration = 180 }
 })

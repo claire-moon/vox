@@ -197,8 +197,8 @@ static int vox_react_water_lava(vox_world *world, vox_u32 x, vox_u32 y,
     return 0;
 }
 
-static void vox_wake_reaction_neighbors(vox_world *world, vox_u32 x,
-                                        vox_u32 y, vox_u32 z)
+static void vox_wake_reactive_contacts(vox_world *world, vox_u32 x,
+                                       vox_u32 y, vox_u32 z)
 {
     static const int delta_x[4] = {-1, 1, 0, 0};
     static const int delta_y[4] = {0, 0, -1, 1};
@@ -206,16 +206,30 @@ static void vox_wake_reaction_neighbors(vox_world *world, vox_u32 x,
     for (neighbor = 0U; neighbor < 4U; ++neighbor) {
         long sample_x = (long)x + (long)delta_x[neighbor];
         long sample_y = (long)y + (long)delta_y[neighbor];
+        vox_cell *cell;
+        const vox_material_properties *properties;
         if (sample_x >= 0L && sample_y >= 0L &&
             sample_x < (long)VOX_WORLD_WIDTH &&
             sample_y < (long)VOX_WORLD_HEIGHT) {
-            (void)vox_world_wake(world, (vox_u32)sample_x,
-                                 (vox_u32)sample_y, z);
+            cell = &world->cells[vox_index((vox_u32)sample_x,
+                                           (vox_u32)sample_y, z)];
+            if (cell->material == VOX_MAT_AIR ||
+                (cell->flags & VOX_CELL_AWAKE)) {
+                continue;
+            }
+            properties = vox_material_get(cell->material);
+            if (cell->material == VOX_MAT_WATER ||
+                (properties != 0 &&
+                 (properties->flags & VOX_MATERIAL_FLAMMABLE))) {
+                (void)vox_world_wake(world, (vox_u32)sample_x,
+                                     (vox_u32)sample_y, z);
+            }
         }
     }
 }
 
-static void vox_step_reactions(vox_world *world)
+static void vox_step_reactions(vox_world *world,
+                               const vox_u8 *active_frontier)
 {
     vox_u32 chunk_y;
     vox_u32 chunk_x;
@@ -228,9 +242,8 @@ static void vox_step_reactions(vox_world *world)
     vox_u32 blast_z = 0U;
     for (chunk_y = 0U; chunk_y < VOX_WORLD_CHUNKS_Y; ++chunk_y) {
         for (chunk_x = 0U; chunk_x < VOX_WORLD_CHUNKS_X; ++chunk_x) {
-            vox_chunk *chunk = &world->chunks[chunk_y * VOX_WORLD_CHUNKS_X +
-                                               chunk_x];
-            if (!(chunk->flags & VOX_CHUNK_ACTIVE)) {
+            vox_u32 active_index = chunk_y * VOX_WORLD_CHUNKS_X + chunk_x;
+            if (!active_frontier[active_index]) {
                 continue;
             }
             for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
@@ -241,7 +254,8 @@ static void vox_step_reactions(vox_world *world)
                         vox_cell *cell = &world->cells[vox_index(x, y, depth)];
                         const vox_material_properties *properties;
                         int hot;
-                        if (cell->material == VOX_MAT_AIR) {
+                        if (!(cell->flags & VOX_CELL_AWAKE) ||
+                            cell->material == VOX_MAT_AIR) {
                             continue;
                         }
                         if (cell->material == VOX_MAT_WATER &&
@@ -253,7 +267,7 @@ static void vox_step_reactions(vox_world *world)
                             !(properties->flags & VOX_MATERIAL_FLAMMABLE)) {
                             if (cell->material == VOX_MAT_LAVA ||
                                 cell->temperature_q16 >= VOX_REACTION_HOT_Q16) {
-                                vox_wake_reaction_neighbors(world, x, y, depth);
+                                vox_wake_reactive_contacts(world, x, y, depth);
                             }
                             continue;
                         }
@@ -288,7 +302,7 @@ static void vox_step_reactions(vox_world *world)
                                                 VOX_MAT_SMOKE,
                                                 VOX_STEAM_Q16);
                         }
-                        vox_wake_reaction_neighbors(world, x, y, depth);
+                        vox_wake_reactive_contacts(world, x, y, depth);
                     }
                 }
             }
@@ -339,27 +353,28 @@ static int vox_cell_has_support(const vox_world *world, vox_u32 x,
     }
     below = &world->cells[vox_index(x, y + 1U, z)];
     if (below->material != VOX_MAT_AIR &&
-        !(below->flags & VOX_CELL_PHASE_GAS)) {
+        !(below->flags & (VOX_CELL_PHASE_GAS | VOX_CELL_LOOSE))) {
         return 1;
     }
     if (x > 0U) {
         below = &world->cells[vox_index(x - 1U, y + 1U, z)];
         if (below->material != VOX_MAT_AIR &&
-            !(below->flags & VOX_CELL_PHASE_GAS)) {
+            !(below->flags & (VOX_CELL_PHASE_GAS | VOX_CELL_LOOSE))) {
             return 1;
         }
     }
     if (x + 1U < VOX_WORLD_WIDTH) {
         below = &world->cells[vox_index(x + 1U, y + 1U, z)];
         if (below->material != VOX_MAT_AIR &&
-            !(below->flags & VOX_CELL_PHASE_GAS)) {
+            !(below->flags & (VOX_CELL_PHASE_GAS | VOX_CELL_LOOSE))) {
             return 1;
         }
     }
     return 0;
 }
 
-static void vox_step_structures(vox_world *world)
+static void vox_step_structures(vox_world *world,
+                                const vox_u8 *active_frontier)
 {
     vox_u32 z;
     vox_u32 chunk_y;
@@ -369,9 +384,9 @@ static void vox_step_structures(vox_world *world)
     for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
         for (chunk_y = 0U; chunk_y < VOX_WORLD_CHUNKS_Y; ++chunk_y) {
             for (chunk_x = 0U; chunk_x < VOX_WORLD_CHUNKS_X; ++chunk_x) {
-                vox_chunk *active = &world->chunks[
-                    chunk_y * VOX_WORLD_CHUNKS_X + chunk_x];
-                if (!(active->flags & VOX_CHUNK_ACTIVE)) {
+                vox_u32 active_index = chunk_y * VOX_WORLD_CHUNKS_X +
+                                       chunk_x;
+                if (!active_frontier[active_index]) {
                     continue;
                 }
                 for (local_y = 0U; local_y < VOX_CHUNK_HEIGHT; ++local_y) {
@@ -449,7 +464,9 @@ static int vox_try_move(vox_world *world, vox_u32 source_x, vox_u32 source_y,
                               destination);
     destination->material = original.material;
     destination->flags = (vox_u16)(original.flags &
-                                    (VOX_CELL_PHASE_GAS | VOX_CELL_UNSTABLE));
+                                    (VOX_CELL_PHASE_GAS |
+                                     VOX_CELL_UNSTABLE |
+                                     VOX_CELL_LOOSE));
     destination->temperature_q16 = original.temperature_q16;
     destination->damage_q16 = original.damage_q16;
     vox_toggle_cell_signature(destination_chunk,
@@ -483,7 +500,8 @@ static int vox_try_move(vox_world *world, vox_u32 source_x, vox_u32 source_y,
     return 1;
 }
 
-static void vox_step_falling(vox_world *world)
+static void vox_step_falling(vox_world *world,
+                             const vox_u8 *active_frontier)
 {
     vox_u32 depth;
     vox_u32 chunk_y_loop;
@@ -499,9 +517,9 @@ static void vox_step_falling(vox_world *world)
                 vox_u32 source_y = chunk_y * VOX_CHUNK_HEIGHT +
                                    local_y_loop - 1U;
                 for (chunk_x = 0U; chunk_x < VOX_WORLD_CHUNKS_X; ++chunk_x) {
-                    vox_chunk *chunk = &world->chunks[chunk_y * VOX_WORLD_CHUNKS_X +
-                                                       chunk_x];
-                    if (!(chunk->flags & VOX_CHUNK_ACTIVE)) {
+                    vox_u32 active_index = chunk_y * VOX_WORLD_CHUNKS_X +
+                                           chunk_x;
+                    if (!active_frontier[active_index]) {
                         continue;
                     }
                     for (local_x = 0U; local_x < VOX_CHUNK_WIDTH; ++local_x) {
@@ -512,6 +530,7 @@ static void vox_step_falling(vox_world *world)
                         if (!(cell->flags & VOX_CELL_AWAKE) ||
                             (cell->flags & VOX_CELL_PHASE_GAS) ||
                             (!vox_is_falling_material(cell->material) &&
+                             !(cell->flags & VOX_CELL_LOOSE) &&
                              !(cell->flags & VOX_CELL_UNSTABLE))) {
                             continue;
                         }
@@ -537,7 +556,8 @@ static void vox_step_falling(vox_world *world)
     }
 }
 
-static void vox_step_gases(vox_world *world)
+static void vox_step_gases(vox_world *world,
+                           const vox_u8 *active_frontier)
 {
     vox_u32 depth;
     vox_u32 chunk_y;
@@ -552,9 +572,9 @@ static void vox_step_gases(vox_world *world)
                     continue;
                 }
                 for (chunk_x = 0U; chunk_x < VOX_WORLD_CHUNKS_X; ++chunk_x) {
-                    vox_chunk *chunk = &world->chunks[chunk_y * VOX_WORLD_CHUNKS_X +
-                                                       chunk_x];
-                    if (!(chunk->flags & VOX_CHUNK_ACTIVE)) {
+                    vox_u32 active_index = chunk_y * VOX_WORLD_CHUNKS_X +
+                                           chunk_x;
+                    if (!active_frontier[active_index]) {
                         continue;
                     }
                     for (local_x = 0U; local_x < VOX_CHUNK_WIDTH; ++local_x) {
@@ -587,7 +607,8 @@ static void vox_step_gases(vox_world *world)
     }
 }
 
-static void vox_step_materials(vox_world *world)
+static void vox_step_materials(vox_world *world,
+                               const vox_u8 *active_frontier)
 {
     vox_u32 chunk_y;
     vox_u32 chunk_x;
@@ -596,9 +617,9 @@ static void vox_step_materials(vox_world *world)
     vox_u32 local_x;
     for (chunk_y = 0U; chunk_y < VOX_WORLD_CHUNKS_Y; ++chunk_y) {
         for (chunk_x = 0U; chunk_x < VOX_WORLD_CHUNKS_X; ++chunk_x) {
-            vox_chunk *chunk = &world->chunks[chunk_y * VOX_WORLD_CHUNKS_X +
-                                               chunk_x];
-            if (!(chunk->flags & VOX_CHUNK_ACTIVE)) {
+            vox_u32 active_index = chunk_y * VOX_WORLD_CHUNKS_X + chunk_x;
+            vox_chunk *chunk = &world->chunks[active_index];
+            if (!active_frontier[active_index]) {
                 continue;
             }
             for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
@@ -698,11 +719,45 @@ vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
     vox_toggle_cell_signature(chunk, vox_index(x, y, z), cell);
     cell->material = material;
     cell->flags = (vox_u16)(cell->flags &
-                            (vox_u16)~(VOX_CELL_PHASE_GAS | VOX_CELL_MOVED));
+                            (vox_u16)~(VOX_CELL_PHASE_GAS |
+                                      VOX_CELL_MOVED |
+                                      VOX_CELL_LOOSE));
     cell->temperature_q16 = temperature_q16;
     vox_toggle_cell_signature(chunk, vox_index(x, y, z), cell);
     vox_update_active(world, chunk, vox_index(x, y, z), cell);
     vox_wake_cell(world, chunk, vox_index(x, y, z), cell);
+    vox_mark_dirty(chunk);
+    return VOX_OK;
+}
+
+vox_result vox_world_set_loose(vox_world *world, vox_u32 x, vox_u32 y,
+                               vox_u32 z, vox_u16 loose)
+{
+    vox_u32 cell_index;
+    vox_cell *cell;
+    vox_chunk *chunk;
+    vox_u16 current;
+    if (world == 0 || !vox_in_bounds(x, y, z) || loose > 1U) {
+        return VOX_ERR_INVALID;
+    }
+    cell_index = vox_index(x, y, z);
+    cell = &world->cells[cell_index];
+    if (cell->material == VOX_MAT_AIR) {
+        return loose ? VOX_ERR_INVALID : VOX_OK;
+    }
+    current = (vox_u16)((cell->flags & VOX_CELL_LOOSE) != 0U);
+    if (current == loose) {
+        return VOX_OK;
+    }
+    chunk = &world->chunks[vox_chunk_index(x, y)];
+    vox_toggle_cell_signature(chunk, cell_index, cell);
+    if (loose) {
+        cell->flags = (vox_u16)(cell->flags | VOX_CELL_LOOSE);
+    } else {
+        cell->flags = (vox_u16)(cell->flags & (vox_u16)~VOX_CELL_LOOSE);
+    }
+    vox_toggle_cell_signature(chunk, cell_index, cell);
+    vox_wake_cell(world, chunk, cell_index, cell);
     vox_mark_dirty(chunk);
     return VOX_OK;
 }
@@ -857,6 +912,8 @@ vox_result vox_world_blast(vox_world *world, vox_u32 x, vox_u32 y,
 vox_result vox_world_step(vox_world *world, const vox_step_command *command)
 {
     vox_result result = VOX_OK;
+    vox_u8 active_frontier[VOX_WORLD_CHUNK_COUNT];
+    vox_u32 chunk_index;
     if (world == 0) {
         return VOX_ERR_INVALID;
     }
@@ -873,11 +930,17 @@ vox_result vox_world_step(vox_world *world, const vox_step_command *command)
         }
     }
     if (world->awake_cells != 0U) {
-        vox_step_reactions(world);
-        vox_step_structures(world);
-        vox_step_falling(world);
-        vox_step_gases(world);
-        vox_step_materials(world);
+        /* Changes during this tick become eligible on the next fixed step. */
+        for (chunk_index = 0U; chunk_index < VOX_WORLD_CHUNK_COUNT;
+             ++chunk_index) {
+            active_frontier[chunk_index] = (vox_u8)(
+                (world->chunks[chunk_index].flags & VOX_CHUNK_ACTIVE) != 0U);
+        }
+        vox_step_reactions(world, active_frontier);
+        vox_step_structures(world, active_frontier);
+        vox_step_falling(world, active_frontier);
+        vox_step_gases(world, active_frontier);
+        vox_step_materials(world, active_frontier);
     }
     world->tick++;
     return VOX_OK;
@@ -913,6 +976,36 @@ const vox_cell *vox_world_cell(const vox_world *world, vox_u32 x, vox_u32 y,
         return 0;
     }
     return &world->cells[vox_index(x, y, z)];
+}
+
+vox_u16 vox_world_collision_classify(const vox_world *world, vox_u32 x,
+                                     vox_u32 y)
+{
+    vox_u32 z;
+    vox_u16 loose = 0U;
+    if (world == 0 || x >= VOX_WORLD_WIDTH || y >= VOX_WORLD_HEIGHT) {
+        return VOX_WORLD_COLLISION_SOLID;
+    }
+    for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+        const vox_cell *cell = &world->cells[vox_index(x, y, z)];
+        const vox_material_properties *properties;
+        if (cell->material == VOX_MAT_AIR ||
+            (cell->flags & VOX_CELL_PHASE_GAS)) {
+            continue;
+        }
+        properties = vox_material_get(cell->material);
+        if (properties == 0) {
+            return VOX_WORLD_COLLISION_SOLID;
+        }
+        if (properties->flags & VOX_MATERIAL_SOLID) {
+            if (cell->flags & VOX_CELL_LOOSE) {
+                loose = 1U;
+            } else {
+                return VOX_WORLD_COLLISION_SOLID;
+            }
+        }
+    }
+    return loose ? VOX_WORLD_COLLISION_LOOSE : VOX_WORLD_COLLISION_EMPTY;
 }
 
 const vox_chunk *vox_world_chunk(const vox_world *world, vox_u32 chunk_x,

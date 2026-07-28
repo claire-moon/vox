@@ -18,9 +18,11 @@ vox.define("system", "system.movement", {
         jump_hold_ticks = 8,
         jump_speed_q16 = -106496,
         run_speed_q16 = 49152,
-        steam_accel_q16 = 16384,
-        steam_recharge_q16 = 512,
-        steam_use_q16 = 1024
+        steam_accel_q16 = 11264,
+        steam_lateral_q16 = 3072,
+        steam_max_rise_q16 = -98304,
+        steam_recharge_q16 = 728,
+        steam_use_q16 = 728
     }
 })
 
@@ -28,16 +30,17 @@ vox.define("system", "system.rope", {
     order = 11,
     title = "PIT ROPE",
     category = "SYSTEMS",
-    summary = "An always-carried, hold-to-use cable for swinging across broken ground.",
-    detail = "Hold Rope while aiming at stable terrain. A ray selects the first valid anchor, the cable constrains the miner to its current length, and momentum carries into the swing. Release to detach. Excess tension or destruction of the anchor breaks the line. The rope cannot attach to fluids, gas, flesh particles, or unsupported falling debris.",
+    summary = "An always-carried segmented cable that casts, wraps, unwraps, and preserves swing momentum across broken ground.",
+    detail = "Cast toward stable terrain using either the host's Hold or Toggle policy. The swept hook respects cover, then a bounded twelve-point cable wraps and unwraps around terrain while the last segment constrains the miner. Excess tension or destruction of the anchor breaks the line. A hook strike leaves an unshielded enemy at exactly one health with bounded knockback and ends the cast; shielded targets block it and cable contact never damages.",
     tags = "rope,traversal,momentum,anchor",
     values = {
         break_tension_q16 = 327680,
         integrity = 100,
+        hook_speed_q16 = 196608,
         max_length_q16 = 3145728,
+        max_points = 12,
         min_length_q16 = 196608,
-        pull_q16 = 32768,
-        ray_steps = 96
+        pull_q16 = 32768
     }
 })
 
@@ -96,7 +99,7 @@ vox.define("system", "system.index", {
     title = "MINER'S INDEX",
     category = "SYSTEMS",
     summary = "Every shipped material, weapon, entity, reaction, and rule is visible from the main menu.",
-    detail = "The left rail shows exactly six rows with arrows indicating entries above and below. Up and Down move one item with a short stepped transition; the right pane updates automatically as selection changes. Back returns to the previous menu. The v0.0.2 catalog is fully unlocked so testing never depends on progression state.",
+    detail = "The left rail shows exactly six rows with arrows indicating entries above and below. Up and Down move one item with a short stepped transition; the right pane updates automatically as selection changes. Back returns to the previous menu. The v0.0.3 catalog is fully unlocked so testing never depends on progression state.",
     tags = "menu,catalog,qa,accessibility",
     values = { transition_ticks = 5, unlocked = 1, visible_rows = 6 }
 })

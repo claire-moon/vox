@@ -1,4 +1,4 @@
-DIGS v0.0.2 DEMO - Linux x86_64
+DIGS v0.0.3 DEMO - Linux x86_64
 ================================
 
 1. Extract the complete archive.
@@ -13,7 +13,10 @@ installation commands.
 Useful tester commands
 ----------------------
 
-  ./smoke-test.sh                 deterministic non-windowed acceptance test
+  Open QUICK-FEEDBACK.txt          guided 20-minute keyboard/mouse test lane
+  ./smoke-test.sh                 non-windowed acceptance including 600-tick load
+  VOX_NAMED_BENCH_QUALIFY=1 ./smoke-test.sh
+                                  add strict timing only on the named laptop bench
   ./benchmark.sh 240              CPU Lightfield benchmark (three quality tiers)
   ./qa-cockpit.sh                 combine the included workbook and test evidence
   ./bin/digs_script --validate share/digs/scripts/manifest.txt
@@ -27,8 +30,9 @@ Useful tester commands
                                   controller normalization/range self-test
 
 Smoke images, benchmark reports, and cockpit packets go to qa/out/. Open
-qa/README.md for the feedback workflow. The cockpit requires the free xleak
-command-line spreadsheet reader to inspect .xlsx feedback workbooks.
+QUICK-FEEDBACK.txt first, then qa/README.md for the complete feedback workflow.
+The cockpit requires the free xleak command-line spreadsheet reader to inspect
+.xlsx feedback workbooks.
 
 Keep bin/, bin/share, share/, and libexec/ in their extracted layout. The
 bin/share link makes executable-relative data resolve under share/digs/. This
@@ -36,7 +40,8 @@ includes the Lua catalog, the pinned controller mapping database, and the
 canonical miner icon. CG-README.TXT documents AUTO/keyboard/controller modes,
 Logitech F310 X/D-mode checks, radial aim, two-player ownership, rope use, map
 identity, the Miner's Index, accessibility options, script reload, and the
-65-point manual acceptance pass.
+88-point acceptance pass. The short guide is defect-discovery evidence;
+it does not replace the complete pass or promote untested hardware/platforms.
 
 The evidence/ directory contains the unmodified package-time test streams,
 exit statuses, smoke images, build profile, and an explanation of their

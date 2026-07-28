@@ -13,6 +13,40 @@ every machine released since 1990.
 | VERIFIED | Native or reproducible acceptance evidence is recorded |
 | UNSUPPORTED | Explicitly outside the current profile |
 
+## v0.0.3 development-candidate evidence
+
+| Surface | Exact environment | State | Evidence and boundary |
+|---|---|---|---|
+| Strict portable core, ABI 9, and deterministic match | Linux Mint/Ageless Linux x86-64; Intel Core i7-10750H; GCC/G++ 13.3 and Clang 18.1; CMake 3.28; Rust/Cargo host boundary | RUNS | Frozen-tree strict GCC/NASM and Clang/scalar suites pass 20/20 with match hash `5b3ceef6`; full ASan and UBSan suites pass 20/20 with leak detection disabled only for the ptraced ASan environment; Rust and headless proofs pass. Clean-package and hosted-platform evidence remain separate gates. |
+| SDL2 visible-region software host and device-clock audio | Same laptop; SDL2 2.30; CPU RGB renderer | RUNS | Non-windowed smoke passes at state `57987c09` and frame `71e7fb86`; input, cap, audio cadence, bark/G2P, haptic mixer, settings, camera-detail, and fixed-step debt self-tests pass. This does not promote the interactive display, audible output, or physical controller paths beyond their manual gates. |
+| Nintendo Switch Pro Controller | USB and Bluetooth through SDL GameController/raw fallback | PLANNED | The accepted test surface includes correct physical prompts and Off/Low/Normal/Heavy standard SDL low/high-motor feedback. Neither transport is VERIFIED until a tester records mapping and vibration evidence. |
+| Four-miner deterministic load | Portable SDL2 non-windowed host; 600 authoritative ticks | RUNS | Frozen-tree verification reproduces fired 46, explosions 26, crushes 0, effects 700, awake 7867, and state hash `f3924b81`. The default CTest, verifier, cockpit, package, and hosted CI paths apply no shared-host wall-clock assertion, so this is a correctness/load result rather than a speed claim. |
+| Four-miner destruction performance | i7-10750H in `power-saver`; GTX 1660 Ti laptop, CPU-authoritative simulation | BUILDS | `--performance-self-test 600` alone retains the 5 ms average/8 ms p95/16.67 ms maximum gate. Package evidence captures it only with `VOX_NAMED_BENCH_QUALIFY=1`; final frozen-tree qualification and 15-minute audio results are still required. |
+| NVIDIA GTX 1660 Ti rendering | Same laptop | PLANNED | v0.0.3 remains a CPU renderer presented by SDL2. GPU presence is test-bench context, not evidence of graphics acceleration. |
+| Windows x64 portable core CI | GitHub-hosted Windows Server 2022; MSVC; scalar core; SDL2 and NASM disabled | PLANNED | The workflow now configures, builds, runs CTest, and runs Cargo. This row stays PLANNED until a green run is linked; even green evidence excludes the SDL window, audio, input, haptics, installer, and player-perceived performance. |
+| macOS Intel portable core CI | GitHub-hosted `macos-15-intel`; Clang; scalar core; SDL2 and NASM disabled | PLANNED | The workflow now configures, builds, runs CTest, and runs Cargo. This row stays PLANNED until a green run is linked; it is not Apple Silicon, Quartz, audio, controller, packaging, or physical-performance evidence. |
+| Linux i686 portable core CI | Ubuntu 24.04 x86-64 host using GCC/G++ multilib and Rust i686 target; 32-bit process | PLANNED | The workflow now compiles and executes the scalar C/C++ tests plus Rust boundary as i686. This row stays PLANNED until a green run is linked and does not imply Windows XP, period Linux, 32-bit SDL, or low-spec performance support. |
+
+These rows are implementation-candidate boundaries. The v0.0.3 release
+checklist, clean package, QA workbook, and physical controller/audio evidence
+remain authoritative promotion gates.
+
+## v0.0.3 test lanes
+
+| Lane | Required commands or artifact | What a successful result can prove | What it cannot prove |
+|---|---|---|---|
+| Linux x86-64 full candidate | `tools/vox-verify.sh`, clean `tools/package-linux-demo.sh`, package evidence, and `qa/V0.0.3-QUICK-FEEDBACK.txt` followed by the full workbook | Strict scalar/NASM build parity, automated host behavior, packaged data/source identity, and the explicitly observed laptop/device paths | GPU acceleration or any untested controller, transport, OS, driver, display, or historical target |
+| Windows x64 portable core | `portable-core / Windows x64 MSVC` Actions job | Compile/link plus native CTest and Rust results for the scalar/headless boundary on the named hosted image | SDL2 gameplay host, Win32 input/audio/haptics, installer, historical Windows, or physical performance |
+| macOS Intel portable core | `portable-core / macOS 15 Intel Clang` Actions job | Compile/link plus native CTest and Rust results for the scalar/headless boundary on the named hosted image | SDL2/Quartz gameplay host, CoreAudio, controllers, app bundle, Apple Silicon, or physical performance |
+| Linux i686 portability probe | `portable core / Linux i686 multilib` Actions job | 32-bit compile/link and test execution for the portable scalar/headless boundary | A historical distribution, 32-bit SDL host, memory-budget fitness, period drivers, or period CPU speed |
+| Historical QEMU/86Box/native | Versioned future lab record with legal media/firmware provenance, exact machine configuration, hashes, boot/input/audio/display results, and native follow-up | Only the exact recorded guest/emulator or native machine | Any other historical system or a blanket 1990-to-now claim |
+
+The quick-feedback guide deliberately tells testers which workbook IDs to fill
+for collision/teleport, swept damage and dismemberment, debris towers, rope,
+rail, steampack, close zoom, audio cadence, cap qualification, Laptop Mode,
+controller families/haptics, two-player bots, and deterministic hashes. A quick
+pass finds regressions; it does not satisfy the full release checklist.
+
 ## v0.0.2 development-candidate evidence
 
 | Surface | Exact environment | State | Evidence and boundary |

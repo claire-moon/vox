@@ -58,16 +58,16 @@ vox.define("audio", "audio.event_mapping", {
 
 vox.define("audio", "audio.bot_barks", {
     order = 702, title = "CONTEXTUAL MINER BARKS", category = "AUDIO",
-    summary = "Humans and machines share six playful phrase pools synthesized from authored phonemes.",
-    detail = "Idle, searching, attacking, retreating, hurt, and victory each provide ten paired bubble and phoneme phrases. Humans speak only on Bark; machines pass a deterministic eligibility gate and a twelve-second cooldown. Dialogue is presentation-only and never reveals hidden targets or enters the match hash.",
+    summary = "Humans and machines share six deep phrase pools plus seeded context grammar synthesized from authored phonemes.",
+    detail = "Idle, searching, attacking, retreating, hurt, and victory each provide fifty curated lines plus deterministic rival, tool, material, and hazard grammar. Humans speak only on Bark with a three-second cooldown; Dummy Mode bypasses only that local-human cooldown. Machines pass a sparse deterministic eligibility gate, a twelve-second cooldown, and global spacing. Speech remains presentation feedback while authoritative AI bark/state events carry only bounded context.",
     tags = "ai,barks,chip-speech,feedback",
-    values = { bot_cooldown_ticks = 720, contexts = 6, phrases_per_context = 10 }
+    values = { bot_cooldown_ticks = 720, contexts = 6, human_cooldown_ticks = 180, phrases_per_context = 50 }
 })
 
 vox.define("audio", "audio.announcer", {
     order = 703, title = "PHONETIC ANNOUNCER", category = "AUDIO",
     summary = "An original fixed-point formant voice announces DIGS, match start, multikills, and sprees.",
-    detail = "Forty stable allophones feed deep-announcer and high-miner profiles at an internal eight-kilohertz speech rate. Authored token streams keep every shipped phrase deterministic and portable; arbitrary text and custom player names are not spoken in v0.0.2.",
+    detail = "Forty stable allophones feed deep-announcer and high-miner profiles at an internal eight-kilohertz speech rate. Curated phrases plus deterministic grammar and letter-to-sound or spelled fallback keep contextual speech and custom names portable in v0.0.3.",
     tags = "speech,allophone,announcer,portable",
     values = { allophones = 40, internal_rate = 8000, phrase_queue = 4, profiles = 2 }
 })

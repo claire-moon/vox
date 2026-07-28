@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# v0.0.2 foundation
+# v0.0.3 foundation
 
 The first demo proves a complete bounded path from input to authoritative
 materials and bodies to a lit graphical frame. It does not establish the final
@@ -25,7 +25,7 @@ C89 material world   C++98 fixed-point bodies
  SDL2 texture / custom UI / VOX Audio v2
 ```
 
-The active v0.0.2 profile is `512 x 320 x 10`, split into 640
+The active v0.0.3 profile is `512 x 320 x 10`, split into 640
 `16 x 16 x 10` chunks. Its 1,638,400 cells are exactly forty times the
 original demo volume and four times the v0.0.1 dense profile. That expanded
 space supports seed-selected archipelagos, continents, twin hills, broad sky,
@@ -81,11 +81,13 @@ correctness path.
 
 Presentation timing is outside the oracle. The host advances exact 60 Hz
 simulation ticks through a fixed-step accumulator whether frames are capped at
-30, 60, 90, 120, 144, or unlimited. Lightfield quality, fullscreen, UI,
+15, 30, 60, 90, 120, 144, or unlimited. Lightfield quality, fullscreen, UI,
 procedural audio, and frame dropping are excluded from canonical state; an
 identical per-tick input sequence must hash identically at every cap.
-Catch-up is bounded at eight ticks per presented frame; an overloaded host
-drops excess wall-clock debt instead of changing authoritative timestep size.
+Simulation deadlines take priority over presentation. An overloaded host skips
+or reduces presentation work rather than changing timestep size or discarding
+authoritative tick debt. Startup qualification gates a presentation cap the
+local machine cannot sustain at its minimum visual tier.
 
 A replay is valid only when ABI, rules, map generator, simulation profile,
 data-pack identity, initial seed, input sequence, and state hashes match. The

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(vox VERSION 0.0.2 LANGUAGES C CXX)
+project(vox VERSION 0.0.3 LANGUAGES C CXX)
 
 # The portable scalar oracle is compiled as ISO C90 (the C89 language profile)
 # and the body sidecar as ISO C++98.  Keep compiler extensions off globally so
@@ -322,11 +322,23 @@ if (VOX_BUILD_TESTS)
     if (TARGET digs_demo)
         add_test(NAME digs_input_normalization
             COMMAND digs_demo --input-self-test)
+        add_test(NAME digs_cap_qualification
+            COMMAND digs_demo --cap-self-test)
+        add_test(NAME digs_audio_cadence
+            COMMAND digs_demo --audio-cadence-self-test)
+        add_test(NAME digs_bark_library
+            COMMAND digs_demo --bark-self-test)
+        add_test(NAME digs_haptic_mixer
+            COMMAND digs_demo --haptic-self-test)
+        add_test(NAME digs_deterministic_load
+            COMMAND digs_demo --load-self-test 600)
         add_test(NAME digs_settings_migration
             COMMAND digs_demo --settings-self-test
                     ${CMAKE_CURRENT_BINARY_DIR}/digs-settings-self-test.cfg)
         add_test(NAME digs_camera_bounds
             COMMAND digs_demo --camera-self-test)
+        add_test(NAME digs_fixed_step_debt
+            COMMAND digs_demo --fixed-step-self-test)
     endif()
     add_test(NAME vox_headless_scenario COMMAND vox_headless)
     add_test(NAME digs_headless_scenario COMMAND digs_headless)

@@ -9,6 +9,8 @@ SMOKE_IMAGE=${VOX_SMOKE_IMAGE:-/tmp/vox-digs-demo-smoke.ppm}
 MINER_ICON=${VOX_MINER_ICON:-/tmp/vox-digs-miner.xpm}
 NASM_ACCEL=${VOX_NASM_ACCEL:-AUTO}
 BUILD_JOBS=${VOX_BUILD_JOBS:-}
+BUILD_TYPE=${VOX_BUILD_TYPE:-RelWithDebInfo}
+NAMED_BENCH_QUALIFY=${VOX_NAMED_BENCH_QUALIFY:-0}
 
 if [ "$NASM_ACCEL" = AUTO ]; then
     NASM_ACCEL=OFF
@@ -28,8 +30,23 @@ case "$BUILD_JOBS" in
     '') ;;
     *[!0-9]*|0|0*) echo "VOX_BUILD_JOBS must be a positive integer" >&2; exit 2 ;;
 esac
+case "$BUILD_TYPE" in
+    Release|RelWithDebInfo) ;;
+    *)
+        echo "VOX_BUILD_TYPE must be Release or RelWithDebInfo" >&2
+        exit 2
+        ;;
+esac
+case "$NAMED_BENCH_QUALIFY" in
+    0|1) ;;
+    *)
+        echo "VOX_NAMED_BENCH_QUALIFY must be 0 or 1" >&2
+        exit 2
+        ;;
+esac
 
 cmake -S "$ROOT" -B "$BUILD_DIR" \
+    -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
     -DVOX_BUILD_TESTS=ON \
     -DVOX_BUILD_SDL2_DEMO=ON \
     -DVOX_BUILD_NASM_ACCEL="$NASM_ACCEL" \
@@ -45,9 +62,18 @@ CARGO_TARGET_DIR="$CARGO_TARGET_DIR" cargo test --manifest-path "$ROOT/Cargo.tom
 "$BUILD_DIR/vox_headless"
 "$BUILD_DIR/digs_headless"
 "$BUILD_DIR/digs_demo" --input-self-test
+"$BUILD_DIR/digs_demo" --cap-self-test
+"$BUILD_DIR/digs_demo" --audio-cadence-self-test
+"$BUILD_DIR/digs_demo" --bark-self-test
+"$BUILD_DIR/digs_demo" --haptic-self-test
+"$BUILD_DIR/digs_demo" --load-self-test 600
+if [ "$NAMED_BENCH_QUALIFY" = 1 ]; then
+    "$BUILD_DIR/digs_demo" --performance-self-test 600
+fi
 "$BUILD_DIR/digs_demo" --settings-self-test \
     "$BUILD_DIR/digs-settings-self-test.cfg"
 "$BUILD_DIR/digs_demo" --camera-self-test
+"$BUILD_DIR/digs_demo" --fixed-step-self-test
 "$BUILD_DIR/digs_demo" --render-miner-icon-xpm "$MINER_ICON"
 cmp "$MINER_ICON" "$BUILD_DIR/share/digs/icons/digs-miner.xpm"
 "$BUILD_DIR/digs_demo" --smoke-test "$SMOKE_IMAGE"

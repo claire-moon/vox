@@ -218,7 +218,7 @@ def add_environment_sheet(workbook: Workbook) -> None:
     fields = [
         ("Tester alias", "Manual", "Use a public alias; do not enter an email address."),
         ("Build ID", "Bundle or release", "Record the exact bundle or release identifier."),
-        ("VOX version", "Bundle or release", "Expected demo version is v0.0.2."),
+        ("VOX version", "Bundle or release", "Expected demo version is v0.0.3."),
         ("Git commit", "Bundle manifest", "Use the public commit hash when supplied."),
         ("Binary SHA-256", "Cockpit or checksum file", "Identifies the exact tested executable."),
         ("Operating system", "System settings", "Name and release only."),
@@ -234,11 +234,34 @@ def add_environment_sheet(workbook: Workbook) -> None:
         ("Display server", "System settings", "Examples: X11 Wayland Quartz or Win32."),
         ("Desktop", "System settings", "Desktop environment or window manager."),
         ("Display resolution / refresh", "System settings", "Record the tested display mode."),
-        ("Frame caps tested", "VOX Options", "List 30 60 90 120 144 and Unlimited as tested."),
+        ("Test lane", "Manual", "Quick Full Automation Build-only or another clearly named lane."),
+        ("QA run ID", "Cockpit or manual", "Use the cockpit run ID when available."),
+        ("Frame caps tested", "VOX Options", "List 15 30 60 90 120 144 and Unlimited as tested."),
+        ("Cap qualification result", "VOX startup / self-test", "List supported and visibly gated caps; do not infer support."),
         ("Lightfield tiers tested", "VOX Options", "List Compatibility Balanced and Showcase."),
+        ("Laptop Mode", "VOX Options", "Record Off or On for every parity/hash run."),
+        ("Dummy Mode", "VOX Options", "Record Off or On for bark-cooldown evidence."),
         ("Input devices", "Manual", "Keyboard and pointing device model or type."),
+        ("Controller model / SDL name", "SDL / manual", "General model/name only; omit unique serial data."),
+        ("Controller SDL GUID", "SDL diagnostics", "Controller mapping identity; never substitute a hardware serial."),
+        ("Controller transport", "Manual", "Record USB Bluetooth or other without unique serial data."),
+        ("Controller prompt family", "VOX UI", "Record Nintendo Xbox PlayStation or generic."),
+        ("Controller mapping path", "VOX diagnostics", "Record SDL mapped or raw joystick fallback."),
+        ("P1 / P2 input ownership", "VOX Options", "Record AUTO KEYBOARD CONTROLLER and claimed pad per local player."),
+        ("Aim calibration", "VOX Options", "Record sensitivity deadzone aim slowdown and whether calibration ran."),
+        ("P1 / P2 rope mode", "VOX Options", "Record Hold or Toggle independently for each local player."),
+        ("Haptics level / availability", "VOX Options / SDL", "Record Off Low Normal Heavy and available blocked or unsupported."),
+        ("Haptic mixer self-test result", "VOX automation log", "Record off low normal heavy near and far values; this does not prove physical rumble."),
         ("Audio device", "System settings", "Use a general device label; omit unique IDs."),
+        ("Audio backend / cadence result", "SDL / VOX self-test", "Record backend and callback underrun or cadence result when exposed."),
         ("Power state", "Manual", "AC or battery and relevant performance profile."),
+        ("Map style / landform / seed", "Match setup", "Required for terrain collision debris and camera reproduction."),
+        ("Local players / bots", "Match setup", "Record the active slot composition."),
+        ("FX profile", "Match setup", "Record Retro Standard or Carnage for simulation/hash comparison."),
+        ("Deterministic load self-test result", "VOX automation log", "Record the 600-tick slots activity awake cells canonical hash and exit status; no timing threshold applies."),
+        ("Named-bench performance qualification", "VOX automation log", "Record average p95 maximum activity hash and power profile only from the named i7-10750H laptop bench."),
+        ("Initial / final state hash", "F1 / automation log", "Record both when comparing caps or Laptop Mode."),
+        ("Frame hash / smoke SHA-256", "Automation log", "Identifies deterministic presentation evidence."),
         ("xleak version", "xleak --version", "Cockpit dependency version."),
         ("Test started UTC", "Manual", "Use ISO 8601: YYYY-MM-DDTHH:MM:SSZ."),
         ("Test ended UTC", "Manual", "Use ISO 8601: YYYY-MM-DDTHH:MM:SSZ."),
@@ -266,7 +289,7 @@ def build_workbook(source: Path, output: Path) -> None:
     workbook = Workbook()
     workbook.properties.creator = "VOX contributors"
     workbook.properties.lastModifiedBy = "VOX deterministic workbook generator"
-    workbook.properties.title = "VOX + DIGS v0.0.2 QA Feedback"
+    workbook.properties.title = "VOX + DIGS v0.0.3 QA Feedback"
     workbook.properties.subject = "Portable demo acceptance and issue evidence"
     workbook.properties.description = "Generated from qa/VOX_QA_CHECKPOINTS.csv"
     workbook.properties.created = FIXED_TIME

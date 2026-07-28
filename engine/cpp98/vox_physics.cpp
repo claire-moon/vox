@@ -8,6 +8,8 @@
 #define VOX_PHYSICS_MAX_SUBSTEPS 64U
 #define VOX_PHYSICS_MAX_HALF_EXTENT_Q16 (8L << 16)
 #define VOX_PHYSICS_MAX_STEP_Q16 (2L << 16)
+#define VOX_PHYSICS_RECOVERY_STEP_Q16 4096L
+#define VOX_PHYSICS_RECOVERY_MAX_STEPS 32
 
 static vox_i32 vox_physics_saturating_add(vox_i32 left, vox_i32 right)
 {
@@ -82,24 +84,12 @@ static vox_i32 vox_physics_q16_ceil(vox_i32 value)
 static int vox_physics_cell_is_solid(const vox_world *world, vox_i32 x,
                                      vox_i32 y)
 {
-    vox_u32 z;
     if (x < 0 || y < 0 || x >= (vox_i32)VOX_WORLD_WIDTH ||
         y >= (vox_i32)VOX_WORLD_HEIGHT) {
         return 1;
     }
-    for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-        const vox_cell *cell = vox_world_cell(world, (vox_u32)x,
-                                               (vox_u32)y, z);
-        const vox_material_properties *properties;
-        if (cell == 0 || cell->material == VOX_MAT_AIR) {
-            continue;
-        }
-        properties = vox_material_get(cell->material);
-        if (properties == 0 || (properties->flags & VOX_MATERIAL_SOLID)) {
-            return 1;
-        }
-    }
-    return 0;
+    return vox_world_collision_classify(world, (vox_u32)x, (vox_u32)y) ==
+           VOX_WORLD_COLLISION_SOLID;
 }
 
 static int vox_physics_body_collides(const vox_physics_body *body,
@@ -259,6 +249,60 @@ static int vox_physics_validate_config(const vox_physics_step_config *config)
            config->reserved == 0U;
 }
 
+extern "C" vox_result vox_physics_recover_overlap(
+    vox_physics_body *body, const vox_world *world)
+{
+    vox_physics_body original;
+    int radius;
+    if (!vox_physics_validate_body(body) || world == 0 ||
+        world->abi_version != VOX_ABI_VERSION ||
+        world->struct_size < (vox_u32)sizeof(*world)) {
+        return VOX_ERR_INVALID;
+    }
+    if (!vox_physics_body_collides(body, world)) {
+        body->flags = (vox_u16)(body->flags &
+                                 (vox_u16)~VOX_PHYSICS_BODY_RECOVERED);
+        return VOX_OK;
+    }
+    original = *body;
+    for (radius = 1; radius <= VOX_PHYSICS_RECOVERY_MAX_STEPS; ++radius) {
+        int delta_y_steps;
+        for (delta_y_steps = -radius; delta_y_steps <= radius;
+             ++delta_y_steps) {
+            int absolute_y = delta_y_steps < 0 ? -delta_y_steps :
+                                                 delta_y_steps;
+            int delta_x_steps = radius - absolute_y;
+            int candidate_index;
+            int candidate_count = delta_x_steps == 0 ? 1 : 2;
+            for (candidate_index = 0; candidate_index < candidate_count;
+                 ++candidate_index) {
+                int signed_x_steps = candidate_index == 0 ?
+                                     -delta_x_steps : delta_x_steps;
+                vox_physics_body candidate = original;
+                candidate.position_x.value_q16 = vox_physics_saturating_add(
+                    original.position_x.value_q16,
+                    (vox_i32)signed_x_steps * VOX_PHYSICS_RECOVERY_STEP_Q16);
+                candidate.position_y.value_q16 = vox_physics_saturating_add(
+                    original.position_y.value_q16,
+                    (vox_i32)delta_y_steps * VOX_PHYSICS_RECOVERY_STEP_Q16);
+                if (!vox_physics_body_collides(&candidate, world)) {
+                    if (signed_x_steps != 0) {
+                        candidate.velocity_x.value_q16 = 0L;
+                    }
+                    if (delta_y_steps != 0) {
+                        candidate.velocity_y.value_q16 = 0L;
+                    }
+                    candidate.flags = (vox_u16)(candidate.flags |
+                                                 VOX_PHYSICS_BODY_RECOVERED);
+                    *body = candidate;
+                    return VOX_OK;
+                }
+            }
+        }
+    }
+    return VOX_ERR_COLLISION;
+}
+
 extern "C" void vox_physics_body_init(vox_physics_body *body)
 {
     if (body == 0) {
@@ -344,6 +388,7 @@ extern "C" vox_result vox_physics_rope_constraint(
     vox_i32 direction_y_q8;
     vox_i32 previous_x;
     vox_i32 previous_y;
+    int correction_accepted = 1;
     if (tension_q16 != 0) {
         *tension_q16 = 0;
     }
@@ -402,13 +447,16 @@ extern "C" vox_result vox_physics_rope_constraint(
     if (vox_physics_body_collides(body, world)) {
         body->position_x.value_q16 = previous_x;
         body->position_y.value_q16 = previous_y;
+        correction_accepted = 0;
     }
-    body->velocity_x.value_q16 = vox_physics_saturating_add(
-        body->velocity_x.value_q16,
-        (correction * direction_x_q8) / 512L);
-    body->velocity_y.value_q16 = vox_physics_saturating_add(
-        body->velocity_y.value_q16,
-        (correction * direction_y_q8) / 512L);
+    if (correction_accepted) {
+        body->velocity_x.value_q16 = vox_physics_saturating_add(
+            body->velocity_x.value_q16,
+            (correction * direction_x_q8) / 512L);
+        body->velocity_y.value_q16 = vox_physics_saturating_add(
+            body->velocity_y.value_q16,
+            (correction * direction_y_q8) / 512L);
+    }
     return VOX_OK;
 }
 
@@ -417,14 +465,25 @@ extern "C" vox_result vox_physics_step_world(
     const vox_physics_step_config *config)
 {
     vox_u16 was_grounded;
+    vox_u16 recovered;
     vox_i32 horizontal_delta;
     vox_physics_body horizontal_origin;
+    vox_result recovery_result;
     if (!vox_physics_validate_body(body) || !vox_physics_validate_config(config) ||
         (world != 0 && (world->abi_version != VOX_ABI_VERSION ||
-                        world->struct_size < (vox_u32)sizeof(*world))) ||
-        (world != 0 && vox_physics_body_collides(body, world))) {
+                        world->struct_size < (vox_u32)sizeof(*world)))) {
         return VOX_ERR_INVALID;
     }
+    if (world != 0 && vox_physics_body_collides(body, world)) {
+        recovery_result = vox_physics_recover_overlap(body, world);
+        if (recovery_result != VOX_OK) {
+            return recovery_result;
+        }
+    } else {
+        body->flags = (vox_u16)(body->flags &
+                                 (vox_u16)~VOX_PHYSICS_BODY_RECOVERED);
+    }
+    recovered = (vox_u16)(body->flags & VOX_PHYSICS_BODY_RECOVERED);
     was_grounded = (vox_u16)(body->flags & VOX_PHYSICS_BODY_GROUNDED);
     body->flags = (vox_u16)(body->flags &
                              (vox_u16)~(VOX_PHYSICS_BODY_GROUNDED |
@@ -442,7 +501,8 @@ extern "C" vox_result vox_physics_step_world(
     horizontal_origin = *body;
     vox_physics_move_axis(body, world, horizontal_delta, 1,
                           config->max_substeps);
-    if (was_grounded && (body->flags & VOX_PHYSICS_BODY_BLOCKED_X) &&
+    if (!recovered && was_grounded &&
+        (body->flags & VOX_PHYSICS_BODY_BLOCKED_X) &&
         vox_physics_try_step(body, world, &horizontal_origin,
                              horizontal_delta, config->max_step_q16,
                              config->max_substeps)) {
