@@ -25,18 +25,22 @@ jobs:
           VOX_NASM_ACCEL: ON
           VOX_NAMED_BENCH_QUALIFY: 0
         run: tools/vox-verify.sh
-      - name: Build Linux x86-64 tester and source bundles
+      - name: Build Linux x86-64 CI-only tester and source bundles
         env:
+          # This is an ephemeral developer artifact from Ubuntu 24.04, not a
+          # public release: tagged release.yml builds the GLIBC_2.35 bundle.
+          VOX_PACKAGE_VERSION: v0.0.3-ci
+          VOX_PACKAGE_GLIBC_MAX: '2.38'
           VOX_PACKAGE_BENCHMARK_FRAMES: 60
           VOX_NAMED_BENCH_QUALIFY: 0
         run: tools/package-linux-demo.sh
       - name: Upload tester bundles
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: vox-digs-v0.0.3-linux-x86_64
+          name: vox-digs-v0.0.3-ci-linux-x86_64
           path: |
-            dist/vox-digs-v0.0.3-linux-x86_64.tar.gz
-            dist/vox-digs-v0.0.3-source.tar.gz
+            dist/vox-digs-v0.0.3-ci-linux-x86_64.tar.gz
+            dist/vox-digs-v0.0.3-ci-source.tar.gz
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
