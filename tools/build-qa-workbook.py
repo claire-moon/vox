@@ -311,8 +311,11 @@ def build_workbook(source: Path, output: Path) -> None:
         workbook.save(temporary)
         normalized = temporary.with_suffix(".normalized.xlsx")
         with zipfile.ZipFile(temporary, "r") as source_zip:
+            # Deflate output can differ across otherwise compatible zlib
+            # versions.  The workbook is small, so store normalized members
+            # verbatim to keep the committed byte stream cross-host stable.
             with zipfile.ZipFile(
-                normalized, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+                normalized, "w", compression=zipfile.ZIP_STORED
             ) as output_zip:
                 for name in sorted(source_zip.namelist()):
                     original = source_zip.getinfo(name)
@@ -326,7 +329,7 @@ def build_workbook(source: Path, output: Path) -> None:
                             data,
                         )
                     info = zipfile.ZipInfo(name, ZIP_TIME)
-                    info.compress_type = zipfile.ZIP_DEFLATED
+                    info.compress_type = zipfile.ZIP_STORED
                     info.external_attr = original.external_attr
                     info.create_system = 0
                     output_zip.writestr(info, data)
