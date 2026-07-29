@@ -1564,12 +1564,16 @@ static int demo_controller_detect_family(SDL_GameController *handle,
     if (handle != 0) {
         SDL_GameControllerType type = SDL_GameControllerGetType(handle);
         if (type == SDL_CONTROLLER_TYPE_PS3 ||
-            type == SDL_CONTROLLER_TYPE_PS4 ||
-            type == SDL_CONTROLLER_TYPE_PS5) return DEMO_PAD_PLAYSTATION;
-        if (type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO ||
-            type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_LEFT ||
-            type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT ||
-            type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_PAIR) {
+            type == SDL_CONTROLLER_TYPE_PS4
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+            || type == SDL_CONTROLLER_TYPE_PS5
+#endif
+            ) return DEMO_PAD_PLAYSTATION;
+        /* Joy-Con enum values arrived after the older SDL2 headers still
+         * shipped by supported Linux distributions.  The name fallback below
+         * recognizes them there, while Switch Pro remains a direct type match.
+         */
+        if (type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO) {
             return DEMO_PAD_NINTENDO;
         }
         if (type == SDL_CONTROLLER_TYPE_XBOX360 ||

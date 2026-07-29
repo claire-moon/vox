@@ -1,16 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 [CmdletBinding()]
 param(
-    [string]$Version = $(if ($env:VOX_PACKAGE_VERSION) {
-        $env:VOX_PACKAGE_VERSION
-    } else {
-        'v0.0.3'
-    }),
-    [string]$DistDir = $(if ($env:VOX_PACKAGE_DIST_DIR) {
-        $env:VOX_PACKAGE_DIST_DIR
-    } else {
-        (Join-Path $PSScriptRoot '..\dist')
-    }),
+    [string]$Version,
+    [string]$DistDir,
     [string]$Triplet = 'x64-windows-static',
     [switch]$AllowDirty
 )
@@ -49,11 +41,20 @@ function Copy-RequiredTree {
         -Recurse -Force
 }
 
+$Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    if ($env:VOX_PACKAGE_VERSION) {
+        $Version = $env:VOX_PACKAGE_VERSION
+    } else {
+        $Version = 'v0.0.3'
+    }
+}
+if ([string]::IsNullOrWhiteSpace($DistDir)) {
+    $DistDir = Join-Path $Root 'dist'
+}
 if ($Version -notmatch '^[A-Za-z0-9][A-Za-z0-9._+-]*$') {
     Stop-Package 'Version may contain only letters, digits, dot, underscore, plus, and hyphen'
 }
-
-$Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $DistDir = [System.IO.Path]::GetFullPath($DistDir)
 $dirty = (& git -C $Root status --porcelain=v1 --untracked-files=all)
 if ($LASTEXITCODE -ne 0) {
