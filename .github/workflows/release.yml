@@ -17,7 +17,12 @@ jobs:
       - name: Checkout release tag
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Install release build dependencies
-        run: sudo apt-get update && sudo apt-get install --yes libsdl2-dev nasm python3-openpyxl
+        run: sudo apt-get update && sudo apt-get install --yes libsdl2-dev nasm python3-venv
+      - name: Pin the QA workbook generator
+        run: |
+          python3 -m venv "$RUNNER_TEMP/vox-python"
+          "$RUNNER_TEMP/vox-python/bin/python" -m pip install --disable-pip-version-check 'openpyxl==3.1.2'
+          echo "$RUNNER_TEMP/vox-python/bin" >> "$GITHUB_PATH"
       - name: Select a current Rust toolchain
         run: rustup toolchain install stable --profile minimal && rustup default stable
       - name: Build and verify Linux release bundle
