@@ -1,0 +1,11 @@
+DIGS v0.0.3 DEMO - Windows x86-64
+==================================
+
+1. Extract the complete ZIP file.
+2. Open the extracted folder.
+3. Double-click run-digs.bat.
+
+Keep bin/ and share/ inside the extracted folder. No separate SDL installation
+is required for this package.
+
+This package is for 64-bit Windows.

@@ -29,6 +29,10 @@ def is_controller_db_file(relative: str) -> bool:
     }
 
 
+def is_sdl2_notice_file(relative: str) -> bool:
+    return relative == "LICENSES/SDL2-zlib.txt"
+
+
 def digest(path: Path, algorithm: str) -> str:
     value = hashlib.new(algorithm)
     with path.open("rb") as source:
@@ -58,6 +62,8 @@ def make_file(root: Path, path: Path) -> Dict[str, object]:
     file_license = (
         CONTROLLER_DB_LICENSE
         if is_controller_db_file(relative)
+        else SDL_LICENSE
+        if is_sdl2_notice_file(relative)
         else PROJECT_LICENSE
     )
     return {
@@ -88,6 +94,11 @@ def main() -> int:
         default="APPLICATION",
     )
     parser.add_argument("--namespace-label", default="binary")
+    parser.add_argument(
+        "--bundled-sdl2",
+        action="store_true",
+        help="record SDL2 as a bundled component rather than a system dependency",
+    )
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -137,13 +148,27 @@ def main() -> int:
     )
 
     project_id = "SPDXRef-Package-VOX-DIGS"
-    sdl_id = "SPDXRef-Package-SDL2-System"
+    sdl_id = "SPDXRef-Package-SDL2"
     controller_db_id = "SPDXRef-Package-SDL-GameControllerDB"
     controller_db_file_ids = [
         item["SPDXID"]
         for item, path in zip(files, paths)
         if is_controller_db_file(path.relative_to(root).as_posix())
     ]
+    sdl_comment = (
+        "Bundled as a statically linked component of the Windows executable."
+        if args.bundled_sdl2
+        else (
+            "External, system-provided dynamic runtime dependency. "
+            f"SDL2 is not included in this {distribution_kind}."
+        )
+    )
+    sdl_relationship_type = "CONTAINS" if args.bundled_sdl2 else "DEPENDS_ON"
+    sdl_relationship_comment = (
+        "SDL2 is bundled as a statically linked component."
+        if args.bundled_sdl2
+        else "External system dependency; not bundled."
+    )
     document = {
         "spdxVersion": "SPDX-2.3",
         "dataLicense": "CC0-1.0",
@@ -188,10 +213,7 @@ def main() -> int:
                 "licenseDeclared": SDL_LICENSE,
                 "copyrightText": "NOASSERTION",
                 "primaryPackagePurpose": "LIBRARY",
-                "comment": (
-                    "External, system-provided dynamic runtime dependency. "
-                    f"SDL2 is not included in this {distribution_kind}."
-                ),
+                "comment": sdl_comment,
             },
             {
                 "name": "SDL GameControllerDB",
@@ -222,9 +244,9 @@ def main() -> int:
             },
             {
                 "spdxElementId": project_id,
-                "relationshipType": "DEPENDS_ON",
+                "relationshipType": sdl_relationship_type,
                 "relatedSpdxElement": sdl_id,
-                "comment": "External system dependency; not bundled.",
+                "comment": sdl_relationship_comment,
             },
             {
                 "spdxElementId": project_id,

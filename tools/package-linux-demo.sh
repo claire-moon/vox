@@ -18,6 +18,7 @@ NASM_ACCEL=${VOX_PACKAGE_NASM:-AUTO}
 BENCHMARK_FRAMES=${VOX_PACKAGE_BENCHMARK_FRAMES:-120}
 BUILD_JOBS=${VOX_BUILD_JOBS:-}
 NAMED_BENCH_QUALIFY=${VOX_NAMED_BENCH_QUALIFY:-0}
+GLIBC_MAX=${VOX_PACKAGE_GLIBC_MAX:-2.35}
 CONTROLLER_DB="$ROOT/third_party/SDL_GameControllerDB/gamecontrollerdb.txt"
 CONTROLLER_DB_SHA256=dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0
 WORK_DIR=
@@ -125,6 +126,8 @@ need_command python3
 need_command tee
 need_command awk
 need_command cmp
+need_command readelf
+need_command sort
 
 if ! python3 -c 'import openpyxl' >/dev/null 2>&1; then
     die 'Python module openpyxl is required to verify the packaged QA workbook'
@@ -148,6 +151,9 @@ esac
 if [[ ! "$BENCHMARK_FRAMES" =~ ^[0-9]+$ ]] ||
     (( BENCHMARK_FRAMES < 1 || BENCHMARK_FRAMES > 100000 )); then
     die 'VOX_PACKAGE_BENCHMARK_FRAMES must be an integer from 1 through 100000'
+fi
+if [[ ! "$GLIBC_MAX" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    die 'VOX_PACKAGE_GLIBC_MAX must use major.minor form, for example 2.35'
 fi
 
 DIRTY_STATE=$(git -C "$ROOT" status --porcelain=v1 --untracked-files=all)
@@ -359,6 +365,21 @@ if command -v ldd >/dev/null 2>&1; then
     fi
 fi
 
+# A newer builder silently raises the oldest Linux distribution that can run
+# the public binary.  Keep public Linux bundles on the stated glibc baseline;
+# this catches the exact GLIBC_2.38 mismatch a tester encountered before the
+# archive reaches a release page.
+GLIBC_REQUIRED=$(LC_ALL=C readelf --version-info "$STAGE_DIR/bin/digs_demo" |
+    sed -n 's/.*Name: GLIBC_\([0-9][0-9.]*\).*/\1/p' |
+    sort -Vu | tail -n 1 || true)
+if [[ -z "$GLIBC_REQUIRED" ]]; then
+    die 'could not determine the packaged digs_demo glibc requirement'
+fi
+if [[ $(printf '%s\n%s\n' "$GLIBC_REQUIRED" "$GLIBC_MAX" |
+        sort -V | tail -n 1) != "$GLIBC_MAX" ]]; then
+    die "digs_demo requires GLIBC_$GLIBC_REQUIRED; release baseline is GLIBC_$GLIBC_MAX"
+fi
+
 {
     printf 'VOX + DIGS Linux binary-bundle evidence\n'
     printf 'Version: %s\n' "$VERSION"
@@ -371,6 +392,8 @@ fi
     printf 'C compiler: %s\n' "${CC:-CMake default}"
     printf 'C++ compiler: %s\n' "${CXX:-CMake default}"
     printf 'NASM acceleration: %s\n' "$NASM_ACCEL"
+    printf 'Maximum supported glibc baseline: GLIBC_%s\n' "$GLIBC_MAX"
+    printf 'Packaged digs_demo glibc requirement: GLIBC_%s\n' "$GLIBC_REQUIRED"
     printf 'SDL GameControllerDB commit: %s\n' \
         '8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5'
     printf 'SDL GameControllerDB SHA-256: %s\n' \

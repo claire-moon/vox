@@ -43,11 +43,17 @@ vox_require_runtime_libraries()
 
     if ! dependencies=$(LC_ALL=C ldd "$binary" 2>&1); then
         printf '%s\n' "$dependencies" >&2
+        if grep -Eiq 'GLIBC_[0-9.]+.*not found|version .*not found' <<<"$dependencies"; then
+            vox_die 'this DIGS binary needs a newer Linux runtime; download the release bundle for your system or build from source'
+        fi
         vox_die "could not inspect runtime libraries for $binary"
     fi
     if grep -F 'not found' <<<"$dependencies" >/dev/null; then
         printf '%s\n' 'DIGS: one or more runtime libraries are missing:' >&2
         printf '%s\n' "$dependencies" | grep -F 'not found' >&2
+        if grep -Eiq 'GLIBC_[0-9.]+.*not found|version .*not found' <<<"$dependencies"; then
+            vox_die 'this DIGS binary needs a newer Linux runtime; download the release bundle for your system or build from source'
+        fi
         if grep -Eiq 'SDL2|libSDL' <<<"$dependencies"; then
             vox_print_sdl2_help
         fi

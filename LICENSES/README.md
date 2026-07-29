@@ -10,3 +10,6 @@ exact version/commit, license identifier, and modification record in
 
 `SDL_GameControllerDB.txt` is the zlib license notice for the pinned controller
 mapping data distributed at `share/digs/controllers/gamecontrollerdb.txt`.
+
+`SDL2-zlib.txt` is the zlib license notice for SDL2. It is included in release
+bundles; the Windows x86-64 bundle statically links SDL2 into `digs_demo.exe`.

@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: publish-demo-release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  linux-x86_64:
+    name: Linux x86-64 release bundle
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install release build dependencies
+        run: sudo apt-get update && sudo apt-get install --yes libsdl2-dev nasm python3-openpyxl
+      - name: Build and verify Linux release bundle
+        env:
+          VOX_PACKAGE_VERSION: ${{ github.ref_name }}
+          VOX_PACKAGE_GLIBC_MAX: '2.35'
+          VOX_PACKAGE_BENCHMARK_FRAMES: '60'
+          VOX_NAMED_BENCH_QUALIFY: '0'
+        run: tools/package-linux-demo.sh
+      - name: Upload Linux release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-linux-x86_64
+          path: |
+            dist/vox-digs-${{ github.ref_name }}-linux-x86_64.tar.gz
+            dist/vox-digs-${{ github.ref_name }}-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-x86_64:
+    name: Windows x86-64 release bundle
+    runs-on: windows-2022
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build and verify Windows release bundle
+        shell: pwsh
+        run: >-
+          powershell -NoProfile -ExecutionPolicy Bypass -File
+          .\tools\package-windows-demo.ps1 -Version $env:GITHUB_REF_NAME
+      - name: Upload Windows release asset
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-windows-x86_64
+          path: dist/vox-digs-${{ github.ref_name }}-windows-x86_64.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish GitHub Release
+    needs: [linux-x86_64, windows-x86_64]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: release-assets
+      - name: Assemble checksums and release notes
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p dist
+          find release-assets -type f \( -name '*.tar.gz' -o -name '*.zip' \) \
+            -exec cp -- {} dist/ \;
+          test -f "dist/vox-digs-${RELEASE_VERSION}-linux-x86_64.tar.gz"
+          test -f "dist/vox-digs-${RELEASE_VERSION}-windows-x86_64.zip"
+          test -f "dist/vox-digs-${RELEASE_VERSION}-source.tar.gz"
+          (
+            cd dist
+            sha256sum \
+              "vox-digs-${RELEASE_VERSION}-linux-x86_64.tar.gz" \
+              "vox-digs-${RELEASE_VERSION}-windows-x86_64.zip" \
+              "vox-digs-${RELEASE_VERSION}-source.tar.gz" > SHA256SUMS
+            sha256sum -c SHA256SUMS
+          )
+          cat > release-notes.md <<EOF
+          ## Downloads
+
+          - **Windows x86-64:** download, extract, then double-click \`run-digs.bat\`.
+          - **Linux x86-64:** download, extract, then run \`./run-digs.sh\`.
+
+          Keep the extracted folder layout intact. Linux needs the SDL2 runtime
+          from its distribution. \`SHA256SUMS\` verifies all release assets;
+          the matching Corresponding Source archive is included for GPL-3.0-or-later compliance.
+          EOF
+      - name: Create or update public release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          if gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_VERSION" dist/* --clobber \
+              --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_VERSION" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "DIGS $RELEASE_VERSION" \
+              --notes-file release-notes.md
+          fi

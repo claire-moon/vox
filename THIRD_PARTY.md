@@ -9,16 +9,16 @@ traceable provenance, and an explicit distribution decision before merge.
 
 | Component | Use | License | Supported/tested version | Source | Intake and modifications |
 |---|---|---|---|---|---|
-| SDL2 | Optional desktop window, RGB texture presentation, input, timing, and queued audio | [zlib](https://github.com/libsdl-org/SDL/blob/SDL2/LICENSE.txt) | Floor: 2.0.10; tested: 2.30.0 | [upstream SDL2 branch](https://github.com/libsdl-org/SDL/tree/SDL2) | Found through CMake and linked from the host system; not vendored or modified |
+| SDL2 | Optional desktop window, RGB texture presentation, input, timing, and queued audio | [zlib](https://github.com/libsdl-org/SDL/blob/SDL2/LICENSE.txt) | Floor: 2.0.10; tested: 2.30.0 | [upstream SDL2 branch](https://github.com/libsdl-org/SDL/tree/SDL2) | Found through CMake; Linux packages use the system runtime, while the Windows package statically links the vcpkg-built component; not vendored or modified |
 | SDL GameControllerDB | Normalize known gamepads before SDL2 controller enumeration | [zlib](https://github.com/mdqinc/SDL_GameControllerDB/blob/8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5/LICENSE) | Commit `8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5`; database SHA-256 `dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0` | [pinned upstream tree](https://github.com/mdqinc/SDL_GameControllerDB/tree/8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5) | The reviewed database is vendored under `third_party/SDL_GameControllerDB` and distributed at `share/digs/controllers/gamecontrollerdb.txt`; mapping data is unmodified and its license/provenance are preserved |
 | Lua | Deterministic high-level DIGS data and bounded catalog runtime | [MIT](https://www.lua.org/license.html) | 5.1.5; archive SHA-256 `2640fc56a795f29d28ef15e13c34a47e223960b0240e8cb0a82d9b0738695333` | [official Lua 5.1.5 archive](https://www.lua.org/ftp/lua-5.1.5.tar.gz) | Complete upstream source is vendored under `third_party/lua-5.1.5`; the build omits the standalone interpreters and nondeterministic `io`, `os`, `package`, and `debug` libraries; no upstream source is locally patched |
 
 The Free Software Foundation lists the
 [zlib license as GPL-compatible](https://www.gnu.org/licenses/license-list.html#ZLib).
-This repository does not distribute an SDL2 source tree or binary. A
-downstream binary bundle that includes SDL2 must retain SDL's own copyright and
-license notice and satisfy all applicable GPL Corresponding Source obligations
-for VOX + DIGS.
+This repository does not distribute an SDL2 source tree. Linux bundles use the
+system SDL2 runtime. The Windows bundle statically links SDL2 and includes its
+copyright and zlib license notice as `LICENSES/SDL2-zlib.txt`; the matching
+Corresponding Source archive remains distributed beside every binary release.
 
 The controller database is data, not an SDL2 binary. DIGS loads the packaged
 copy before enumerating devices, so known pads use consistent logical names and

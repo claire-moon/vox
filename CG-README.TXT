@@ -470,9 +470,9 @@ Both archives must report OK. The binary bundle contains SBOM.spdx.json, raw
 package-time evidence, GPL notices, the Lua catalog, and launch/test scripts.
 The matching Corresponding Source archive is distributed beside it.
 
-v0.0.3 is still the Linux CPU-software vertical slice. Windows, macOS,
-historical operating systems, a GPU renderer, network multiplayer, a complete
-rigid-body solver, device-specific remapping wizards for every unknown pad, and
-final competitive bot quality remain planned/evidence-gated work. Record only
-what you observe and do not infer GPU acceleration from the laptop containing
-a GTX 1660 Ti.
+v0.0.3 publishes easy-run Linux and Windows x86-64 bundles. The exposed game
+renderer remains the CPU-software vertical slice. macOS, historical operating
+systems, a GPU renderer, network multiplayer, a complete rigid-body solver,
+device-specific remapping wizards for every unknown pad, and final competitive
+bot quality remain planned/evidence-gated work. Record only what you observe
+and do not infer GPU acceleration from the laptop containing a GTX 1660 Ti.
