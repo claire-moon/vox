@@ -357,7 +357,8 @@ missing = sorted(expected - names)
 if missing:
     raise SystemExit("legacy ZIP missing: " + ", ".join(missing))
 PY
-tar -tzf "$SOURCE_ARCHIVE" | grep -Fqx "$SOURCE_STEM/SOURCE-COMMIT.txt" || \
+tar -tzf "$SOURCE_ARCHIVE" >"$WORK_DIR/source-archive-list.txt"
+grep -Fqx "$SOURCE_STEM/SOURCE-COMMIT.txt" "$WORK_DIR/source-archive-list.txt" || \
     die 'the legacy Corresponding Source archive is missing SOURCE-COMMIT.txt'
 
 printf 'Created isolated legacy addendum assets:\n'
