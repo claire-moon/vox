@@ -35,7 +35,8 @@ jobs:
       - name: Pin the QA workbook generator
         run: |
           python3 -m venv "$RUNNER_TEMP/vox-python"
-          "$RUNNER_TEMP/vox-python/bin/python" -m pip install --disable-pip-version-check 'openpyxl==3.1.2'
+          "$RUNNER_TEMP/vox-python/bin/python" -m pip install --disable-pip-version-check \
+            'openpyxl==3.1.2' 'lxml==5.2.1'
           echo "$RUNNER_TEMP/vox-python/bin" >> "$GITHUB_PATH"
       - name: Select a current Rust toolchain
         run: rustup toolchain install stable --profile minimal && rustup default stable
