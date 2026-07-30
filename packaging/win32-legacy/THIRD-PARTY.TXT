@@ -1,0 +1,16 @@
+DIGS legacy Win32 third-party notice
+====================================
+
+The legacy Win32 executable uses the repository's native GDI/WinMM frontend.
+It does not link or distribute SDL2 or Lua 5.1.5. Lua remains in the matching
+Corresponding Source archive as an optional desktop scripting component; its
+MIT notice is retained in LICENSES\Lua-5.1.txt for source completeness.
+
+The packaged controller mapping data is retained under SHARE\digs\controllers
+for content-layout compatibility. Its zlib license notice is included as
+LICENSES\SDL_GameControllerDB.txt. The native legacy frontend may choose not
+to expose modern controller or haptic features.
+
+VOX and DIGS are GPL-3.0-or-later. The matching legacy Corresponding Source
+archive is published beside this ZIP on the GitHub Release page. Its
+SOURCE-COMMIT.txt identifies the exact checkout used to build this addendum.

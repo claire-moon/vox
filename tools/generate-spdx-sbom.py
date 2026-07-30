@@ -99,6 +99,11 @@ def main() -> int:
         action="store_true",
         help="record SDL2 as a bundled component rather than a system dependency",
     )
+    parser.add_argument(
+        "--no-sdl2",
+        action="store_true",
+        help="record a native host that has no SDL2 dependency",
+    )
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -111,6 +116,8 @@ def main() -> int:
         parser.error("--output must be inside --root")
     if args.epoch < 0:
         parser.error("--epoch must be non-negative")
+    if args.bundled_sdl2 and args.no_sdl2:
+        parser.error("--bundled-sdl2 and --no-sdl2 cannot be combined")
 
     paths = sorted(
         path
@@ -150,6 +157,7 @@ def main() -> int:
     project_id = "SPDXRef-Package-VOX-DIGS"
     sdl_id = "SPDXRef-Package-SDL2"
     controller_db_id = "SPDXRef-Package-SDL-GameControllerDB"
+    include_sdl2 = not args.no_sdl2
     controller_db_file_ids = [
         item["SPDXID"]
         for item, path in zip(files, paths)
@@ -203,6 +211,8 @@ def main() -> int:
                 },
                 "hasFiles": [item["SPDXID"] for item in files],
             },
+        ]
+        + ([
             {
                 "name": "SDL2",
                 "SPDXID": sdl_id,
@@ -214,7 +224,9 @@ def main() -> int:
                 "copyrightText": "NOASSERTION",
                 "primaryPackagePurpose": "LIBRARY",
                 "comment": sdl_comment,
-            },
+            }
+        ] if include_sdl2 else [])
+        + [
             {
                 "name": "SDL GameControllerDB",
                 "SPDXID": controller_db_id,
@@ -233,7 +245,7 @@ def main() -> int:
                     "Pinned controller mapping data and its zlib license are "
                     f"included in this {distribution_kind}."
                 ),
-            },
+            }
         ],
         "files": files,
         "relationships": [
@@ -241,19 +253,23 @@ def main() -> int:
                 "spdxElementId": "SPDXRef-DOCUMENT",
                 "relationshipType": "DESCRIBES",
                 "relatedSpdxElement": project_id,
-            },
+            }
+        ]
+        + ([
             {
                 "spdxElementId": project_id,
                 "relationshipType": sdl_relationship_type,
                 "relatedSpdxElement": sdl_id,
                 "comment": sdl_relationship_comment,
-            },
+            }
+        ] if include_sdl2 else [])
+        + [
             {
                 "spdxElementId": project_id,
                 "relationshipType": "DEPENDS_ON",
                 "relatedSpdxElement": controller_db_id,
                 "comment": "Pinned controller mapping data; bundled.",
-            },
+            }
         ]
         + [
             {

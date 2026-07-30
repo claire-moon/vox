@@ -1,0 +1,14 @@
+DIGS legacy Win32 addendum
+===========================
+
+1. Extract the complete ZIP with folders preserved.
+2. Open the extracted folder.
+3. Double-click RUN-DIGS.BAT.
+
+Keep DIGS95.EXE and SHARE beside RUN-DIGS.BAT. Do not move DIGS95.EXE out of
+the extracted folder.
+
+This package is a separate 32-bit legacy-host build. Its compatibility claim
+is defined by the EVIDENCE folder shipped in the same archive. A successful
+build and PE import audit are not substitutes for acceptance on the intended
+period Windows installation.

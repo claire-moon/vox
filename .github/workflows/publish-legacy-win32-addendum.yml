@@ -1,0 +1,120 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: publish-legacy-win32-addendum
+
+# This workflow intentionally augments an existing public release. It never
+# rebuilds, replaces, or checksums the existing Linux or modern-Windows assets.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub Release tag to augment
+        required: true
+        default: v0.0.3
+        type: string
+      source_ref:
+        description: Commit, branch, or ref containing the legacy Win32 host
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-legacy-win32-addendum-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Win32 legacy addendum
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout the exact legacy-host source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 0
+      - name: Confirm a clean source checkout and existing destination release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          for asset in \
+              "vox-digs-$RELEASE_TAG-windows-win32-legacy.zip" \
+              "vox-digs-$RELEASE_TAG-windows-win32-legacy-source.tar.gz" \
+              "vox-digs-$RELEASE_TAG-windows-win32-legacy.SHA256SUMS"; do
+            if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+                --json assets --jq '.assets[].name' | grep -Fqx "$asset"; then
+              printf 'Refusing to replace existing release asset: %s\n' "$asset" >&2
+              exit 1
+            fi
+          done
+      - name: Install the Win32 legacy cross toolchain
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes \
+            cmake \
+            g++-mingw-w64-i686-win32 \
+            gcc-mingw-w64-i686-win32 \
+            binutils-mingw-w64-i686 \
+            python3
+          command -v i686-w64-mingw32-gcc-win32
+          command -v i686-w64-mingw32-g++-win32
+          command -v i686-w64-mingw32-objdump
+      - name: Build and package the Win32 legacy addendum
+        env:
+          CC: i686-w64-mingw32-gcc-win32
+          CXX: i686-w64-mingw32-g++-win32
+          OBJDUMP: i686-w64-mingw32-objdump
+          VOX_PACKAGE_VERSION: ${{ inputs.release_tag }}
+          VOX_LEGACY_SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -Eeuo pipefail
+          export VOX_LEGACY_SOURCE_COMMIT="$(git rev-parse HEAD)"
+          tools/package-win32-legacy.sh
+      - name: Upload isolated Win32 legacy release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-windows-win32-legacy-${{ inputs.release_tag }}
+          path: |
+            dist/vox-digs-${{ inputs.release_tag }}-windows-win32-legacy.zip
+            dist/vox-digs-${{ inputs.release_tag }}-windows-win32-legacy-source.tar.gz
+            dist/vox-digs-${{ inputs.release_tag }}-windows-win32-legacy.SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Add Win32 legacy assets without replacing release files
+    needs: [build]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download isolated addendum assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-windows-win32-legacy-${{ inputs.release_tag }}
+          path: release-assets
+      - name: Confirm assets remain additive and upload them
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_ASSETS: release-assets
+        run: |
+          set -Eeuo pipefail
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          for asset in "$RELEASE_ASSETS"/*; do
+            test -f "$asset"
+            name=$(basename "$asset")
+            if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+                --json assets --jq '.assets[].name' | grep -Fqx "$name"; then
+              printf 'Refusing to replace existing release asset: %s\n' "$name" >&2
+              exit 1
+            fi
+          done
+          # Deliberately no --clobber: existing release files, including
+          # SHA256SUMS, remain byte-for-byte untouched.
+          gh release upload "$RELEASE_TAG" "$RELEASE_ASSETS"/* \
+            --repo "$GITHUB_REPOSITORY"

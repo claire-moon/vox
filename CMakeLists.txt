@@ -14,6 +14,31 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(VOX_BUILD_TESTS "Build deterministic VOX tests" ON)
 option(VOX_BUILD_SDL2_DEMO "Build the playable SDL2 DIGS demo" OFF)
 option(VOX_BUILD_NASM_ACCEL "Build the optional Linux x86-64 NASM contract probe" OFF)
+option(VOX_BUILD_LEGACY_PROFILE
+       "Build the reduced-memory 400x240x4 VOX compatibility profile" OFF)
+option(VOX_BUILD_WIN32_LEGACY_DEMO
+       "Build the native GDI/WinMM PE32 DIGS compatibility demo" OFF)
+
+# The SDL2 host is deliberately not used by the historical Windows target:
+# SDL2 no longer supports the Windows 9x / NT4 baseline.  The legacy host has
+# a separately compiled core so its reduced world dimensions cannot change the
+# ABI of current desktop builds.
+if (VOX_BUILD_WIN32_LEGACY_DEMO)
+    if (NOT WIN32)
+        message(FATAL_ERROR
+            "VOX_BUILD_WIN32_LEGACY_DEMO requires a Windows cross/native toolchain")
+    endif()
+    if (NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
+        message(FATAL_ERROR
+            "VOX_BUILD_WIN32_LEGACY_DEMO requires a 32-bit PE32 toolchain")
+    endif()
+    if (NOT MINGW OR NOT CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
+        NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        message(FATAL_ERROR
+            "VOX_BUILD_WIN32_LEGACY_DEMO requires the i686 MinGW GNU C/C++ toolchain")
+    endif()
+    set(VOX_BUILD_LEGACY_PROFILE ON)
+endif()
 
 if (VOX_BUILD_NASM_ACCEL)
     string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" VOX_SYSTEM_PROCESSOR_LOWER)
@@ -181,6 +206,148 @@ if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Werror)
 endif()
 
+# ---------------------------------------------------------------------------
+# Historical Win32 profile
+#
+# This is intentionally a distinct set of static libraries.  World dimensions
+# are part of public struct layouts, therefore changing them on vox_kernel
+# would silently corrupt every normal desktop target that links it.
+# ---------------------------------------------------------------------------
+if (VOX_BUILD_LEGACY_PROFILE)
+    set(VOX_LEGACY_WORLD_DEFINITIONS
+        VOX_WORLD_WIDTH=400U
+        VOX_WORLD_HEIGHT=240U
+        VOX_WORLD_DEPTH=4U
+    )
+    if (CMAKE_SIZEOF_VOID_P EQUAL 4 AND CMAKE_C_COMPILER_ID MATCHES "GNU")
+        set(VOX_LEGACY_C_CPU_OPTIONS
+            -march=i386 -mno-sse -mno-sse2 -mfpmath=387
+        )
+    endif()
+    if (CMAKE_SIZEOF_VOID_P EQUAL 4 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        set(VOX_LEGACY_CXX_CPU_OPTIONS
+            -march=i386 -mno-sse -mno-sse2 -mfpmath=387
+        )
+    endif()
+
+    # The WinMM host owns its own i386-safe synth object.  Reusing vox_audio
+    # here would make it too easy for a future desktop compiler default to
+    # introduce an instruction unavailable on the target CPU baseline.
+    add_library(vox_legacy_audio STATIC
+        engine/c89/vox_audio.c
+    )
+    target_include_directories(vox_legacy_audio PUBLIC engine/include)
+    set_property(TARGET vox_legacy_audio PROPERTY C_STANDARD 90)
+    set_property(TARGET vox_legacy_audio PROPERTY C_STANDARD_REQUIRED ON)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(vox_legacy_audio PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            ${VOX_LEGACY_C_CPU_OPTIONS})
+    endif()
+
+    add_library(vox_legacy_kernel STATIC
+        engine/c89/vox_kernel.c
+    )
+    target_include_directories(vox_legacy_kernel PUBLIC engine/include)
+    target_compile_definitions(vox_legacy_kernel PUBLIC
+        ${VOX_LEGACY_WORLD_DEFINITIONS})
+    set_property(TARGET vox_legacy_kernel PROPERTY C_STANDARD 90)
+    set_property(TARGET vox_legacy_kernel PROPERTY C_STANDARD_REQUIRED ON)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(vox_legacy_kernel PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            ${VOX_LEGACY_C_CPU_OPTIONS})
+    endif()
+
+    add_library(vox_legacy_physics STATIC
+        engine/cpp98/vox_physics.cpp
+    )
+    target_include_directories(vox_legacy_physics PUBLIC engine/include)
+    target_compile_definitions(vox_legacy_physics PUBLIC
+        ${VOX_LEGACY_WORLD_DEFINITIONS})
+    target_link_libraries(vox_legacy_physics PUBLIC vox_legacy_kernel)
+    set_property(TARGET vox_legacy_physics PROPERTY CXX_STANDARD 98)
+    set_property(TARGET vox_legacy_physics PROPERTY CXX_STANDARD_REQUIRED ON)
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(vox_legacy_physics PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -fno-exceptions -fno-rtti
+            ${VOX_LEGACY_CXX_CPU_OPTIONS})
+    endif()
+
+    add_library(digs_legacy_game STATIC
+        games/digs/digs_game.c
+    )
+    target_include_directories(digs_legacy_game PUBLIC engine/include)
+    target_compile_definitions(digs_legacy_game PUBLIC
+        ${VOX_LEGACY_WORLD_DEFINITIONS})
+    target_link_libraries(digs_legacy_game PUBLIC
+        vox_legacy_kernel vox_legacy_physics)
+    set_property(TARGET digs_legacy_game PROPERTY C_STANDARD 90)
+    set_property(TARGET digs_legacy_game PROPERTY C_STANDARD_REQUIRED ON)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(digs_legacy_game PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            ${VOX_LEGACY_C_CPU_OPTIONS})
+    endif()
+
+    add_library(vox_legacy_software STATIC
+        ports/software/vox_software.c
+    )
+    target_include_directories(vox_legacy_software PUBLIC engine/include)
+    target_compile_definitions(vox_legacy_software PUBLIC
+        ${VOX_LEGACY_WORLD_DEFINITIONS})
+    target_link_libraries(vox_legacy_software PUBLIC vox_legacy_kernel)
+    set_property(TARGET vox_legacy_software PROPERTY C_STANDARD 90)
+    set_property(TARGET vox_legacy_software PROPERTY C_STANDARD_REQUIRED ON)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(vox_legacy_software PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            ${VOX_LEGACY_C_CPU_OPTIONS})
+    endif()
+endif()
+
+if (VOX_BUILD_WIN32_LEGACY_DEMO)
+    add_executable(digs_win32_legacy WIN32
+        ports/win32/digs_win32_legacy.c
+        ports/sdl2/vox_sdl_ui.c
+    )
+    target_include_directories(digs_win32_legacy PRIVATE
+        engine/include
+        ports/sdl2
+    )
+    target_compile_definitions(digs_win32_legacy PRIVATE
+        ${VOX_LEGACY_WORLD_DEFINITIONS}
+        WINVER=0x0400
+        _WIN32_WINNT=0x0400
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+    target_link_libraries(digs_win32_legacy PRIVATE
+        digs_legacy_game
+        vox_legacy_software
+        vox_legacy_audio
+        user32
+        gdi32
+        winmm
+    )
+    set_property(TARGET digs_win32_legacy PROPERTY C_STANDARD 90)
+    set_property(TARGET digs_win32_legacy PROPERTY C_STANDARD_REQUIRED ON)
+    set_property(TARGET digs_win32_legacy PROPERTY C_EXTENSIONS OFF)
+    set_property(TARGET digs_win32_legacy PROPERTY LINKER_LANGUAGE CXX)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU")
+        target_compile_options(digs_win32_legacy PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            ${VOX_LEGACY_C_CPU_OPTIONS})
+        target_link_options(digs_win32_legacy PRIVATE
+            -static -static-libgcc -static-libstdc++
+            -Wl,--subsystem,windows
+            -Wl,--major-os-version,4
+            -Wl,--minor-os-version,0
+            -Wl,--major-subsystem-version,4
+            -Wl,--minor-subsystem-version,0)
+    endif()
+endif()
+
 add_executable(vox_headless tools/vox_headless.c)
 target_link_libraries(vox_headless PRIVATE vox_kernel)
 target_include_directories(vox_headless PRIVATE engine/include)
@@ -194,6 +361,22 @@ target_include_directories(digs_headless PRIVATE engine/include)
 set_property(TARGET digs_headless PROPERTY LINKER_LANGUAGE CXX)
 if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(digs_headless PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+if (VOX_BUILD_LEGACY_PROFILE)
+    # The legacy profile has intentionally different dimensions and therefore
+    # different golden hashes.  This scenario verifies its real ABI/step path
+    # without weakening the desktop deterministic fixtures above.
+    add_executable(digs_legacy_headless tools/digs_headless.c)
+    target_link_libraries(digs_legacy_headless PRIVATE digs_legacy_game)
+    target_include_directories(digs_legacy_headless PRIVATE engine/include)
+    target_compile_definitions(digs_legacy_headless PRIVATE
+        ${VOX_LEGACY_WORLD_DEFINITIONS})
+    set_property(TARGET digs_legacy_headless PROPERTY LINKER_LANGUAGE CXX)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(digs_legacy_headless PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+    endif()
 endif()
 
 add_executable(digs_script tools/digs_script.c)
@@ -342,4 +525,7 @@ if (VOX_BUILD_TESTS)
     endif()
     add_test(NAME vox_headless_scenario COMMAND vox_headless)
     add_test(NAME digs_headless_scenario COMMAND digs_headless)
+    if (TARGET digs_legacy_headless)
+        add_test(NAME digs_legacy_headless_scenario COMMAND digs_legacy_headless)
+    endif()
 endif()
