@@ -2291,6 +2291,62 @@ static int test_v003_overlap_recovery_and_crush(void)
 }
 
 /*
+ * The hot rail bores by heating terrain, and used to convert coal and
+ * biomass straight to lava.  A miner tunnelling down through a seam
+ * liquefied their own floor, fell into the pool, and died to lava contact
+ * credited to the hot rail.  Heating flammable strata past ignition is the
+ * intended behaviour; leaving molten rock in the bore is not.
+ */
+static int test_hot_rail_bore_leaves_no_lava(void)
+{
+    vox_digs_rules rules;
+    vox_digs_input input;
+    vox_i32 center_x;
+    vox_i32 center_y;
+    vox_i32 x;
+    vox_i32 y;
+    vox_u32 z;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 1;
+    match.spawn_shield_ticks[0] = 0U;
+    center_x = match.players[0].position_x.value_q16 >> 16;
+    center_y = match.players[0].position_y.value_q16 >> 16;
+    /* Lay a coal seam to the miner's right, well inside hot rail range. */
+    for (y = center_y - 2L; y <= center_y + 2L; ++y) {
+        for (x = center_x + 2L; x <= center_x + 8L; ++x) {
+            if (x >= 0L && y >= 0L &&
+                !set_test_column(&match.world, (vox_u32)x, (vox_u32)y,
+                                 VOX_MAT_COAL)) {
+                return 2;
+            }
+        }
+    }
+    init_test_input(&input, 0U, (vox_u16)(center_x + 6L), (vox_u16)center_y);
+    input.selected_weapon = VOX_DIGS_TOOL_HOT_RAIL;
+    input.actions = VOX_DIGS_ACTION_FIRE;
+    if (vox_digs_submit_input(&match, &input) != VOX_OK ||
+        vox_digs_match_step(&match) != VOX_OK) {
+        return 3;
+    }
+    /* The seam must be scorched, never molten. */
+    for (y = center_y - 2L; y <= center_y + 2L; ++y) {
+        for (x = center_x + 2L; x <= center_x + 8L; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                const vox_cell *cell = vox_world_cell(&match.world,
+                    (vox_u32)x, (vox_u32)y, z);
+                if (cell != 0 && cell->material == VOX_MAT_LAVA) {
+                    return 4;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+/*
  * Partial burial -- the case the lead reported as "random dying from digging
  * through the landscape".  Settling debris leaves a miner overlapping solid
  * terrain without fully entombing them.  That must never be instantly fatal,
@@ -2803,6 +2859,13 @@ int main(void)
             fprintf(stderr,
                     "DIGS v0.0.3 AI event-drain mismatch (%d)\n", result);
             return 25;
+        }
+    }
+    {
+        int result = test_hot_rail_bore_leaves_no_lava();
+        if (result != 0) {
+            fprintf(stderr, "DIGS hot-rail bore mismatch (%d)\n", result);
+            return 62;
         }
     }
     {

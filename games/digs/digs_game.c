@@ -3366,16 +3366,25 @@ static vox_result digs_fire_hot_rail(vox_digs_match *match, vox_u16 player,
                     cell->material == VOX_MAT_BEDROCK) {
                     continue;
                 }
-                if (cell->material == VOX_MAT_BIOMASS ||
-                    cell->material == VOX_MAT_COAL) {
-                    (void)vox_world_set(&match->world, (vox_u32)x_cell,
-                                        (vox_u32)y_cell, z, VOX_MAT_LAVA,
-                                        850L << 16);
-                } else {
-                    (void)vox_world_set(&match->world, (vox_u32)x_cell,
-                                        (vox_u32)y_cell, z,
-                                        cell->material, 850L << 16);
-                }
+                /*
+                 * Heat the bore, do not liquefy it.
+                 *
+                 * This used to convert coal and biomass straight to lava.
+                 * Tunnelling down through a seam therefore turned the
+                 * miner's own floor molten, they fell into the pool they
+                 * had just made, and lava contact killed them at twelve
+                 * health per tick -- attributed, confusingly, to the hot
+                 * rail itself.  That is the reported "dying in the tunnel
+                 * being made by the miner while making the tunnel".
+                 *
+                 * Coal and biomass are flammable, so heating them past
+                 * ignition still sets the tunnel alight through the normal
+                 * material reactions.  The tool keeps its scorched-earth
+                 * character and its tunnels stay walkable.
+                 */
+                (void)vox_world_set(&match->world, (vox_u32)x_cell,
+                                    (vox_u32)y_cell, z,
+                                    cell->material, 850L << 16);
             }
             if ((step & 7U) == 0U) {
                 (void)vox_world_blast(&match->world, (vox_u32)x_cell,
