@@ -105,6 +105,18 @@ typedef enum vox_world_collision_class {
 #define VOX_CHUNK_DIRTY 2U
 #define VOX_BLAST_MAX_RADIUS 16U
 
+/*
+ * Horizontal reach, in cells, over which intact ground holds up a ceiling.
+ *
+ * Without this, structural support is cohesionless: only the cell directly
+ * below and its two diagonals count, so any span wider than about two cells
+ * loses its middle the moment it is undermined, and ordinary tunnelling
+ * destroys its own tunnel.  With it, spans up to roughly
+ * 2 * VOX_STRUCTURE_COHESION_CELLS + 1 stay standing and wider excavations
+ * cave in.  This is the tuning knob for how brave a miner can be with a drill.
+ */
+#define VOX_STRUCTURE_COHESION_CELLS 4U
+
 typedef struct vox_cell {
     vox_u16 material;
     vox_u16 flags;

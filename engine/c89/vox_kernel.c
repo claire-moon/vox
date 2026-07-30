@@ -344,29 +344,62 @@ static int vox_is_structural_material(vox_u16 material)
            material == VOX_MAT_METAL;
 }
 
+static int vox_cell_bears_load(const vox_cell *cell)
+{
+    return cell->material != VOX_MAT_AIR &&
+           !(cell->flags & (VOX_CELL_PHASE_GAS | VOX_CELL_LOOSE));
+}
+
+/*
+ * Does anything hold this cell up?
+ *
+ * The direct test is the cell below and its two diagonals.  On its own that
+ * models cohesionless sand: with collapse working, every span wider than
+ * about two cells loses its middle, so a drill or hot rail would destroy the
+ * very tunnels they exist to dig.
+ *
+ * Real ground has cohesion, so a ceiling also counts as held when load-bearing
+ * material sits within VOX_STRUCTURE_COHESION_CELLS horizontally on the row
+ * below -- a nearby wall, pillar, or debris pile it can span across to.
+ * Tunnels up to about 2 * VOX_STRUCTURE_COHESION_CELLS + 1 wide stay open;
+ * wider excavations and deliberately undermined slabs come down.
+ *
+ * The cell's own row is deliberately NOT consulted.  A ceiling is a
+ * continuous layer, so letting it lean on its own neighbours would be
+ * circular -- every cell would be held up by the cell beside it and no span,
+ * however undermined, would ever fall.
+ *
+ * The scan is bounded by that constant and only ever runs for awake
+ * structural cells already in the active frontier, so cost tracks activity
+ * rather than world size.
+ */
 static int vox_cell_has_support(const vox_world *world, vox_u32 x,
                                 vox_u32 y, vox_u32 z)
 {
-    const vox_cell *below;
+    vox_u32 reach;
     if (y + 1U >= VOX_WORLD_HEIGHT) {
         return 1;
     }
-    below = &world->cells[vox_index(x, y + 1U, z)];
-    if (below->material != VOX_MAT_AIR &&
-        !(below->flags & (VOX_CELL_PHASE_GAS | VOX_CELL_LOOSE))) {
+    if (vox_cell_bears_load(&world->cells[vox_index(x, y + 1U, z)])) {
         return 1;
     }
-    if (x > 0U) {
-        below = &world->cells[vox_index(x - 1U, y + 1U, z)];
-        if (below->material != VOX_MAT_AIR &&
-            !(below->flags & (VOX_CELL_PHASE_GAS | VOX_CELL_LOOSE))) {
+    if (x > 0U &&
+        vox_cell_bears_load(&world->cells[vox_index(x - 1U, y + 1U, z)])) {
+        return 1;
+    }
+    if (x + 1U < VOX_WORLD_WIDTH &&
+        vox_cell_bears_load(&world->cells[vox_index(x + 1U, y + 1U, z)])) {
+        return 1;
+    }
+    for (reach = 2U; reach <= VOX_STRUCTURE_COHESION_CELLS; ++reach) {
+        if (x >= reach &&
+            vox_cell_bears_load(
+                &world->cells[vox_index(x - reach, y + 1U, z)])) {
             return 1;
         }
-    }
-    if (x + 1U < VOX_WORLD_WIDTH) {
-        below = &world->cells[vox_index(x + 1U, y + 1U, z)];
-        if (below->material != VOX_MAT_AIR &&
-            !(below->flags & (VOX_CELL_PHASE_GAS | VOX_CELL_LOOSE))) {
+        if (x + reach < VOX_WORLD_WIDTH &&
+            vox_cell_bears_load(
+                &world->cells[vox_index(x + reach, y + 1U, z)])) {
             return 1;
         }
     }
@@ -656,6 +689,28 @@ static void vox_step_materials(vox_world *world,
                             vox_toggle_cell_signature(chunk, vox_index(x, y, depth),
                                                       cell);
                             vox_mark_dirty(chunk);
+                        } else if (vox_is_structural_material(cell->material) &&
+                                   !vox_cell_has_support(world, x, y, depth)) {
+                            /*
+                             * An unsupported cell is not settled, so it must
+                             * not be slept.
+                             *
+                             * This phase runs after vox_step_falling in the
+                             * same tick.  When a cell falls, vox_try_move
+                             * wakes the cell above the slot it vacated -- but
+                             * that cell has not moved yet, so this branch used
+                             * to put it straight back to sleep, before
+                             * vox_step_structures ever got the chance to mark
+                             * it UNSTABLE on the following tick.  A collapse
+                             * therefore advanced exactly one row and stopped,
+                             * which is why undermined terrain hung in mid-air.
+                             *
+                             * Keeping it awake is self-limiting: debris fills
+                             * the void until the pile supports what is left
+                             * above it, and then the normal sleep path below
+                             * retires the whole region.
+                             */
+                            (void)0;
                         } else {
                             vox_sleep_cell(world, chunk, vox_index(x, y, depth),
                                            cell);
@@ -699,6 +754,46 @@ const vox_material_properties *vox_material_get(vox_u16 material)
     return &vox_materials[material];
 }
 
+/*
+ * Wake the cells whose support depends on (x, y, z): the one directly above
+ * and its two upper diagonals, mirroring vox_cell_has_support.  Only
+ * structural materials can be left hanging, so the rest are skipped to keep
+ * the frontier small.
+ */
+static void vox_wake_support_dependents(vox_world *world, vox_u32 x,
+                                        vox_u32 y, vox_u32 z)
+{
+    vox_u32 offset;
+    if (y == 0U) {
+        return;
+    }
+    for (offset = 0U; offset < 3U; ++offset) {
+        vox_u32 neighbor_x;
+        vox_u32 index;
+        vox_cell *above;
+        if (offset == 0U) {
+            if (x == 0U) {
+                continue;
+            }
+            neighbor_x = x - 1U;
+        } else if (offset == 1U) {
+            neighbor_x = x;
+        } else {
+            if (x + 1U >= VOX_WORLD_WIDTH) {
+                continue;
+            }
+            neighbor_x = x + 1U;
+        }
+        index = vox_index(neighbor_x, y - 1U, z);
+        above = &world->cells[index];
+        if (!vox_is_structural_material(above->material)) {
+            continue;
+        }
+        vox_wake_cell(world, &world->chunks[vox_chunk_index(neighbor_x, y - 1U)],
+                      index, above);
+    }
+}
+
 vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
                          vox_u16 material, vox_i32 temperature_q16)
 {
@@ -714,6 +809,21 @@ vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
     chunk = &world->chunks[vox_chunk_index(x, y)];
     if (material == VOX_MAT_AIR) {
         vox_clear_cell(world, chunk, vox_index(x, y, z), cell);
+        /*
+         * Removing a cell is the only thing that can rob its neighbours of
+         * support, and vox_cell_has_support looks exactly one row down at
+         * (x, y+1) and the two diagonals.  So the cells whose footing just
+         * vanished are the three directly above.
+         *
+         * Waking them is what makes tunnelling collapse anything.  Without
+         * it a dug-out cell simply went to sleep and told nobody, the
+         * structural pass only ever visits awake cells, and a slab with
+         * every one of its pillars mined out floated indefinitely with the
+         * world reporting zero awake cells.  Each falling cell wakes the
+         * next as it moves, so seeding these three is enough to carry a
+         * cave-in upward through the whole overburden.
+         */
+        vox_wake_support_dependents(world, x, y, z);
         return VOX_OK;
     }
     vox_toggle_cell_signature(chunk, vox_index(x, y, z), cell);

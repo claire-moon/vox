@@ -2293,6 +2293,103 @@ static int test_v003_overlap_recovery_and_crush(void)
 }
 
 /*
+ * Undermined terrain must actually come down.
+ *
+ * The collapse machinery -- structural support, UNSTABLE, bottom-up falling --
+ * existed since v0.0.3 but was completely inert in play: clearing a cell put
+ * it to sleep without waking anything, so the structural pass never visited
+ * the roof above a fresh tunnel and a fully undermined slab hung in mid-air
+ * with the world reporting zero awake cells. Nothing tested it, so nothing
+ * caught it.
+ *
+ * A wide excavation must cave in, and a narrow tunnel must stay usable --
+ * otherwise the digging tools destroy the tunnels they exist to make.
+ */
+static int test_wide_excavation_caves_in(void)
+{
+    vox_digs_rules rules;
+    vox_u32 x;
+    vox_u32 y;
+    vox_u32 tick;
+    vox_u32 wide_open = 0U;
+    vox_u32 narrow_open = 0U;
+    const vox_u32 base_x = 200U;
+    const vox_u32 ground = 210U;
+    const vox_u32 roof = 180U;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 1;
+    /* Solid overburden, with clear air above it. */
+    for (y = roof; y <= ground; ++y) {
+        for (x = base_x - 10U; x <= base_x + 60U; ++x) {
+            if (!set_test_column(&match.world, x, y, VOX_MAT_SOIL)) return 2;
+        }
+    }
+    for (y = roof - 12U; y < roof; ++y) {
+        for (x = base_x - 10U; x <= base_x + 60U; ++x) {
+            if (!set_test_column(&match.world, x, y, VOX_MAT_AIR)) return 3;
+        }
+    }
+    if (vox_world_sleep_all(&match.world) != VOX_OK) return 4;
+    /* A 40-wide chamber: far past the cohesion span, so it must slump. */
+    for (y = ground - 3U; y <= ground; ++y) {
+        for (x = base_x; x < base_x + 40U; ++x) {
+            if (!set_test_column(&match.world, x, y, VOX_MAT_AIR)) return 5;
+        }
+    }
+    for (tick = 0U; tick < 300U; ++tick) {
+        if (vox_digs_match_step(&match) != VOX_OK) return 6;
+    }
+    for (y = ground - 3U; y <= ground; ++y) {
+        for (x = base_x; x < base_x + 40U; ++x) {
+            if (vox_world_collision_classify(&match.world, x, y) !=
+                VOX_WORLD_COLLISION_SOLID) {
+                wide_open++;
+            }
+        }
+    }
+    /* At least a third of the void must have filled with fallen material. */
+    if (wide_open * 3U > 40U * 4U * 2U) {
+        return 7;
+    }
+
+    /* Now a narrow tunnel in fresh ground: it must survive intact. */
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 8;
+    for (y = roof; y <= ground; ++y) {
+        for (x = base_x - 10U; x <= base_x + 60U; ++x) {
+            if (!set_test_column(&match.world, x, y, VOX_MAT_SOIL)) return 9;
+        }
+    }
+    for (y = roof - 12U; y < roof; ++y) {
+        for (x = base_x - 10U; x <= base_x + 60U; ++x) {
+            if (!set_test_column(&match.world, x, y, VOX_MAT_AIR)) return 10;
+        }
+    }
+    if (vox_world_sleep_all(&match.world) != VOX_OK) return 11;
+    for (y = ground - 3U; y <= ground; ++y) {
+        for (x = base_x; x < base_x + 5U; ++x) {
+            if (!set_test_column(&match.world, x, y, VOX_MAT_AIR)) return 12;
+        }
+    }
+    for (tick = 0U; tick < 300U; ++tick) {
+        if (vox_digs_match_step(&match) != VOX_OK) return 13;
+    }
+    for (y = ground - 3U; y <= ground; ++y) {
+        for (x = base_x; x < base_x + 5U; ++x) {
+            if (vox_world_collision_classify(&match.world, x, y) !=
+                VOX_WORLD_COLLISION_SOLID) {
+                narrow_open++;
+            }
+        }
+    }
+    if (narrow_open != 5U * 4U) {
+        return 14;
+    }
+    return 0;
+}
+
+/*
  * A smoker canister used to rewind onto its victim and re-strike every tick
  * for the whole fuse, pinning itself in place and spraying damage events.
  * A direct hit must land exactly once, hurt hard, never kill from full
@@ -2918,6 +3015,13 @@ int main(void)
             fprintf(stderr,
                     "DIGS v0.0.3 AI event-drain mismatch (%d)\n", result);
             return 25;
+        }
+    }
+    {
+        int result = test_wide_excavation_caves_in();
+        if (result != 0) {
+            fprintf(stderr, "DIGS cave-in mismatch (%d)\n", result);
+            return 64;
         }
     }
     {
