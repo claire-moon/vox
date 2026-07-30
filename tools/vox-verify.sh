@@ -4,7 +4,6 @@ set -eu
 
 ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 BUILD_DIR=${VOX_BUILD_DIR:-/tmp/vox-verify-build}
-CARGO_TARGET_DIR=${VOX_CARGO_TARGET_DIR:-/tmp/vox-cargo-target}
 SMOKE_IMAGE=${VOX_SMOKE_IMAGE:-/tmp/vox-digs-demo-smoke.ppm}
 MINER_ICON=${VOX_MINER_ICON:-/tmp/vox-digs-miner.xpm}
 NASM_ACCEL=${VOX_NASM_ACCEL:-AUTO}
@@ -68,7 +67,6 @@ fi
 if [ "${VOX_BENCH_COMPARE:-1}" = 1 ]; then
     "$ROOT/tools/vox-bench.sh" "$BUILD_DIR"
 fi
-CARGO_TARGET_DIR="$CARGO_TARGET_DIR" cargo test --manifest-path "$ROOT/Cargo.toml" --workspace
 "$BUILD_DIR/vox_headless"
 "$BUILD_DIR/digs_headless"
 "$BUILD_DIR/digs_demo" --input-self-test

@@ -55,7 +55,6 @@ The default build proves that the core remains useful without SDL2:
 cmake -S . -B build -DVOX_BUILD_TESTS=ON
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
-cargo test --workspace
 ```
 
 When SDL2 2.0.10 or newer is installed, exercise the complete demo gate:

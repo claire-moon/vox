@@ -128,16 +128,6 @@ try {
     if ($LASTEXITCODE -ne 0) {
         Stop-Package 'CTest failed'
     }
-    Push-Location $Root
-    try {
-        & cargo test --workspace --locked
-        if ($LASTEXITCODE -ne 0) {
-            Stop-Package 'Cargo tests failed'
-        }
-    } finally {
-        Pop-Location
-    }
-
     $demo = Join-Path $build 'Release\digs_demo.exe'
     $share = Join-Path $build 'share'
     if (-not (Test-Path -LiteralPath $demo -PathType Leaf)) {

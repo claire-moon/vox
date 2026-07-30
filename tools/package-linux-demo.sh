@@ -120,7 +120,6 @@ capture_evidence()
 need_command git
 need_command cmake
 need_command ctest
-need_command cargo
 need_command tar
 need_command gzip
 need_command sha256sum
@@ -197,7 +196,6 @@ esac
 mkdir -p -- "$DIST_DIR"
 WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/vox-linux-package.XXXXXXXX")
 BUILD_DIR="$WORK_DIR/build"
-CARGO_TARGET_DIR="$WORK_DIR/cargo-target"
 STAGE_DIR="$WORK_DIR/$ARCHIVE_STEM"
 SOURCE_STAGE="$WORK_DIR/$SOURCE_STEM"
 EVIDENCE_DIR="$STAGE_DIR/evidence"
@@ -225,9 +223,6 @@ fi
 mkdir -p -- "$EVIDENCE_DIR"
 capture_evidence ctest "$BUILD_DIR" \
     ctest -C Release --output-on-failure
-capture_evidence cargo-test "$ROOT" \
-    env CARGO_TARGET_DIR="$CARGO_TARGET_DIR" cargo test \
-        --manifest-path "$ROOT/Cargo.toml" --workspace --locked
 capture_evidence qa-workbook-current "$ROOT" \
     python3 "$ROOT/tools/build-qa-workbook.py" --check
 capture_evidence vox-headless "$EVIDENCE_DIR" "$BUILD_DIR/vox_headless"

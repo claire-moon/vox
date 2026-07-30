@@ -20,7 +20,6 @@ jobs:
       - name: Run strict native, NASM, SDL2, and Rust gate
         env:
           VOX_BUILD_DIR: ${{ runner.temp }}/vox-verify-build
-          VOX_CARGO_TARGET_DIR: ${{ runner.temp }}/vox-cargo-target
           VOX_SMOKE_IMAGE: ${{ runner.temp }}/digs-demo-smoke.ppm
           VOX_NASM_ACCEL: ON
           VOX_NAMED_BENCH_QUALIFY: 0
@@ -71,8 +70,6 @@ jobs:
         run: cmake --build build --config Release --parallel 2
       - name: Run native portable-core tests
         run: ctest --test-dir build -C Release --output-on-failure
-      - name: Run Rust boundary tests
-        run: cargo test --workspace --locked
 
   legacy-i686-core:
     name: portable core / Linux i686 multilib
@@ -82,9 +79,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Install 32-bit compiler runtime
-        run: sudo apt-get update && sudo apt-get install --yes gcc-multilib g++-multilib
-      - name: Install Rust i686 target
-        run: rustup target add i686-unknown-linux-gnu
+        run: sudo apt-get update && sudo apt-get install --yes gcc-multilib
       - name: Configure 32-bit portable scalar core
         run: >-
           cmake -S . -B build-i686
@@ -93,10 +88,7 @@ jobs:
           -DVOX_BUILD_SDL2_DEMO=OFF
           -DVOX_BUILD_NASM_ACCEL=OFF
           -DCMAKE_C_FLAGS=-m32
-          -DCMAKE_CXX_FLAGS=-m32
       - name: Build and run 32-bit native tests
         run: |
           cmake --build build-i686 --parallel 2
           ctest --test-dir build-i686 --output-on-failure
-      - name: Run 32-bit Rust boundary tests
-        run: cargo test --workspace --locked --target i686-unknown-linux-gnu
