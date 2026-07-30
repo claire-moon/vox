@@ -46,8 +46,8 @@ From the extracted Linux x86-64 bundle run:
   ./bin/digs_headless
 
 The packaged smoke-test.sh also runs the haptic and full 600-tick deterministic
-load checks. The load command must reproduce fired 46, explosions 26, effects
-700, awake 7867, and hash f3924b81 without judging host speed. If 600 ticks are
+load checks. The load command must reproduce fired 20, explosions 16, effects
+1153, awake 6975, and hash c37e44b6 without judging host speed. If 600 ticks are
 temporarily too slow while diagnosing an active change, `--load-self-test 180`
 is a reduced quick probe only and cannot pass VOX-QA-087. On the named
 i7-10750H laptop bench only, run `--performance-self-test 600` or set
