@@ -1,9 +1,17 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # Physics contract
 
-`vox_physics` is a strict C++98 implementation behind a versioned C ABI. It
-reads the C89 world but does not allocate, mutate terrain, use floating-point
-state, throw exceptions, enable RTTI, or expose C++ types across the boundary.
+`vox_physics` is a strict C89 implementation behind a versioned C ABI. It
+reads the C89 world but does not allocate, mutate terrain, or use
+floating-point state.
+
+Through v0.0.3 this was the project's only C++98 translation unit, compiled
+with `-fno-exceptions -fno-rtti` and marked `extern "C"` at every definition.
+v0.0.4 is ISO C only, so it was converted to C in place: the seven `extern "C"`
+markers were removed and nothing else changed. The conversion is verifiable —
+`vox_headless`, `digs_headless`, and the 600-tick load regression all reproduce
+their pre-conversion hashes exactly. Dropping the C++ language also removed the
+`libstdc++` and `libgcc_s` runtime dependencies from every shipped binary.
 
 The v0.0.3 body is an axis-aligned fixed-point capsule proxy with Q16.16
 position, velocity, and half extents. Each 60 Hz tick applies saturating

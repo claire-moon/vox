@@ -90,10 +90,11 @@ lava, audio fallback, fullscreen, debug overlay, and every frame cap.
 - C89 owns authoritative voxel/material/game rules. Avoid implementation-
   defined behavior, hidden allocation, floating-point state, and unbounded work
   in the deterministic path.
-- C++98 may implement isolated systems behind the versioned C ABI. C++ types,
-  exceptions, and RTTI must not cross that boundary.
-- Rust hosts or tools consume the C ABI and must not duplicate authoritative
-  rules.
+- v0.0.4 onward is ISO C only. First-party code is strict C89 everywhere,
+  including ports, tools, and tests. C++, Rust, and embedded scripting
+  languages are not accepted.
+- Third-party host libraries (SDL2) are permitted in a port. They are not
+  first-party code and must stay behind a narrow platform interface.
 - Scalar code is the oracle. NASM, intrinsics, worker, GPU, and platform
   specializations are optional adapters with a scalar fallback and equivalence
   tests.

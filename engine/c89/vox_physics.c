@@ -249,7 +249,7 @@ static int vox_physics_validate_config(const vox_physics_step_config *config)
            config->reserved == 0U;
 }
 
-extern "C" vox_result vox_physics_recover_overlap(
+vox_result vox_physics_recover_overlap(
     vox_physics_body *body, const vox_world *world)
 {
     vox_physics_body original;
@@ -303,7 +303,7 @@ extern "C" vox_result vox_physics_recover_overlap(
     return VOX_ERR_COLLISION;
 }
 
-extern "C" void vox_physics_body_init(vox_physics_body *body)
+void vox_physics_body_init(vox_physics_body *body)
 {
     if (body == 0) {
         return;
@@ -320,7 +320,7 @@ extern "C" void vox_physics_body_init(vox_physics_body *body)
     body->reserved = 0U;
 }
 
-extern "C" void vox_physics_step_config_default(vox_physics_step_config *config)
+void vox_physics_step_config_default(vox_physics_step_config *config)
 {
     if (config == 0) {
         return;
@@ -334,7 +334,7 @@ extern "C" void vox_physics_step_config_default(vox_physics_step_config *config)
     config->reserved = 0U;
 }
 
-extern "C" void vox_physics_accelerate_x(vox_physics_body *body,
+void vox_physics_accelerate_x(vox_physics_body *body,
                                            vox_i32 target_q16,
                                            vox_i32 acceleration_q16,
                                            vox_i32 deceleration_q16)
@@ -368,7 +368,7 @@ extern "C" void vox_physics_accelerate_x(vox_physics_body *body,
     body->velocity_x.value_q16 = current;
 }
 
-extern "C" vox_result vox_physics_rope_constraint(
+vox_result vox_physics_rope_constraint(
     vox_physics_body *body, const vox_world *world,
     vox_i32 anchor_x_q16, vox_i32 anchor_y_q16,
     vox_i32 length_q16, vox_i32 pull_q16, vox_i32 break_tension_q16,
@@ -460,7 +460,7 @@ extern "C" vox_result vox_physics_rope_constraint(
     return VOX_OK;
 }
 
-extern "C" vox_result vox_physics_step_world(
+vox_result vox_physics_step_world(
     vox_physics_body *body, const vox_world *world,
     const vox_physics_step_config *config)
 {
@@ -516,7 +516,7 @@ extern "C" vox_result vox_physics_step_world(
     return VOX_OK;
 }
 
-extern "C" vox_result vox_physics_step(vox_physics_body *body,
+vox_result vox_physics_step(vox_physics_body *body,
                                         vox_i32 gravity_q16)
 {
     vox_physics_step_config config;

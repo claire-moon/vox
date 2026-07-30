@@ -14,10 +14,10 @@ unreviewed assets into this tree.
 
 ## Language boundaries
 
-- `engine/c89` is strict C89 and OS-independent.
-- `engine/cpp98` is strict C++98 behind the C ABI; no exceptions, RTTI, or
-  STL types cross the ABI.
-- Rust is for modern host/tools and never owns authoritative simulation state.
+- v0.0.4 is ISO C only. Every first-party translation unit is strict C89.
+- `engine/c89` is strict C89 and OS-independent. No C++, no Rust, no Lua.
+- A port owns presentation and platform services. Third-party host libraries
+  (SDL2) are permitted there; they are not first-party code.
 - NASM is optional x86 leaf optimization with a scalar C oracle.
 
 ## Validation
