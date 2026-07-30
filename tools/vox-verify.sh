@@ -63,6 +63,11 @@ ctest --test-dir "$BUILD_DIR" --output-on-failure
 if [ "${VOX_OPTIMISATION_INVARIANCE:-1}" = 1 ]; then
     "$ROOT/tools/vox-optimisation-invariance.sh"
 fi
+# Deterministic work counters catch a system that started doing more work
+# per tick; a changed state hash is reported separately and loudly.
+if [ "${VOX_BENCH_COMPARE:-1}" = 1 ]; then
+    "$ROOT/tools/vox-bench.sh" "$BUILD_DIR"
+fi
 CARGO_TARGET_DIR="$CARGO_TARGET_DIR" cargo test --manifest-path "$ROOT/Cargo.toml" --workspace
 "$BUILD_DIR/vox_headless"
 "$BUILD_DIR/digs_headless"

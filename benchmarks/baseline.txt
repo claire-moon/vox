@@ -1,0 +1,22 @@
+# VOX + DIGS deterministic simulation benchmark
+scenario=deepworks_four_miner_carnage
+seed=50303033
+ticks_requested=600
+ticks_run=600
+# deterministic work counters -- enforced
+state_hash=3ac8a58b
+world_hash=cbad4802
+awake_peak=6786
+awake_mean=845
+effects_peak=963
+effects_mean=200
+projectiles_peak=11
+occupied_cells=736872
+weapon_fires=67
+explosions=0
+kills=3
+crushes=0
+limb_severs=39
+rope_events=41
+ai_state_changes=29
+# timing -- advisory, never enforced

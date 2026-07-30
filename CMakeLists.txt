@@ -379,6 +379,18 @@ if (VOX_BUILD_LEGACY_PROFILE)
     endif()
 endif()
 
+add_executable(vox_bench tools/vox_bench.c)
+target_link_libraries(vox_bench PRIVATE digs_game)
+target_include_directories(vox_bench PRIVATE engine/include)
+set_target_properties(vox_bench PROPERTIES
+    C_STANDARD 90
+    C_STANDARD_REQUIRED ON
+    LINKER_LANGUAGE CXX
+)
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(vox_bench PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
 add_executable(digs_script tools/digs_script.c)
 target_link_libraries(digs_script PRIVATE vox_script)
 target_include_directories(digs_script PRIVATE engine/include)
