@@ -166,11 +166,6 @@ if (VOX_BUILD_LEGACY_PROFILE)
             -march=i386 -mno-sse -mno-sse2 -mfpmath=387
         )
     endif()
-    if (CMAKE_SIZEOF_VOID_P EQUAL 4 AND CMAKE_C_COMPILER_ID MATCHES "GNU")
-        set(VOX_LEGACY_C_CPU_OPTIONS
-            -march=i386 -mno-sse -mno-sse2 -mfpmath=387
-        )
-    endif()
 
     # The WinMM host owns its own i386-safe synth object.  Reusing vox_audio
     # here would make it too easy for a future desktop compiler default to
@@ -329,7 +324,6 @@ if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vox_bench PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
-file(COPY games/digs/icons DESTINATION "${CMAKE_BINARY_DIR}/share/digs")
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/share/digs/controllers")
 configure_file(
     "${CMAKE_SOURCE_DIR}/third_party/SDL_GameControllerDB/gamecontrollerdb.txt"

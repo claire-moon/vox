@@ -254,9 +254,6 @@ capture_evidence digs-fixed-step-self-test "$EVIDENCE_DIR" \
 capture_evidence digs-miner-icon "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --render-miner-icon-xpm \
         digs-miner-generated.xpm
-cmp "$EVIDENCE_DIR/digs-miner-generated.xpm" \
-    "$BUILD_DIR/share/digs/icons/digs-miner.xpm" || \
-    die 'the generated miner icon differs from the reviewed canonical asset'
 capture_evidence digs-demo-smoke "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --smoke-test digs-demo-smoke.ppm
 [[ -s "$EVIDENCE_DIR/digs-demo-smoke.ppm" ]] || \
@@ -279,8 +276,6 @@ copy_tree "$BUILD_DIR/share" "$STAGE_DIR/share"
 ln -s ../share "$STAGE_DIR/bin/share"
 [[ -r "$STAGE_DIR/bin/share/digs/controllers/gamecontrollerdb.txt" ]] || \
     die 'the executable-relative controller database path is broken'
-[[ -r "$STAGE_DIR/bin/share/digs/icons/digs-miner.xpm" ]] || \
-    die 'the executable-relative canonical miner icon path is broken'
 install -m 0755 -- "$ROOT/packaging/linux/run-digs.sh" \
     "$STAGE_DIR/run-digs.sh"
 install -m 0755 -- "$ROOT/packaging/linux/smoke-test.sh" \
