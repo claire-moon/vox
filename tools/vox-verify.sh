@@ -58,6 +58,11 @@ else
     cmake --build "$BUILD_DIR" --parallel
 fi
 ctest --test-dir "$BUILD_DIR" --output-on-failure
+# The v0.0.4 size diet depends on -Os and --gc-sections being result-neutral.
+# Prove it every run rather than assuming it.
+if [ "${VOX_OPTIMISATION_INVARIANCE:-1}" = 1 ]; then
+    "$ROOT/tools/vox-optimisation-invariance.sh"
+fi
 CARGO_TARGET_DIR="$CARGO_TARGET_DIR" cargo test --manifest-path "$ROOT/Cargo.toml" --workspace
 "$BUILD_DIR/vox_headless"
 "$BUILD_DIR/digs_headless"
