@@ -9,6 +9,8 @@
 #define TEST_SPAWN_SUPPORT_CELLS 4U
 /* Comfortably past DIGS_BURIED_LETHAL_TICKS and the health budget. */
 #define DIGS_TEST_BURIED_GUARD_TICKS 240U
+/* Mirrors DIGS_SMOKER_DIRECT_DAMAGE; below the head's 45 health. */
+#define DIGS_TEST_SMOKER_DAMAGE 40U
 
 /*
  * A match owns the complete fixed-size voxel world, so keeping one fixture per
@@ -2291,6 +2293,63 @@ static int test_v003_overlap_recovery_and_crush(void)
 }
 
 /*
+ * A smoker canister used to rewind onto its victim and re-strike every tick
+ * for the whole fuse, pinning itself in place and spraying damage events.
+ * A direct hit must land exactly once, hurt hard, never kill from full
+ * health, and then roll away spent.
+ */
+static int test_smoker_direct_hit_lands_once(void)
+{
+    vox_digs_rules rules;
+    vox_digs_input input;
+    vox_u16 tick;
+    vox_u16 damage_events = 0U;
+    vox_i32 origin_x;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 1;
+    match.spawn_shield_ticks[0] = 0U;
+    match.spawn_shield_ticks[1] = 0U;
+    origin_x = match.players[0].position_x.value_q16;
+    match.players[1].position_x.value_q16 = origin_x + (3L << 16);
+    match.players[1].position_y.value_q16 =
+        match.players[0].position_y.value_q16;
+    init_test_input(&input, 0U,
+                    (vox_u16)(match.players[1].position_x.value_q16 >> 16),
+                    (vox_u16)(match.players[1].position_y.value_q16 >> 16));
+    input.selected_weapon = VOX_DIGS_TOOL_SMOKER;
+    for (tick = 0U; tick < 120U; ++tick) {
+        vox_u16 ordinal;
+        /* Hold briefly so the charged throw releases, then let it fly. */
+        input.actions = tick < 2U ? VOX_DIGS_ACTION_FIRE : 0U;
+        if (vox_digs_submit_input(&match, &input) != VOX_OK) return 2;
+        if (vox_digs_match_step(&match) != VOX_OK) return 3;
+        for (ordinal = 0U; ordinal < match.event_count; ++ordinal) {
+            const vox_digs_event *event = vox_digs_event_get(&match, ordinal);
+            if (event != 0 && event->type == VOX_DIGS_EVENT_DAMAGE &&
+                event->target == 1U &&
+                event->weapon == VOX_DIGS_TOOL_SMOKER) {
+                damage_events++;
+            }
+        }
+        if (match.event_count > 0U &&
+            vox_digs_consume_events(&match, match.event_count) != VOX_OK) {
+            return 4;
+        }
+    }
+    /* Exactly one strike, and a full-health miner is hurt but standing. */
+    if (damage_events != 1U || !match.alive[1] || match.deaths[1] != 0U) {
+        return 5;
+    }
+    if (match.health[1] > VOX_DIGS_MAX_HEALTH - DIGS_TEST_SMOKER_DAMAGE) {
+        return 6;
+    }
+    return 0;
+}
+
+/*
  * The hot rail bores by heating terrain, and used to convert coal and
  * biomass straight to lava.  A miner tunnelling down through a seam
  * liquefied their own floor, fell into the pool, and died to lava contact
@@ -2859,6 +2918,13 @@ int main(void)
             fprintf(stderr,
                     "DIGS v0.0.3 AI event-drain mismatch (%d)\n", result);
             return 25;
+        }
+    }
+    {
+        int result = test_smoker_direct_hit_lands_once();
+        if (result != 0) {
+            fprintf(stderr, "DIGS smoker direct-hit mismatch (%d)\n", result);
+            return 63;
         }
     }
     {

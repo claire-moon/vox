@@ -66,6 +66,17 @@
 #define DIGS_BOLT_STREAK_LIMIT 4U
 #define DIGS_FIRECRACKER_CHARGE_TICKS 60U
 #define DIGS_SMOKER_TRAIL_TICKS 4U
+/*
+ * A direct canister strike hurts hard but is never lethal from full health:
+ * 40 sits below the head's 45, the smallest vital part, so no single hit can
+ * zero a vital part, and whole-body health lands at 60.  Limbs can still be
+ * taken off, which is the intended "that hurt" moment.
+ */
+#define DIGS_SMOKER_DIRECT_DAMAGE 40U
+/* Gentle downward nudge so a spent canister drops clear and rolls. */
+#define DIGS_SMOKER_SETTLE_FALL_Q16 4096L
+/* Charge window for the held throw, matching the firecracker's feel. */
+#define DIGS_SMOKER_CHARGE_TICKS 45U
 #define DIGS_HOT_RAIL_RANGE_CELLS 14U
 #define DIGS_HYDROSHOT_RANGE_CELLS 18U
 #define DIGS_REACTION_SAMPLES 128U
@@ -87,9 +98,9 @@ static const vox_digs_weapon_properties digs_weapons[VOX_DIGS_TOOL_COUNT] = {
      DIGS_PULASKI_CHARGE_TICKS, 0U},
     {"POPPER", 6U, 18U, 2U, 0U, 0U,
      VOX_DIGS_WEAPON_HITSCAN | VOX_DIGS_WEAPON_EXPLOSIVE, 0U, 0U},
-    {"SMOKER", 32U, 1U, 5U, 768U, 90U,
+    {"SMOKER", 60U, DIGS_SMOKER_DIRECT_DAMAGE, 5U, 768U, 90U,
      VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_DEPOSIT |
-     VOX_DIGS_WEAPON_GRAVITY, 0U, 0U},
+     VOX_DIGS_WEAPON_GRAVITY, DIGS_SMOKER_CHARGE_TICKS, 0U},
     {"HOT RAIL", 5U, 10U, 2U, 0U, 0U,
      VOX_DIGS_WEAPON_HITSCAN | VOX_DIGS_WEAPON_DEPOSIT, 0U, 0U},
     {"HYDROSHOT", 7U, 0U, 0U, 1664U, 14U,
@@ -3632,6 +3643,16 @@ static void digs_release_charged_weapon(vox_digs_match *match,
             match->weapon_cooldown[player] == 0U) {
             result = digs_fire_bolt_action(match, player, target_x, target_y);
         }
+    } else if (weapon == VOX_DIGS_TOOL_SMOKER) {
+        vox_u16 scale_q8 = (vox_u16)(128U +
+            ((vox_u32)charge * 256U) / DIGS_SMOKER_CHARGE_TICKS);
+        if (scale_q8 > 384U) {
+            scale_q8 = 384U;
+        }
+        if (match->weapon_cooldown[player] == 0U) {
+            result = digs_spawn_projectile(match, player, weapon, target_x,
+                                           target_y, scale_q8);
+        }
     } else if (weapon == VOX_DIGS_TOOL_FIRECRACKER) {
         vox_u16 scale_q8 = (vox_u16)(128U +
             ((vox_u32)charge * 256U) / DIGS_FIRECRACKER_CHARGE_TICKS);
@@ -3701,7 +3722,8 @@ static void digs_step_weapon_input(vox_digs_match *match, vox_u16 player)
     }
     if (weapon == VOX_DIGS_TOOL_PULASKI ||
         weapon == VOX_DIGS_TOOL_BOLT_ACTION ||
-        weapon == VOX_DIGS_TOOL_FIRECRACKER) {
+        weapon == VOX_DIGS_TOOL_FIRECRACKER ||
+        weapon == VOX_DIGS_TOOL_SMOKER) {
         if ((actions & VOX_DIGS_ACTION_FIRE) != 0U) {
             if (!match->weapon_charging[player]) {
                 match->weapon_charging[player] = 1U;
@@ -4370,24 +4392,43 @@ static void digs_step_projectiles(vox_digs_match *match)
                                            projectile->position_y_q16,
                                            &hit_part)) {
                     if (projectile->weapon == VOX_DIGS_TOOL_SMOKER) {
-                        /* The canister is utility first: a direct body
-                         * strike is only a tiny bump, then it ricochets
-                         * instead of vanishing before it can lay smoke. */
+                        /*
+                         * One solid blow, then the canister is spent.
+                         *
+                         * This used to rewind the canister to its previous
+                         * position and reverse its velocity on every body
+                         * overlap.  Rewinding put it back inside the miner,
+                         * so it struck again next tick, and the damping
+                         * converged it to a dead stop while still embedded:
+                         * a single throw pinned itself to its victim and
+                         * dealt its one damage roughly ninety times over the
+                         * fuse, spraying an event per tick.  That is the
+                         * reported "bounces too much and causes a bunch of
+                         * noise/damage".
+                         *
+                         * Now a direct hit lands once and hurts properly,
+                         * then zeroes its own damage as a spent marker.  A
+                         * spent canister passes through bodies without
+                         * interacting, so it drops and rolls away down the
+                         * landscape while it lays smoke, exactly as asked.
+                         *
+                         * DIGS_SMOKER_DIRECT_DAMAGE stays below the smallest
+                         * vital part -- the head at 45 -- so a direct hit can
+                         * never kill a miner who was at full health, though
+                         * it can still take an arm off.
+                         */
                         if (projectile->damage > 0U) {
                             (void)vox_digs_apply_hit(match,
                                 projectile->owner, player,
                                 projectile->weapon, hit_part,
                                 projectile->damage,
                                 VOX_DIGS_DAMAGE_BLUNT);
+                            projectile->damage = 0U;
+                            projectile->velocity_x_q16 /= 4L;
+                            projectile->velocity_y_q16 =
+                                DIGS_SMOKER_SETTLE_FALL_Q16;
+                            bounced = 1;
                         }
-                        projectile->position_x_q16 = previous_x_q16;
-                        projectile->position_y_q16 = previous_y_q16;
-                        projectile->velocity_x_q16 =
-                            -(projectile->velocity_x_q16 * 3L / 5L);
-                        projectile->velocity_y_q16 =
-                            -(projectile->velocity_y_q16 * 2L / 5L) -
-                            4096L;
-                        bounced = 1;
                         break;
                     }
                     if (projectile->weapon == VOX_DIGS_TOOL_PULASKI) {
