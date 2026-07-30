@@ -10,7 +10,7 @@ traceable provenance, and an explicit distribution decision before merge.
 | Component | Use | License | Supported/tested version | Source | Intake and modifications |
 |---|---|---|---|---|---|
 | SDL2 | Optional desktop window, RGB texture presentation, input, timing, and queued audio | [zlib](https://github.com/libsdl-org/SDL/blob/SDL2/LICENSE.txt) | Floor: 2.0.10; tested: 2.30.0 | [upstream SDL2 branch](https://github.com/libsdl-org/SDL/tree/SDL2) | Found through CMake; Linux packages use the system runtime, while the Windows package statically links the vcpkg-built component; not vendored or modified |
-| SDL GameControllerDB | Normalize known gamepads before SDL2 controller enumeration | [zlib](https://github.com/mdqinc/SDL_GameControllerDB/blob/8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5/LICENSE) | Commit `8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5`; database SHA-256 `dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0` | [pinned upstream tree](https://github.com/mdqinc/SDL_GameControllerDB/tree/8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5) | The reviewed database is vendored under `third_party/SDL_GameControllerDB` and distributed at `share/digs/controllers/gamecontrollerdb.txt`; mapping data is unmodified and its license/provenance are preserved |
+| SDL GameControllerDB | Normalize known gamepads before SDL2 controller enumeration | [zlib](https://github.com/mdqinc/SDL_GameControllerDB/blob/8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5/LICENSE) | Commit `8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5`; database SHA-256 `dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0` | [pinned upstream tree](https://github.com/mdqinc/SDL_GameControllerDB/tree/8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5) | The reviewed database is vendored under `third_party/SDL_GameControllerDB` and, from `v0.0.4`, distributed as the opt-in extra `extras/gamecontrollerdb.txt` rather than installed; mapping data is unmodified and its license/provenance are preserved |
 
 The Free Software Foundation lists the
 [zlib license as GPL-compatible](https://www.gnu.org/licenses/license-list.html#ZLib).
@@ -19,8 +19,8 @@ system SDL2 runtime. The Windows bundle statically links SDL2 and includes its
 copyright and zlib license notice as `LICENSES/SDL2-zlib.txt`; the matching
 Corresponding Source archive remains distributed beside every binary release.
 
-The controller database is data, not an SDL2 binary. DIGS loads the packaged
-copy before enumerating devices, so known pads use consistent logical names and
+The controller database is data, not an SDL2 binary. When present, DIGS loads
+it before enumerating devices, so known pads use consistent logical names and
 bindings without changing the authoritative simulation. The pinned snapshot
 contains Logitech F310 mappings for Windows, macOS, Linux, and Android. Unknown
 or DirectInput-mode devices still require the frontend's raw-joystick fallback
@@ -28,6 +28,14 @@ and must be physically accepted rather than inferred from this database alone.
 The complete intake record is
 `third_party/SDL_GameControllerDB/VOX-PROVENANCE.txt`; its license notice is
 also reproduced in `LICENSES/SDL_GameControllerDB.txt`.
+
+From `v0.0.4` the database is no longer installed with the game. SDL2's
+built-in mappings already cover mainstream pads, and the file is larger than
+the whole binary. It ships in the bundle at `extras/gamecontrollerdb.txt`
+for anyone whose controller is not detected; `share/digs/controllers/README.txt`
+documents the drop-in location and the `DIGS_GAMECONTROLLERDB` override. The
+upstream commit and SHA-256 pin are unchanged and still verified at package
+time.
 
 SDL_ttf, SDL_mixer, SDL_image, SDL3, SDL_shadercross, and proprietary GPU SDKs
 are not used by the `v0.0.3` build. The UI font, menu graphics, miner forms,

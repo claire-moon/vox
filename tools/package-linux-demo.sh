@@ -268,14 +268,26 @@ capture_evidence vox-render-demo "$EVIDENCE_DIR" \
 mkdir -p -- "$STAGE_DIR/bin" "$STAGE_DIR/libexec" "$STAGE_DIR/tools"
 for binary in digs_demo vox_headless digs_headless vox_render_demo; do
     install -m 0755 -- "$BUILD_DIR/$binary" "$STAGE_DIR/bin/$binary"
+    # Symbols are build artefacts, not runtime behaviour: stripping changes
+    # no code generation and therefore no hash, and it is measured by the
+    # size gate below.
+    if command -v strip >/dev/null 2>&1; then
+        strip --strip-unneeded -- "$STAGE_DIR/bin/$binary"
+    fi
 done
 copy_tree "$BUILD_DIR/share" "$STAGE_DIR/share"
 # SDL_GetBasePath() resolves from bin/, while tester-facing tools and package
 # layout expose data under the conventional archive-root share/. Keep one
 # canonical copy and make the executable-relative path resolve to it.
 ln -s ../share "$STAGE_DIR/bin/share"
-[[ -r "$STAGE_DIR/bin/share/digs/controllers/gamecontrollerdb.txt" ]] || \
-    die 'the executable-relative controller database path is broken'
+# The controller database is an opt-in extra, not part of the playable
+# payload: SDL2's built-in mappings already cover mainstream pads, and this
+# file is larger than the game itself.  Ship it beside the docs so a tester
+# with unusual hardware can drop it in, and keep it out of the size budget.
+install -D -m 0644 -- "$CONTROLLER_DB" \
+    "$STAGE_DIR/extras/gamecontrollerdb.txt"
+[[ -r "$STAGE_DIR/extras/gamecontrollerdb.txt" ]] || \
+    die 'the optional controller database was not packaged'
 install -m 0755 -- "$ROOT/packaging/linux/run-digs.sh" \
     "$STAGE_DIR/run-digs.sh"
 install -m 0755 -- "$ROOT/packaging/linux/smoke-test.sh" \

@@ -32,7 +32,7 @@ The cockpit requires the free xleak command-line spreadsheet reader to inspect
 
 Keep bin/, bin/share, share/, and libexec/ in their extracted layout. The
 bin/share link makes executable-relative data resolve under share/digs/. This
-includes the pinned controller mapping database and the
+includes the optional controller mapping database under extras/ and the
 canonical miner icon. CG-README.TXT documents AUTO/keyboard/controller modes,
 Logitech F310 X/D-mode checks, radial aim, two-player ownership, rope use, map
 identity, accessibility options, and the

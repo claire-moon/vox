@@ -256,14 +256,9 @@ else
     mkdir -p -- "$STAGE_DIR/SHARE/digs"
     copy_tree "$ROOT/games/digs/scripts" "$STAGE_DIR/SHARE/digs/scripts"
     copy_tree "$ROOT/games/digs/icons" "$STAGE_DIR/SHARE/digs/icons"
-    mkdir -p -- "$STAGE_DIR/SHARE/digs/controllers"
-    copy_file "$ROOT/third_party/SDL_GameControllerDB/gamecontrollerdb.txt" \
-        "$STAGE_DIR/SHARE/digs/controllers/gamecontrollerdb.txt"
 fi
 [[ -f "$STAGE_DIR/SHARE/digs/scripts/manifest.txt" ]] || \
     die 'the legacy package is missing the DIGS script manifest'
-[[ -f "$STAGE_DIR/SHARE/digs/controllers/gamecontrollerdb.txt" ]] || \
-    die 'the legacy package is missing the controller database'
 
 copy_file "$ROOT/packaging/win32-legacy/RUN-DIGS.BAT" \
     "$STAGE_DIR/RUN-DIGS.BAT"

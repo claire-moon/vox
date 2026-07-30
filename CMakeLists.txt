@@ -324,12 +324,6 @@ if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vox_bench PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/share/digs/controllers")
-configure_file(
-    "${CMAKE_SOURCE_DIR}/third_party/SDL_GameControllerDB/gamecontrollerdb.txt"
-    "${CMAKE_BINARY_DIR}/share/digs/controllers/gamecontrollerdb.txt"
-    COPYONLY
-)
 
 add_executable(vox_render_demo tools/vox_render_demo.c)
 target_link_libraries(vox_render_demo PRIVATE digs_game vox_software)
@@ -354,6 +348,17 @@ if (VOX_BUILD_SDL2_DEMO)
         target_compile_options(digs_demo PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
 endif()
+
+# SDL2's built-in controller database covers mainstream pads, so the 600 KB
+# community database is no longer installed -- it is larger than the whole
+# game.  Create the drop-in location and explain it, so a player with unusual
+# hardware knows exactly where the file goes.
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/share/digs/controllers")
+configure_file(
+    "${CMAKE_SOURCE_DIR}/packaging/linux/controllers-README.txt"
+    "${CMAKE_BINARY_DIR}/share/digs/controllers/README.txt"
+    COPYONLY
+)
 
 if (VOX_BUILD_TESTS)
     enable_testing()
