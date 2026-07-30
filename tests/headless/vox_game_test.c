@@ -7,6 +7,8 @@
 #define TEST_MAP_ROPE_REACH 48U
 #define TEST_SPAWN_HEADROOM_CELLS 4U
 #define TEST_SPAWN_SUPPORT_CELLS 4U
+/* Comfortably past DIGS_BURIED_LETHAL_TICKS and the health budget. */
+#define DIGS_TEST_BURIED_GUARD_TICKS 240U
 
 /*
  * A match owns the complete fixed-size voxel world, so keeping one fixture per
@@ -2251,17 +2253,99 @@ static int test_v003_overlap_recovery_and_crush(void)
         }
     }
     deaths = v003_match_a.deaths[0];
+    v003_match_a.spawn_shield_ticks[0] = 0U;
+    /*
+     * Full burial is survivable for a bounded window rather than instantly
+     * fatal.  The first entombed tick announces itself and starts hurting;
+     * the miner keeps their controls and can dig free.
+     */
     if (vox_world_sleep_all(&v003_match_a.world) != VOX_OK ||
         vox_digs_match_step(&v003_match_a) != VOX_OK ||
-        v003_match_a.alive[0] ||
-        v003_match_a.deaths[0] != (vox_u16)(deaths + 1U) ||
+        !v003_match_a.alive[0] ||
+        v003_match_a.deaths[0] != deaths ||
+        v003_match_a.buried_ticks[0] != 1U ||
+        v003_match_a.health[0] >= VOX_DIGS_MAX_HEALTH ||
         !event_type_seen(&v003_match_a, VOX_DIGS_EVENT_CRUSH)) {
         return 4;
+    }
+    /* Crush pressure kills if the miner cannot escape it. */
+    {
+        vox_u16 guard;
+        for (guard = 0U; guard < DIGS_TEST_BURIED_GUARD_TICKS &&
+             v003_match_a.alive[0]; ++guard) {
+            if (vox_digs_match_step(&v003_match_a) != VOX_OK) {
+                return 5;
+            }
+        }
+        if (v003_match_a.alive[0] ||
+            v003_match_a.deaths[0] != (vox_u16)(deaths + 1U)) {
+            return 6;
+        }
     }
     deaths = v003_match_a.deaths[0];
     if (vox_digs_match_step(&v003_match_a) != VOX_OK ||
         v003_match_a.deaths[0] != deaths) {
+        return 7;
+    }
+    return 0;
+}
+
+/*
+ * Partial burial -- the case the lead reported as "random dying from digging
+ * through the landscape".  Settling debris leaves a miner overlapping solid
+ * terrain without fully entombing them.  That must never be instantly fatal,
+ * and clearing the obstruction must end the emergency cleanly.
+ */
+static int test_partial_burial_is_survivable(void)
+{
+    vox_digs_rules rules;
+    vox_i32 center_x;
+    vox_i32 center_y;
+    vox_i32 x;
+    vox_i32 y;
+    vox_u16 tick;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 1;
+    center_x = match.players[0].position_x.value_q16 >> 16;
+    center_y = match.players[0].position_y.value_q16 >> 16;
+    for (y = center_y - 3L; y <= center_y + 3L; ++y) {
+        for (x = center_x - 3L; x <= center_x + 3L; ++x) {
+            if (x >= 0L && y >= 0L &&
+                !set_test_column(&match.world, (vox_u32)x, (vox_u32)y,
+                                 VOX_MAT_SOIL)) {
+                return 2;
+            }
+        }
+    }
+    /* Burial cannot hurt an invulnerable miner, so retire the spawn shield. */
+    match.spawn_shield_ticks[0] = 0U;
+    if (vox_world_sleep_all(&match.world) != VOX_OK) return 3;
+    for (tick = 0U; tick < 20U; ++tick) {
+        if (vox_digs_match_step(&match) != VOX_OK) return 4;
+    }
+    /* Hurt and clearly flagged, but alive and still holding their slot. */
+    if (!match.alive[0] || match.deaths[0] != 0U ||
+        match.buried_ticks[0] == 0U ||
+        match.health[0] >= VOX_DIGS_MAX_HEALTH) {
         return 5;
+    }
+    /* Digging free ends the emergency and resets the struggle timer. */
+    for (y = center_y - 4L; y <= center_y + 4L; ++y) {
+        for (x = center_x - 4L; x <= center_x + 4L; ++x) {
+            if (x >= 0L && y >= 0L &&
+                !set_test_column(&match.world, (vox_u32)x, (vox_u32)y,
+                                 VOX_MAT_AIR)) {
+                return 6;
+            }
+        }
+    }
+    if (vox_world_sleep_all(&match.world) != VOX_OK ||
+        vox_digs_match_step(&match) != VOX_OK ||
+        !match.alive[0] || match.buried_ticks[0] != 0U) {
+        return 7;
     }
     return 0;
 }
@@ -2719,6 +2803,13 @@ int main(void)
             fprintf(stderr,
                     "DIGS v0.0.3 AI event-drain mismatch (%d)\n", result);
             return 25;
+        }
+    }
+    {
+        int result = test_partial_burial_is_survivable();
+        if (result != 0) {
+            fprintf(stderr, "DIGS partial-burial mismatch (%d)\n", result);
+            return 61;
         }
     }
     {

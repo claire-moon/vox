@@ -13,6 +13,27 @@
 #define DIGS_JUMP_HOLD_TICKS 8U
 #define DIGS_COYOTE_TICKS 6U
 #define DIGS_JUMP_BUFFER_TICKS 6U
+/*
+ * Burial budget.
+ *
+ * Collapsing terrain that engulfs a miner used to kill instantly and
+ * silently on the tick that overlap recovery failed, which made ordinary
+ * tunnelling feel arbitrarily lethal: dig, the roof settles, die, with no
+ * signal and sometimes with the kill credited to whoever last hit you.
+ *
+ * Burial is now a survivable emergency.  The miner keeps their controls and
+ * their tools while entombed, so digging free is real agency, and the crush
+ * pressure is what kills.  Two health per tick gives a miner at full health
+ * fifty ticks -- five sixths of a second -- to react, and less when already
+ * wounded.  The lethal cap bounds the state so a miner cannot be pinned
+ * indefinitely by a pocket that never resolves.
+ *
+ * Deliberately unchanged: overlap recovery still searches only two cells, so
+ * a miner is never teleported out of trouble.  That was the v0.0.2 behaviour
+ * v0.0.3 removed on purpose.
+ */
+#define DIGS_BURIED_DAMAGE_PER_TICK 2U
+#define DIGS_BURIED_LETHAL_TICKS 180U
 #define DIGS_STEAM_ACCEL_Q16 11264L
 #define DIGS_STEAM_MAX_RISE_Q16 (-98304L)
 #define DIGS_STEAM_LATERAL_Q16 3072L
@@ -341,6 +362,7 @@ static void digs_init_anatomy(vox_digs_match *match, vox_u16 player)
     }
     match->bleed_accumulator_q8[player] = 0U;
     match->clot_ticks[player] = 0U;
+    match->buried_ticks[player] = 0U;
 }
 
 static vox_u32 digs_abs_difference(vox_u32 left, vox_u32 right)
@@ -2039,22 +2061,61 @@ vox_result vox_digs_match_step(vox_digs_match *match)
         physics_result = vox_physics_step_world(
             &match->players[i], &match->world, &match->physics_config);
         if (physics_result == VOX_ERR_COLLISION) {
-            vox_u16 source = digs_last_attacker_is_recent(match, i) ?
-                             match->last_attacker[i] :
-                             VOX_DIGS_NO_PLAYER;
-            digs_emit_event(match, VOX_DIGS_EVENT_CRUSH, source, i,
-                            match->last_damage_weapon[i], VOX_MAT_STONE,
-                            match->players[i].position_x.value_q16,
-                            match->players[i].position_y.value_q16,
-                            match->health[i],
-                            match->last_damage_part[i]);
-            if (source != VOX_DIGS_NO_PLAYER) {
-                (void)vox_digs_record_kill(match, source, i);
+            if (match->spawn_shield_ticks[i] != 0U) {
+                /*
+                 * A spawn-shielded miner is invulnerable, so burial cannot
+                 * hurt them.  Hold the struggle timer at zero rather than
+                 * letting it run invisibly, or the shield expiring would
+                 * kill them instantly with an already-elapsed countdown.
+                 */
+                match->buried_ticks[i] = 0U;
             } else {
-                digs_environment_defeat(match, i);
+                vox_u16 source = digs_last_attacker_is_recent(match, i) ?
+                                 match->last_attacker[i] :
+                                 VOX_DIGS_NO_PLAYER;
+                /*
+                 * Announce the burial once, on entry, so a host can react to
+                 * it without the event ring filling with one crush per tick
+                 * for the whole struggle.
+                 */
+                if (match->buried_ticks[i] == 0U) {
+                    digs_emit_event(match, VOX_DIGS_EVENT_CRUSH, source, i,
+                                    match->last_damage_weapon[i],
+                                    VOX_MAT_STONE,
+                                    match->players[i].position_x.value_q16,
+                                    match->players[i].position_y.value_q16,
+                                    match->health[i],
+                                    match->last_damage_part[i]);
+                }
+                if (match->buried_ticks[i] < 65535U) {
+                    match->buried_ticks[i]++;
+                }
+                /*
+                 * Crush pressure is ordinary blunt damage, so it routes
+                 * through the one damage funnel: anatomy, bleeding, and kill
+                 * attribution all behave exactly as they do for any other
+                 * source, and a miner crushed shortly after being shot still
+                 * credits the shooter.
+                 */
+                (void)vox_digs_apply_hit(match, source, i,
+                                         VOX_DIGS_TOOL_SLEDGE,
+                                         VOX_DIGS_PART_TORSO,
+                                         DIGS_BURIED_DAMAGE_PER_TICK,
+                                         VOX_DIGS_DAMAGE_BLUNT);
+                if (match->alive[i] &&
+                    match->buried_ticks[i] >= DIGS_BURIED_LETHAL_TICKS) {
+                    if (source != VOX_DIGS_NO_PLAYER) {
+                        (void)vox_digs_record_kill(match, source, i);
+                    } else {
+                        digs_environment_defeat(match, i);
+                    }
+                }
             }
         } else if (physics_result != VOX_OK) {
             return VOX_ERR_INVALID;
+        } else {
+            /* Free again: the struggle timer only counts consecutive ticks. */
+            match->buried_ticks[i] = 0U;
         }
     }
     digs_step_projectiles(match);
@@ -4788,6 +4849,7 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
         hash = digs_hash_mix(hash,
                              (vox_u32)match->bleed_accumulator_q8[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->clot_ticks[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->buried_ticks[i]);
         hash = digs_hash_mix(hash,
                              (vox_u32)match->players[i].position_x.value_q16);
         hash = digs_hash_mix(hash,

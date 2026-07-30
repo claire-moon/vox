@@ -378,6 +378,13 @@ typedef struct vox_digs_match {
     vox_u16 bolt_shot_streak[VOX_DIGS_MAX_SLOTS];
     vox_u16 bleed_accumulator_q8[VOX_DIGS_MAX_SLOTS];
     vox_u16 clot_ticks[VOX_DIGS_MAX_SLOTS];
+    /*
+     * Consecutive ticks this miner has been unable to resolve out of solid
+     * terrain.  Burial is a survivable emergency rather than an instant
+     * death: the miner keeps acting and can dig free.  Reset the moment
+     * physics resolves normally.
+     */
+    vox_u16 buried_ticks[VOX_DIGS_MAX_SLOTS];
     vox_u32 lava_level_q16;
     vox_u16 lava_surface_y;
     vox_u16 projectile_count;
