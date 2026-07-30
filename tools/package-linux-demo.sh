@@ -457,6 +457,22 @@ make_archive "$WORK_DIR" "$SOURCE_STEM" "$SOURCE_ARCHIVE"
         "$(basename -- "$SOURCE_ARCHIVE")" >"$(basename -- "$CHECKSUMS")"
 )
 
+# Exercise the exact archive layout that a tester receives.  This catches a
+# missing launcher, data directory, or executable-relative share path before
+# a public release uploads the tarball.
+PACKAGED_CHECK_DIR="$WORK_DIR/packaged-check"
+mkdir -p -- "$PACKAGED_CHECK_DIR"
+tar -xzf "$BINARY_ARCHIVE" -C "$PACKAGED_CHECK_DIR"
+PACKAGED_ROOT="$PACKAGED_CHECK_DIR/$ARCHIVE_STEM"
+[[ -x "$PACKAGED_ROOT/run-digs.sh" ]] || \
+    die 'the packaged Linux launcher is missing or not executable'
+[[ -r "$PACKAGED_ROOT/bin/share/digs/scripts/manifest.txt" ]] || \
+    die 'the packaged Linux executable-relative data path is broken'
+capture_evidence packaged-digs-input-self-test "$EVIDENCE_DIR" \
+    "$PACKAGED_ROOT/run-digs.sh" --input-self-test
+capture_evidence packaged-digs-load-self-test "$EVIDENCE_DIR" \
+    "$PACKAGED_ROOT/run-digs.sh" --load-self-test 600
+
 printf '\nCreated tester artifacts:\n'
 printf '  %s\n' "$BINARY_ARCHIVE" "$SOURCE_ARCHIVE" "$CHECKSUMS"
 printf 'Verify with: (cd %q && sha256sum -c %q)\n' \

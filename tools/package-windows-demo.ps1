@@ -199,6 +199,25 @@ try {
         (Get-Item -LiteralPath $archive).Length -eq 0) {
         Stop-Package 'ZIP archive was not created'
     }
+
+    # Test the archive's actual executable rather than only the build-tree
+    # copy.  This verifies the user-facing layout and catches a missing DLL
+    # or executable-relative data path before publishing the ZIP.
+    $packageCheck = Join-Path $work 'package-check'
+    Expand-Archive -LiteralPath $archive -DestinationPath $packageCheck -Force
+    $packagedDemo = Join-Path $packageCheck "$stem\bin\digs_demo.exe"
+    if (-not (Test-Path -LiteralPath $packagedDemo -PathType Leaf)) {
+        Stop-Package 'the packaged digs_demo.exe is missing from the ZIP'
+    }
+    & $packagedDemo --input-self-test
+    if ($LASTEXITCODE -ne 0) {
+        Stop-Package 'the packaged digs_demo.exe input self-test failed'
+    }
+    & $packagedDemo --load-self-test 600
+    if ($LASTEXITCODE -ne 0) {
+        Stop-Package 'the packaged digs_demo.exe deterministic load self-test failed'
+    }
+
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
     Set-Content -LiteralPath "$archive.sha256" `
         -Value "$hash  $(Split-Path -Leaf $archive)" -NoNewline
