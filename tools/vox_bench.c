@@ -46,6 +46,8 @@ typedef struct bench_counters {
     unsigned long limb_severs;
     unsigned long rope_events;
     unsigned long ai_state_changes;
+    unsigned long unattributed_deaths;
+    unsigned long hazard_damage;
 } bench_counters;
 
 static void bench_track_peak(unsigned long value, unsigned long *total,
@@ -76,6 +78,15 @@ static void bench_drain_events(vox_digs_match *match, bench_counters *counters)
             break;
         case VOX_DIGS_EVENT_KILL:
             counters->kills++;
+            /*
+             * A kill with no source is the environment winning: lava,
+             * burial, or a fall.  Bots currently have no hazard awareness
+             * at all, so this is the headline number for "bots dying to
+             * nothing" and the metric an AI pass has to move.
+             */
+            if (event->source == VOX_DIGS_NO_PLAYER) {
+                counters->unattributed_deaths++;
+            }
             break;
         case VOX_DIGS_EVENT_CRUSH:
             counters->crushes++;
@@ -92,6 +103,11 @@ static void bench_drain_events(vox_digs_match *match, bench_counters *counters)
             break;
         case VOX_DIGS_EVENT_AI_STATE:
             counters->ai_state_changes++;
+            break;
+        case VOX_DIGS_EVENT_DAMAGE:
+            if (event->source == VOX_DIGS_NO_PLAYER) {
+                counters->hazard_damage++;
+            }
             break;
         default:
             break;
@@ -254,6 +270,8 @@ int main(int argc, char **argv)
     printf("limb_severs=%lu\n", counters.limb_severs);
     printf("rope_events=%lu\n", counters.rope_events);
     printf("ai_state_changes=%lu\n", counters.ai_state_changes);
+    printf("unattributed_deaths=%lu\n", counters.unattributed_deaths);
+    printf("hazard_damage=%lu\n", counters.hazard_damage);
     printf("# timing -- advisory, never enforced\n");
     printf("cpu_total_us=%lu\n", elapsed_us);
     printf("cpu_per_tick_us=%lu\n", per_tick_us);

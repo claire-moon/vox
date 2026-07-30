@@ -24,7 +24,7 @@
 #   tools/vox-bench.sh --update [build-dir]   rewrite the baseline
 #
 # Environment:
-#   VOX_BENCH_TICKS      simulation ticks (default 600)
+#   VOX_BENCH_TICKS      simulation ticks (default 1800)
 #   VOX_BENCH_BASELINE   baseline path (default benchmarks/baseline.txt)
 #   VOX_BENCH_TOLERANCE  permitted work-counter drift, percent (default 10)
 #
@@ -42,7 +42,7 @@ if [ "${1:-}" = "--update" ]; then
 fi
 BUILD_DIR=${1:-${VOX_BUILD_DIR:-$ROOT/build}}
 BASELINE=${VOX_BENCH_BASELINE:-$ROOT/benchmarks/baseline.txt}
-TICKS=${VOX_BENCH_TICKS:-600}
+TICKS=${VOX_BENCH_TICKS:-1800}
 TOLERANCE=${VOX_BENCH_TOLERANCE:-10}
 
 case "$TICKS" in
