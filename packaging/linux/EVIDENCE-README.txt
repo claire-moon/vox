@@ -3,8 +3,8 @@ DIGS v0.0.3 package-time evidence
 
 Each named command has an unmodified stdout stream, unmodified stderr stream,
 and numeric exit status in this directory. The generated PPM images are the
-actual smoke outputs checked by the packager. Lua validate, hash, and headless
-streams prove that the shipped catalog was accepted by the same script runtime
+actual smoke outputs checked by the packager. The headless streams prove that
+the shipped simulation reproduces its canonical hashes under the same runtime
 included in the bundle. The QA-workbook-current stream proves that the shipped
 template byte-matches a fresh deterministic build from its checkpoint CSV.
 The haptic stream proves deterministic mixer ordering/isolation without

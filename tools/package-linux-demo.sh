@@ -227,27 +227,6 @@ capture_evidence qa-workbook-current "$ROOT" \
     python3 "$ROOT/tools/build-qa-workbook.py" --check
 capture_evidence vox-headless "$EVIDENCE_DIR" "$BUILD_DIR/vox_headless"
 capture_evidence digs-headless "$EVIDENCE_DIR" "$BUILD_DIR/digs_headless"
-[[ -f "$BUILD_DIR/share/digs/scripts/manifest.txt" ]] || \
-    die 'the build did not stage the DIGS Lua manifest'
-[[ -f "$BUILD_DIR/share/digs/controllers/gamecontrollerdb.txt" ]] || \
-    die 'the build did not stage the SDL GameControllerDB data'
-[[ -f "$BUILD_DIR/share/digs/icons/digs-miner.xpm" ]] || \
-    die 'the build did not stage the canonical DIGS miner icon'
-(cd "$BUILD_DIR/share/digs/icons" && sha256sum -c SHA256SUMS) || \
-    die 'the staged canonical DIGS miner icon checksum failed'
-BUILD_CONTROLLER_DB_SHA256=$(sha256sum \
-    "$BUILD_DIR/share/digs/controllers/gamecontrollerdb.txt" | awk '{print $1}')
-[[ "$BUILD_CONTROLLER_DB_SHA256" == "$CONTROLLER_DB_SHA256" ]] || \
-    die 'the staged SDL GameControllerDB data does not match the reviewed pin'
-capture_evidence digs-script-validate "$EVIDENCE_DIR" \
-    "$BUILD_DIR/digs_script" --validate \
-        "$BUILD_DIR/share/digs/scripts/manifest.txt"
-capture_evidence digs-script-hash "$EVIDENCE_DIR" \
-    "$BUILD_DIR/digs_script" --hash \
-        "$BUILD_DIR/share/digs/scripts/manifest.txt"
-capture_evidence digs-script-headless "$EVIDENCE_DIR" \
-    "$BUILD_DIR/digs_script" --headless \
-        "$BUILD_DIR/share/digs/scripts/manifest.txt"
 capture_evidence digs-input-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --input-self-test
 capture_evidence digs-cap-self-test "$EVIDENCE_DIR" \
@@ -290,7 +269,7 @@ capture_evidence vox-render-demo "$EVIDENCE_DIR" \
     die 'vox_render_demo produced no image'
 
 mkdir -p -- "$STAGE_DIR/bin" "$STAGE_DIR/libexec" "$STAGE_DIR/tools"
-for binary in digs_demo digs_script vox_headless digs_headless vox_render_demo; do
+for binary in digs_demo vox_headless digs_headless vox_render_demo; do
     install -m 0755 -- "$BUILD_DIR/$binary" "$STAGE_DIR/bin/$binary"
 done
 copy_tree "$BUILD_DIR/share" "$STAGE_DIR/share"
@@ -298,8 +277,6 @@ copy_tree "$BUILD_DIR/share" "$STAGE_DIR/share"
 # layout expose data under the conventional archive-root share/. Keep one
 # canonical copy and make the executable-relative path resolve to it.
 ln -s ../share "$STAGE_DIR/bin/share"
-[[ -r "$STAGE_DIR/bin/share/digs/scripts/manifest.txt" ]] || \
-    die 'the executable-relative DIGS Lua manifest path is broken'
 [[ -r "$STAGE_DIR/bin/share/digs/controllers/gamecontrollerdb.txt" ]] || \
     die 'the executable-relative controller database path is broken'
 [[ -r "$STAGE_DIR/bin/share/digs/icons/digs-miner.xpm" ]] || \

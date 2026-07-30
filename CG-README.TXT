@@ -15,7 +15,7 @@ Extract the complete binary archive. From the extracted directory, run:
   ./run-digs.sh
 
 Keep bin/, share/, libexec/, and the launcher together. The game needs the
-Lua manifest and catalog under share/digs/; copying only bin/digs_demo will
+controller database under share/digs/; copying only bin/digs_demo will
 produce a safe script-error screen instead of a working title menu.
 
 If Linux reports "Permission denied", run this once and try again:
@@ -38,7 +38,6 @@ The title screen contains:
   START MATCH       Configure a deathmatch.
   FOUNDRY LAB       Open the systemic-material sandbox.
   HOW TO PLAY       Read the one-page field manual.
-  MINER'S INDEX     Browse every documented game/simulation entity.
   CONTROLS          Inspect or rebind keyboard/controller actions.
   OPTIONS           Set frame cap, effects, accessibility, and display.
   QA FEEDBACK       Open the tester-workbook reminder.
@@ -177,7 +176,6 @@ Global match keys:
   Escape            Pause.
   R                 Restart the current map and seed.
   F1                Toggle the debug overlay.
-  F5                Transactionally reload the DIGS Lua data.
   F11               Toggle fullscreen.
 
 
@@ -260,30 +258,7 @@ exposes one audio setting only: persistent MASTER VOLUME from 0 through 100
 percent.
 
 
-7. MINER'S INDEX AND LUA DATA
------------------------------
-
-MINER'S INDEX is a read-only field manual generated from the shipped Lua
-catalog. Up/Down browses six visible entries at a time; Escape/B returns. The
-right pane shows the selected material, weapon, entity, anatomy part, reaction,
-mode, AI state, effects/audio system, or rule without another selection step.
-
-The runtime is a bounded Lua 5.1 sandbox. It has no file, operating-system,
-package, debug, random, or dynamic-code APIs. F5 validates a replacement data
-set before swapping it in; a rejected reload leaves the last good catalog
-active. If initial data cannot load, F5 retries and Escape exits safely.
-
-Validate the exact packaged data from a terminal:
-
-  ./bin/digs_script --validate share/digs/scripts/manifest.txt
-  ./bin/digs_script --hash share/digs/scripts/manifest.txt
-  ./bin/digs_script --headless share/digs/scripts/manifest.txt
-
-The first two commands should report the same source/catalog hashes and 86
-catalog entries. --headless also prints the complete entry list.
-
-
-8. QUICK AUTOMATED TESTS
+7. QUICK AUTOMATED TESTS
 ------------------------
 
 Run these from the extracted demo directory:
@@ -327,7 +302,7 @@ The package-time versions of these checks, CTest, Cargo tests, script
 validation, and raw exit statuses are under evidence/.
 
 
-9. MANUAL v0.0.3 PLAYTEST
+8. MANUAL v0.0.3 PLAYTEST
 -------------------------
 
 For a shorter first report, use qa/V0.0.3-QUICK-FEEDBACK.txt (or the packaged
@@ -378,13 +353,11 @@ Please check at least these paths:
   [ ] C, M, and controller R3 barks match their visible speech bubbles.
   [ ] Dummy Mode removes only local bark cooldown; bots remain sparse.
   [ ] Laptop Mode and each qualified cap preserve match results and 60 Hz time.
-  [ ] MINER'S INDEX has 87 readable entries, six rows, arrows, and back only.
-  [ ] F5 reloads valid Lua data and rejects invalid data without corruption.
   [ ] Rising lava, water cooling, fire, firedamp, liquids, and collapse work.
   [ ] Pause/results/restart/fullscreen/quit paths remain stable.
 
 
-10. RECORD AND SHARE QA FEEDBACK
+9. RECORD AND SHARE QA FEEDBACK
 --------------------------------
 
 The included 88-checkpoint workbook is:
@@ -420,7 +393,7 @@ Submit reviewed feedback here:
   https://github.com/claire-moon/vox/issues/new?template=demo-feedback.yml
 
 
-11. BUILD AND TEST FROM SOURCE
+10. BUILD AND TEST FROM SOURCE
 ------------------------------
 
 From the VOX repository root:
@@ -430,9 +403,6 @@ From the VOX repository root:
     -DVOX_BUILD_SDL2_DEMO=ON
   cmake --build build-demo --parallel
   ctest --test-dir build-demo --output-on-failure
-  cargo test --workspace
-  ./build-demo/digs_script --validate \
-    ./build-demo/share/digs/scripts/manifest.txt
   ./build-demo/digs_demo
 
 Run the complete strict-language verification gate with:
@@ -459,7 +429,7 @@ For an explicitly non-release package from a dirty development tree only:
   tools/package-linux-demo.sh
 
 
-12. VERIFY THE DOWNLOAD AND KNOW THE LIMITS
+11. VERIFY THE DOWNLOAD AND KNOW THE LIMITS
 --------------------------------------------
 
 From the parent dist directory:
@@ -467,7 +437,7 @@ From the parent dist directory:
   sha256sum -c SHA256SUMS
 
 Both archives must report OK. The binary bundle contains SBOM.spdx.json, raw
-package-time evidence, GPL notices, the Lua catalog, and launch/test scripts.
+package-time evidence, GPL notices, and launch/test scripts.
 The matching Corresponding Source archive is distributed beside it.
 
 v0.0.3 publishes easy-run Linux and Windows x86-64 bundles. The exposed game

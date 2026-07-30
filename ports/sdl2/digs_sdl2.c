@@ -10,7 +10,6 @@
 #include "vox/vox_audio.h"
 #include "vox/vox_game.h"
 #include "vox/vox_render.h"
-#include "vox/vox_script.h"
 #include "vox_sdl_ui.h"
 
 #define DEMO_WIDTH 320U
@@ -95,9 +94,7 @@ typedef enum demo_screen {
     DEMO_RESULTS = 5,
     DEMO_FEEDBACK = 6,
     DEMO_HOW_TO = 7,
-    DEMO_INDEX = 8,
     DEMO_CONTROLS = 9,
-    DEMO_SCRIPT_ERROR = 10,
     DEMO_INPUT_OPTIONS = 11,
     DEMO_CUSTOMIZE = 12,
     DEMO_NAME_EDITOR = 13
@@ -312,9 +309,6 @@ typedef struct demo_app {
     vox_i32 previous_player_x[VOX_DIGS_MAX_SLOTS];
     vox_i32 previous_player_y[VOX_DIGS_MAX_SLOTS];
     vox_u32 last_event_sequence;
-    vox_u16 index_selection;
-    vox_u16 index_scroll;
-    double index_visual_row;
     int binding_capture;
     int binding_player;
     int keyboard_previous_down[DEMO_LOCAL_MAX];
@@ -373,9 +367,6 @@ typedef struct demo_app {
     vox_u32 cap_supported_mask;
     int cap_qualified;
     vox_u16 bot_health_ttl[VOX_DIGS_MAX_SLOTS];
-    vox_script_runtime scripts;
-    int scripts_ready;
-    char script_manifest[512];
 } demo_app;
 
 static vox_u8 demo_pixels[DEMO_WIDTH * DEMO_HEIGHT * VOX_SOFTWARE_RGB_BYTES];
@@ -1360,65 +1351,6 @@ static void demo_audio_close(demo_app *app)
         SDL_CloseAudioDevice(app->audio_device);
         app->audio_device = 0U;
     }
-}
-
-static int demo_scripts_open(demo_app *app)
-{
-    static const char suffix[] = "share/digs/scripts/manifest.txt";
-    static const char source_path[] = "games/digs/scripts/manifest.txt";
-    vox_script_report report;
-    char *base;
-    vox_result status;
-    if (vox_script_runtime_init(&app->scripts, 0) != VOX_OK) {
-        return 0;
-    }
-    app->script_manifest[0] = '\0';
-    base = SDL_GetBasePath();
-    if (base != 0 && strlen(base) + sizeof(suffix) <
-        sizeof(app->script_manifest)) {
-        strcpy(app->script_manifest, base);
-        strcat(app->script_manifest, suffix);
-    }
-    if (base != 0) SDL_free(base);
-    status = app->script_manifest[0] == '\0' ? VOX_SCRIPT_ERR_IO :
-             vox_script_reload_manifest(&app->scripts,
-                                         app->script_manifest, &report);
-    if (status != VOX_OK) {
-        strcpy(app->script_manifest, source_path);
-        status = vox_script_reload_manifest(&app->scripts,
-                                             app->script_manifest, &report);
-    }
-    if (status != VOX_OK) {
-        fprintf(stderr, "DIGS script load failed: %s\n",
-                vox_script_last_error(&app->scripts));
-        return 0;
-    }
-    app->scripts_ready = 1;
-    return 1;
-}
-
-static int demo_scripts_reload(demo_app *app)
-{
-    vox_script_report report;
-    vox_result status;
-    if (!app->scripts_ready) return demo_scripts_open(app);
-    status = vox_script_reload_manifest(&app->scripts,
-                                         app->script_manifest, &report);
-    if (status != VOX_OK) {
-        fprintf(stderr, "DIGS F5 reload rejected: %s\n",
-                vox_script_last_error(&app->scripts));
-        return 0;
-    }
-    fprintf(stdout, "DIGS scripts reloaded source=%08lx catalog=%08lx\n",
-            (unsigned long)report.source_hash,
-            (unsigned long)report.catalog_hash);
-    return 1;
-}
-
-static void demo_scripts_close(demo_app *app)
-{
-    vox_script_runtime_shutdown(&app->scripts);
-    app->scripts_ready = 0;
 }
 
 static int demo_q16_to_screen(vox_i32 value, vox_u32 screen_size,
@@ -2901,11 +2833,10 @@ static void demo_draw_title(demo_app *app)
     demo_menu_item(73, "START MATCH", app->selection == 0);
     demo_menu_item(87, "FOUNDRY LAB", app->selection == 1);
     demo_menu_item(101, "HOW TO PLAY", app->selection == 2);
-    demo_menu_item(115, "MINER'S INDEX", app->selection == 3);
-    demo_menu_item(129, "CONTROLS", app->selection == 4);
-    demo_menu_item(143, "OPTIONS", app->selection == 5);
-    demo_menu_item(157, "QA FEEDBACK", app->selection == 6);
-    demo_menu_item(171, "QUIT", app->selection == 7);
+    demo_menu_item(115, "CONTROLS", app->selection == 3);
+    demo_menu_item(129, "OPTIONS", app->selection == 4);
+    demo_menu_item(143, "QA FEEDBACK", app->selection == 5);
+    demo_menu_item(157, "QUIT", app->selection == 6);
     vox_ui_text_center(&demo_ui, 160, 181, 1,
                        "GPL-3.0-OR-LATER  V0.0.3",
                        DEMO_VGA_DARK_GRAY);
@@ -3284,84 +3215,6 @@ static void demo_draw_how_to(demo_app *app)
     vox_ui_text_center(&demo_ui, 160, 178, 1, prompt, DEMO_VGA_YELLOW);
 }
 
-static void demo_draw_index(demo_app *app)
-{
-    const vox_script_catalog *catalog;
-    const vox_script_entry *entry;
-    vox_u16 count;
-    vox_u16 row;
-    double target_row;
-    double factor;
-    int highlight_y;
-    char footer[64];
-    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
-    (void)vox_software_render_ex(&demo_title_world, &demo_target,
-                                 &demo_render_config);
-    demo_dark_panel(6, 6, 308, 188);
-    vox_ui_text_center_shadow(&demo_ui, 160, 14, 1, "MINER'S INDEX",
-                              DEMO_VGA_YELLOW);
-    catalog = app->scripts_ready ? vox_script_catalog_get(&app->scripts) : 0;
-    count = catalog == 0 ? 0U : catalog->entry_count;
-    if (count == 0U) {
-        vox_ui_text_center(&demo_ui, 160, 92, 1,
-                           "CATALOG UNAVAILABLE", DEMO_VGA_LIGHT_RED);
-        return;
-    }
-    if (app->index_selection >= count) {
-        app->index_selection = (vox_u16)(count - 1U);
-    }
-    target_row = (double)(app->index_selection - app->index_scroll);
-    factor = app->frame_seconds * 18.0;
-    if (factor < 0.05) factor = 0.05;
-    if (factor > 1.0) factor = 1.0;
-    app->index_visual_row += (target_row - app->index_visual_row) * factor;
-    highlight_y = 39 + (int)(app->index_visual_row * 20.0);
-    vox_ui_rect(&demo_ui, 11, highlight_y - 2, 111, 12, DEMO_VGA_BLUE);
-    vox_ui_frame(&demo_ui, 11, highlight_y - 2, 111, 12,
-                 DEMO_VGA_LIGHT_CYAN);
-    if (app->index_scroll > 0U) {
-        vox_ui_text_center(&demo_ui, 66, 28, 1, "^ MORE ^",
-                           DEMO_VGA_LIGHT_CYAN);
-    }
-    for (row = 0U; row < VOX_SCRIPT_INDEX_VISIBLE_ROWS; ++row) {
-        vox_u16 ordinal = (vox_u16)(app->index_scroll + row);
-        if (ordinal < count) {
-            char label[20];
-            const vox_script_entry *listed =
-                vox_script_catalog_entry(catalog, ordinal);
-            demo_short_label(label, (int)sizeof(label),
-                             listed == 0 ? "UNKNOWN" : listed->title, 17);
-            vox_ui_text(&demo_ui, 15, 39 + (int)row * 20, 1, label,
-                        ordinal == app->index_selection ? 255U : 170U,
-                        ordinal == app->index_selection ? 255U : 170U,
-                        ordinal == app->index_selection ? 85U : 170U);
-        }
-    }
-    if ((vox_u16)(app->index_scroll + VOX_SCRIPT_INDEX_VISIBLE_ROWS) <
-        count) {
-        vox_ui_text_center(&demo_ui, 66, 163, 1, "V MORE V",
-                           DEMO_VGA_LIGHT_CYAN);
-    }
-    vox_ui_frame(&demo_ui, 128, 31, 180, 140, DEMO_VGA_BROWN);
-    entry = vox_script_catalog_entry(catalog, app->index_selection);
-    if (entry != 0) {
-        char heading[30];
-        demo_short_label(heading, (int)sizeof(heading), entry->title, 27);
-        vox_ui_text(&demo_ui, 134, 38, 1, heading, DEMO_VGA_YELLOW);
-        vox_ui_text(&demo_ui, 134, 49, 1, entry->category,
-                    DEMO_VGA_LIGHT_CYAN);
-        (void)vox_ui_text_wrap(&demo_ui, 134, 63, 168, 4, 1,
-                               entry->summary, 255U, 255U, 255U);
-        (void)vox_ui_text_wrap(&demo_ui, 134, 101, 168, 7, 1,
-                               entry->detail, 170U, 170U, 170U);
-    }
-    sprintf(footer, "UP DOWN BROWSE  ESC OR [%s] BACK",
-            demo_pad_button_label(demo_prompt_family(app),
-                demo_pad_back_button(demo_prompt_family(app))));
-    vox_ui_text_center(&demo_ui, 160, 180, 1, footer,
-                       DEMO_VGA_DARK_GRAY);
-}
-
 static const char *demo_scancode_label(SDL_Scancode code)
 {
     const char *name = SDL_GetScancodeName(code);
@@ -3476,21 +3329,6 @@ static void demo_draw_controls(demo_app *app)
     vox_ui_text_center(&demo_ui, 160, 180, 1,
         app->binding_capture ? "PRESS A NEW KEY  ESC CANCELS" :
         "ENTER REBINDS  LEFT RIGHT DEVICE", DEMO_VGA_LIGHT_CYAN);
-}
-
-static void demo_draw_script_error(demo_app *app)
-{
-    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
-    (void)vox_software_render_ex(&demo_title_world, &demo_target,
-                                 &demo_render_config);
-    demo_dark_panel(18, 24, 284, 152);
-    vox_ui_text_center_shadow(&demo_ui, 160, 35, 1, "SCRIPT ERROR",
-                              DEMO_VGA_LIGHT_RED);
-    (void)vox_ui_text_wrap(&demo_ui, 32, 68, 256, 8, 1,
-                           vox_script_last_error(&app->scripts),
-                           255U, 255U, 255U);
-    vox_ui_text_center(&demo_ui, 160, 154, 1,
-                       "F5 RETRIES  ESC QUITS", DEMO_VGA_YELLOW);
 }
 
 static vox_i32 demo_material_temperature(vox_u16 material)
@@ -4649,14 +4487,10 @@ static void demo_render(demo_app *app)
         demo_draw_feedback(app);
     } else if (app->screen == DEMO_HOW_TO) {
         demo_draw_how_to(app);
-    } else if (app->screen == DEMO_INDEX) {
-        demo_draw_index(app);
     } else if (app->screen == DEMO_CONTROLS) {
         demo_draw_controls(app);
     } else if (app->screen == DEMO_INPUT_OPTIONS) {
         demo_draw_input_options(app);
-    } else if (app->screen == DEMO_SCRIPT_ERROR) {
-        demo_draw_script_error(app);
     } else if (app->screen == DEMO_RESULTS) {
         demo_draw_results(app);
     } else {
@@ -5937,18 +5771,12 @@ static void demo_handle_title_key(demo_app *app, SDL_Keycode key)
             app->screen = DEMO_HOW_TO;
             app->selection = 0;
         } else if (app->selection == 3) {
-            app->screen = DEMO_INDEX;
-            app->selection = 0;
-            app->index_selection = 0U;
-            app->index_scroll = 0U;
-            app->index_visual_row = 0.0;
-        } else if (app->selection == 4) {
             app->screen = DEMO_CONTROLS;
             app->selection = 0;
-        } else if (app->selection == 5) {
+        } else if (app->selection == 4) {
             app->screen = DEMO_OPTIONS;
             app->selection = 0;
-        } else if (app->selection == 6) {
+        } else if (app->selection == 5) {
             app->screen = DEMO_FEEDBACK;
             app->selection = 0;
         } else {
@@ -6301,32 +6129,6 @@ static void demo_handle_input_options_key(demo_app *app, SDL_Keycode key)
     }
 }
 
-static void demo_handle_index_key(demo_app *app, SDL_Keycode key)
-{
-    const vox_script_catalog *catalog = app->scripts_ready ?
-        vox_script_catalog_get(&app->scripts) : 0;
-    vox_u16 count = catalog == 0 ? 0U : catalog->entry_count;
-    if (key == SDLK_ESCAPE) {
-        app->screen = DEMO_TITLE;
-        app->selection = 0;
-        demo_audio_play(app, DEMO_SOUND_PAUSE);
-    } else if (count > 0U && key == SDLK_UP) {
-        if (app->index_selection > 0U) --app->index_selection;
-        if (app->index_selection < app->index_scroll) {
-            app->index_scroll = app->index_selection;
-        }
-        demo_audio_play(app, DEMO_SOUND_MOVE);
-    } else if (count > 0U && key == SDLK_DOWN) {
-        if (app->index_selection + 1U < count) ++app->index_selection;
-        if (app->index_selection >= app->index_scroll +
-                                    VOX_SCRIPT_INDEX_VISIBLE_ROWS) {
-            app->index_scroll = (vox_u16)(app->index_selection -
-                                VOX_SCRIPT_INDEX_VISIBLE_ROWS + 1U);
-        }
-        demo_audio_play(app, DEMO_SOUND_MOVE);
-    }
-}
-
 static void demo_handle_controls_key(demo_app *app, SDL_Keycode key,
                                      SDL_Scancode scancode)
 {
@@ -6385,16 +6187,9 @@ static void demo_handle_key(demo_app *app, SDL_Keycode key,
     }
     if (key == SDLK_F1) {
         app->options.debug = !app->options.debug;
-    } else if (key == SDLK_F5) {
-        if (demo_scripts_reload(app) && app->screen == DEMO_SCRIPT_ERROR) {
-            app->screen = DEMO_TITLE;
-            app->selection = 0;
-        }
     } else if (key == SDLK_F11) {
         app->options.fullscreen = !app->options.fullscreen;
         demo_apply_fullscreen(app);
-    } else if (app->screen == DEMO_SCRIPT_ERROR) {
-        if (key == SDLK_ESCAPE) app->running = 0;
     } else if (app->screen == DEMO_TITLE) {
         demo_handle_title_key(app, key);
     } else if (app->screen == DEMO_SETUP) {
@@ -6407,8 +6202,6 @@ static void demo_handle_key(demo_app *app, SDL_Keycode key,
         demo_handle_options_key(app, key);
     } else if (app->screen == DEMO_INPUT_OPTIONS) {
         demo_handle_input_options_key(app, key);
-    } else if (app->screen == DEMO_INDEX) {
-        demo_handle_index_key(app, key);
     } else if (app->screen == DEMO_CONTROLS) {
         demo_handle_controls_key(app, key, scancode);
     } else if ((app->screen == DEMO_HOW_TO ||
@@ -8330,13 +8123,9 @@ int main(int argc, char **argv)
             (void)demo_open_controller(&app, controller_index);
         }
     }
-    if (!demo_scripts_open(&app)) {
-        app.screen = DEMO_SCRIPT_ERROR;
-    }
     frequency = SDL_GetPerformanceFrequency();
     if (frequency == 0U) {
         fprintf(stderr, "performance timer unavailable: %s\n", SDL_GetError());
-        demo_scripts_close(&app);
         demo_close_controllers(&app);
         demo_audio_close(&app);
         SDL_DestroyTexture(app.texture);
@@ -8408,7 +8197,6 @@ int main(int argc, char **argv)
     }
     (void)demo_save_input_settings(&app);
     (void)SDL_ShowCursor(SDL_ENABLE);
-    demo_scripts_close(&app);
     demo_close_controllers(&app);
     demo_audio_close(&app);
     SDL_DestroyTexture(app.texture);

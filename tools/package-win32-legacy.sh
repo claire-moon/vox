@@ -255,7 +255,6 @@ if [[ -d "$BUILD_DIR/share" ]]; then
 else
     mkdir -p -- "$STAGE_DIR/SHARE/digs"
     copy_tree "$ROOT/games/digs/scripts" "$STAGE_DIR/SHARE/digs/scripts"
-    copy_tree "$ROOT/games/digs/catalog" "$STAGE_DIR/SHARE/digs/catalog"
     copy_tree "$ROOT/games/digs/icons" "$STAGE_DIR/SHARE/digs/icons"
     mkdir -p -- "$STAGE_DIR/SHARE/digs/controllers"
     copy_file "$ROOT/third_party/SDL_GameControllerDB/gamecontrollerdb.txt" \
@@ -273,7 +272,6 @@ copy_file "$ROOT/packaging/win32-legacy/START-HERE.TXT" \
 copy_file "$ROOT/packaging/win32-legacy/THIRD-PARTY.TXT" \
     "$STAGE_DIR/THIRD-PARTY.TXT"
 copy_file "$ROOT/LICENSE" "$STAGE_DIR/LICENSE"
-copy_file "$ROOT/LICENSES/Lua-5.1.txt" "$STAGE_DIR/LICENSES/Lua-5.1.txt"
 copy_file "$ROOT/LICENSES/SDL_GameControllerDB.txt" \
     "$STAGE_DIR/LICENSES/SDL_GameControllerDB.txt"
 copy_file "$ROOT/packaging/win32-legacy/EVIDENCE-README.TXT" \
