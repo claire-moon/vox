@@ -133,6 +133,9 @@ Player 1 keyboard and mouse:
   Right mouse       Operate rope in the selected Hold/Toggle mode.
   E or left mouse   Fire/use selected tool.
   Mouse             Aim exactly through the current camera transform.
+  Arrow keys        Aim without a mouse, in single-player only. Moving the
+                    mouse takes the cursor back. With two local players the
+                    arrows stay Player 2's movement and are not used here.
   W / S             Reel an attached rope shorter/longer.
   1 through 0       Direct-select the ten tools.
   -                 Direct-select the charged Mining Rail.

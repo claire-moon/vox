@@ -289,6 +289,13 @@ typedef struct demo_app {
     int mouse_x;
     int mouse_y;
     int mouse_inside;
+    /*
+     * Player one aims with the mouse, and that aim is re-derived from the
+     * pointer every tick.  When a solo keyboard player steers with the arrow
+     * keys we latch here so the pointer stops overwriting them; genuine mouse
+     * movement clears it and silently takes aim back.
+     */
+    int keyboard_aim_active;
     int mouse_activity_x;
     int mouse_activity_y;
     int cursor_visible;
@@ -3196,7 +3203,8 @@ static void demo_draw_how_to(demo_app *app)
             demo_pad_button_label(family, app->bindings.pad_rope));
     vox_ui_text(&demo_ui, 72, 64, 1, prompt, DEMO_VGA_WHITE);
     vox_ui_text(&demo_ui, 20, 76, 1, "AIM", DEMO_VGA_LIGHT_CYAN);
-    vox_ui_text(&demo_ui, 72, 76, 1, "MOUSE OR RIGHT STICK", DEMO_VGA_WHITE);
+    vox_ui_text(&demo_ui, 72, 76, 1, "MOUSE ARROWS OR R-STICK",
+                DEMO_VGA_WHITE);
     vox_ui_text(&demo_ui, 20, 88, 1, "FIRE", DEMO_VGA_LIGHT_CYAN);
     sprintf(prompt, "LMB E OR [%s]",
             demo_pad_button_label(family, app->bindings.pad_fire));
@@ -4915,7 +4923,8 @@ static void demo_submit_human_input(demo_app *app)
         if (!use_controller) {
             previous_down = previous_key != 0 && keys[*previous_key];
             next_down = next_key != 0 && keys[*next_key];
-            if (player == 0 && app->mouse_inside) {
+            if (player == 0 && app->mouse_inside &&
+                !app->keyboard_aim_active) {
                 demo_mouse_world(app, &app->aim_world_x[0],
                                  &app->aim_world_y[0]);
             }
@@ -4944,6 +4953,36 @@ static void demo_submit_human_input(demo_app *app)
             if (player == 0) {
                 if (keys[SDL_SCANCODE_W]) move_y = -32767;
                 if (keys[SDL_SCANCODE_S]) move_y = 32767;
+                /*
+                 * Arrow keys are player two's movement, so they only steer
+                 * player one's aim when nobody else is using them.  That
+                 * keeps two-player controls exactly as they were while
+                 * giving the common solo case full keyboard play.
+                 */
+                if (app->local_players == 1) {
+                    int aimed = 0;
+                    if (keys[SDL_SCANCODE_UP] &&
+                        app->aim_world_y[0] > 0U) {
+                        --app->aim_world_y[0];
+                        aimed = 1;
+                    }
+                    if (keys[SDL_SCANCODE_DOWN]) {
+                        ++app->aim_world_y[0];
+                        aimed = 1;
+                    }
+                    if (keys[SDL_SCANCODE_LEFT] &&
+                        app->aim_world_x[0] > 0U) {
+                        --app->aim_world_x[0];
+                        aimed = 1;
+                    }
+                    if (keys[SDL_SCANCODE_RIGHT]) {
+                        ++app->aim_world_x[0];
+                        aimed = 1;
+                    }
+                    if (aimed) {
+                        app->keyboard_aim_active = 1;
+                    }
+                }
             } else {
                 if (keys[SDL_SCANCODE_UP]) move_y = -32767;
                 if (keys[SDL_SCANCODE_DOWN]) move_y = 32767;
@@ -6387,6 +6426,7 @@ static void demo_handle_event(demo_app *app, const SDL_Event *event)
             (void)demo_activate_source(app, 0, DEMO_SOURCE_KEYBOARD, 0);
             app->mouse_activity_x = app->mouse_x;
             app->mouse_activity_y = app->mouse_y;
+            app->keyboard_aim_active = 0;
         }
     } else if (event->type == SDL_MOUSEBUTTONDOWN &&
                event->button.button == SDL_BUTTON_LEFT &&
@@ -6394,6 +6434,7 @@ static void demo_handle_event(demo_app *app, const SDL_Event *event)
         if (demo_sync_hardware_mouse(app)) {
             int changed = demo_activate_source(app, 0,
                                                DEMO_SOURCE_KEYBOARD, 1);
+            app->keyboard_aim_active = 0;
             if (!changed && app->player_input[0].active_source ==
                             DEMO_SOURCE_KEYBOARD) {
                 demo_mouse_world(app, &app->aim_world_x[0],
