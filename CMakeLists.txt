@@ -522,6 +522,17 @@ if (VOX_BUILD_TESTS)
             COMMAND digs_demo --camera-self-test)
         add_test(NAME digs_fixed_step_debt
             COMMAND digs_demo --fixed-step-self-test)
+        # v0.0.4 budgets the shipped payload (digs_demo plus the staged
+        # share/ tree) at 1440 KiB.  The gate only fails past that hard
+        # ceiling; the target and warning lines are advisory so the diet
+        # can be measured phase by phase without blocking the build.
+        if (UNIX)
+            add_test(NAME digs_size_budget
+                COMMAND ${CMAKE_COMMAND} -E env
+                        VOX_SIZE_REPORT=${CMAKE_CURRENT_BINARY_DIR}/size-report.txt
+                        ${CMAKE_CURRENT_SOURCE_DIR}/tools/vox-size-report.sh
+                        ${CMAKE_CURRENT_BINARY_DIR})
+        endif()
     endif()
     add_test(NAME vox_headless_scenario COMMAND vox_headless)
     add_test(NAME digs_headless_scenario COMMAND digs_headless)
