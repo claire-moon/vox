@@ -988,9 +988,39 @@ vox_result vox_world_blast(vox_world *world, vox_u32 x, vox_u32 y,
                     vox_clear_cell(world, chunk, vox_index((vox_u32)sample_x,
                                                            (vox_u32)sample_y,
                                                            depth), cell);
+                    /*
+                     * Blasting removes support exactly as digging does, so
+                     * it has to tell the cells above for the same reason.
+                     *
+                     * The perimeter wake below only reaches one cell outside
+                     * the crater's bounding box, which never touches the
+                     * ceiling standing over cells cleared in the interior.
+                     * Those cells stayed asleep, vox_step_structures only
+                     * ever visits awake cells, and so an explosion could
+                     * hollow out a chamber forty cells wide and leave its
+                     * roof hanging in mid-air.  Most real digging is blasts,
+                     * so this was the common case, not the corner one.
+                     */
+                    vox_wake_support_dependents(world, (vox_u32)sample_x,
+                                                (vox_u32)sample_y, depth);
                 }
             }
         }
+    }
+    /*
+     * Wake a band above the crater, not just a one-cell perimeter.
+     *
+     * Support reaches VOX_STRUCTURE_COHESION_CELLS sideways, so the roof over
+     * a fresh crater has to be re-examined that far up before the question
+     * "is anything still holding this?" can even be asked.  A one-cell ring
+     * left the ceiling asleep, and vox_step_structures only visits awake
+     * cells, so a blast could hollow out a wide chamber and leave its roof
+     * hanging.  Each cell that does fall wakes the one above it, so this band
+     * only has to start the cascade, not carry it.
+     */
+    {
+        long ceiling_reach = (long)VOX_STRUCTURE_COHESION_CELLS + 2L;
+        min_y = min_y > ceiling_reach ? min_y - ceiling_reach : 0L;
     }
     for (sample_y = min_y > 0L ? min_y - 1L : 0L;
          sample_y <= max_y + 1L && sample_y < (long)VOX_WORLD_HEIGHT;

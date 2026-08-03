@@ -5773,10 +5773,10 @@ static void demo_update_cursor_visibility(demo_app *app)
 static void demo_handle_title_key(demo_app *app, SDL_Keycode key)
 {
     if (key == SDLK_UP) {
-        app->selection = (app->selection + 7) % 8;
+        app->selection = (app->selection + 6) % 7;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 8;
+        app->selection = (app->selection + 1) % 7;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
         demo_audio_play(app, DEMO_SOUND_SELECT);
@@ -5939,10 +5939,10 @@ static void demo_handle_customize_key(demo_app *app, SDL_Keycode key)
         app->screen = DEMO_SETUP;
         app->selection = 7;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 7) % 8;
+        app->selection = (app->selection + 9) % 10;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 8;
+        app->selection = (app->selection + 1) % 10;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (direction != 0) {
         if (app->selection == 4) {
@@ -6521,6 +6521,161 @@ static int demo_write_ppm(const char *path)
     return 1;
 }
 
+
+/*
+ * Frame capture for headless visual review.
+ *
+ * The renderer, the camera, and the PPM writer are all already headless --
+ * demo_smoke_test proves it by producing one frame with no window. This
+ * turns that into a filmstrip: run a scripted scenario and write a frame
+ * every few ticks, so terrain, effects, and physics can be inspected as
+ * images rather than inferred from counters. Deterministic and windowless,
+ * so it runs anywhere the tests do.
+ */
+static void demo_capture_setup_app(demo_app *app)
+{
+    memset(app, 0, sizeof(*app));
+    app->bots = 0;
+    app->local_players = 1;
+    app->arsenal = DEMO_ARSENAL_FULL;
+    app->options.gi_quality = VOX_GI_BALANCED;
+    app->options.gore_level = 2;
+    app->options.fx_profile = 1;
+    app->screen = DEMO_PLAY;
+    app->mouse_x = 160;
+    app->mouse_y = 100;
+    app->mouse_activity_x = 160;
+    app->mouse_activity_y = 100;
+    app->cursor_visible = -1;
+    app->camera_zoom = DEMO_CAMERA_ZOOM_DEFAULT;
+    app->camera_scale = (double)DEMO_CAMERA_ZOOM_DEFAULT;
+    app->frame_seconds = 1.0 / 60.0;
+    app->render_alpha = 1.0;
+    app->measured_fps = 60.0;
+}
+
+static void demo_capture_frame(demo_app *app, const char *directory,
+                               vox_u32 index)
+{
+    char path[512];
+    vox_u16 slot;
+    for (slot = 0U; slot < VOX_DIGS_MAX_SLOTS; ++slot) {
+        app->previous_player_x[slot] =
+            demo_match.players[slot].position_x.value_q16;
+        app->previous_player_y[slot] =
+            demo_match.players[slot].position_y.value_q16;
+    }
+    app->camera_world_x = (double)demo_match.players[0].
+                          position_x.value_q16 / 65536.0;
+    app->camera_world_y = (double)demo_match.players[0].
+                          position_y.value_q16 / 65536.0;
+    demo_update_player_camera(app);
+    demo_render(app);
+    sprintf(path, "%s/frame_%04lu.ppm", directory, (unsigned long)index);
+    (void)demo_write_ppm(path);
+}
+
+static int demo_capture(const char *scenario, const char *directory,
+                        vox_u32 frames, vox_u32 interval)
+{
+    demo_app app;
+    vox_digs_rules rules;
+    vox_u32 frame;
+    vox_u32 tick = 0U;
+    vox_i32 origin_x;
+    vox_i32 origin_y;
+    int wide = strcmp(scenario, "blast-wide") == 0;
+    int narrow = strcmp(scenario, "blast-narrow") == 0;
+    int smoke = strcmp(scenario, "smoke") == 0;
+    int overhang = strcmp(scenario, "overhang") == 0;
+    if (!wide && !narrow && !smoke && !overhang) {
+        fprintf(stderr,
+                "capture scenarios: blast-wide blast-narrow overhang smoke\n");
+        return 2;
+    }
+    demo_capture_setup_app(&app);
+    demo_prepare_targets();
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    rules.match_ticks = 20000U;
+    rules.lava_start_tick = 19000U;
+    rules.map_style = VOX_DIGS_MAP_COAL_RIDGE;
+    rules.weapon_mask = demo_arsenal_masks[DEMO_ARSENAL_FULL];
+    rules.seed = 0x564F5831U;
+    if (vox_digs_match_init(&demo_match, &rules) != VOX_OK) {
+        return 3;
+    }
+    demo_match.spawn_shield_ticks[0] = 0U;
+    origin_x = demo_match.players[0].position_x.value_q16 >> 16;
+    origin_y = demo_match.players[0].position_y.value_q16 >> 16;
+    /* Bury the miner's own column so the camera frames the test terrain. */
+    if (wide || narrow || overhang) {
+        vox_i32 half = wide ? 20L : (overhang ? 14L : 3L);
+        vox_i32 x;
+        vox_i32 y;
+        vox_i32 top = origin_y + 6L;
+        vox_i32 bottom = origin_y + 10L;
+        /* Solid overburden above, so there is something to bring down. */
+        for (y = origin_y - 24L; y <= bottom; ++y) {
+            for (x = origin_x - 34L; x <= origin_x + 34L; ++x) {
+                vox_u32 z;
+                if (x < 0L || y < 0L) continue;
+                for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                    (void)vox_world_set(&demo_match.world, (vox_u32)x,
+                                        (vox_u32)y, z, VOX_MAT_SOIL,
+                                        20L << 16);
+                }
+            }
+        }
+        for (y = origin_y - 40L; y < origin_y - 24L; ++y) {
+            for (x = origin_x - 34L; x <= origin_x + 34L; ++x) {
+                vox_u32 z;
+                if (x < 0L || y < 0L) continue;
+                for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                    (void)vox_world_set(&demo_match.world, (vox_u32)x,
+                                        (vox_u32)y, z, VOX_MAT_AIR,
+                                        20L << 16);
+                }
+            }
+        }
+        (void)vox_world_sleep_all(&demo_match.world);
+        demo_match.players[0].position_y.value_q16 =
+            (vox_i32)((origin_y + 8L) << 16);
+        demo_capture_frame(&app, directory, 0U);
+        /* Blast the void open the way a real weapon would. */
+        for (x = origin_x - half; x <= origin_x + half; x += 6L) {
+            if (x < 0L) continue;
+            (void)vox_world_blast(&demo_match.world, (vox_u32)x,
+                                  (vox_u32)top, 0U, 6U, 300L << 16);
+        }
+    } else {
+        demo_capture_frame(&app, directory, 0U);
+        (void)vox_digs_fire_weapon(&demo_match, 0U, VOX_DIGS_TOOL_SMOKER,
+                                   (vox_u32)(origin_x + 10L),
+                                   (vox_u32)origin_y);
+    }
+    for (frame = 1U; frame < frames; ++frame) {
+        vox_u32 step;
+        for (step = 0U; step < interval; ++step) {
+            if (vox_digs_match_step(&demo_match) != VOX_OK) {
+                return 4;
+            }
+            tick++;
+        }
+        demo_capture_frame(&app, directory, frame);
+    }
+    printf("capture scenario=%s frames=%lu interval=%lu ticks=%lu "
+           "awake=%lu occupied=%lu hash=%08lx dir=%s\n",
+           scenario, (unsigned long)frames, (unsigned long)interval,
+           (unsigned long)tick,
+           (unsigned long)demo_match.world.awake_cells,
+           (unsigned long)demo_match.world.occupied_cells,
+           (unsigned long)demo_match.state_hash, directory);
+    return 0;
+}
+
 static int demo_smoke_test(const char *path)
 {
     static const vox_u16 scripted_weapons[8] = {
@@ -7053,8 +7208,8 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
             status = 6;
         } else if (ticks == 600U &&
                    (fired != 27U || explosions != 16U || crushes != 1U ||
-                    max_effects != 997U || max_awake != 7259U ||
-                    demo_match.state_hash != (vox_u32)0x9D0CA2A4UL)) {
+                    max_effects != 995U || max_awake != 8777U ||
+                    demo_match.state_hash != (vox_u32)0x33C384B6UL)) {
             fprintf(stderr,
                     "load self-test: canonical 600-tick activity/hash "
                     "mismatch\n");
@@ -8006,6 +8161,14 @@ int main(int argc, char **argv)
     }
     if (argc >= 2 && strcmp(argv[1], "--fixed-step-self-test") == 0) {
         return demo_fixed_step_self_test();
+    }
+    if (argc >= 4 && strcmp(argv[1], "--capture") == 0) {
+        vox_u32 frames = argc >= 5 ? (vox_u32)strtoul(argv[4], 0, 10) : 24U;
+        vox_u32 interval = argc >= 6 ? (vox_u32)strtoul(argv[5], 0, 10) : 6U;
+        if (frames == 0U || frames > 600U) frames = 24U;
+        if (interval == 0U || interval > 600U) interval = 6U;
+        demo_prepare_targets();
+        return demo_capture(argv[2], argv[3], frames, interval);
     }
     if (argc >= 2 && strcmp(argv[1], "--smoke-test") == 0) {
         const char *path = argc >= 3 ? argv[2] : "/tmp/digs-demo-smoke.ppm";
