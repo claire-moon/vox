@@ -723,10 +723,32 @@ static int test_player_layout_and_input_authority(void)
     if (vox_digs_match_init(&match, &rules) != VOX_ERR_INVALID) {
         return 5;
     }
+    /*
+     * One human against three bots is the headline single-player match, so
+     * this must now succeed.  It was rejected while VOX_DIGS_MAX_BOTS was 2.
+     */
     rules.player_count = 4U;
     rules.bot_mask = 0x000eU;
-    if (vox_digs_match_init(&match, &rules) != VOX_ERR_INVALID) {
+    if (vox_digs_match_init(&match, &rules) != VOX_OK ||
+        vox_digs_player_is_bot(&match, 0U) ||
+        !vox_digs_player_is_bot(&match, 1U) ||
+        !vox_digs_player_is_bot(&match, 2U) ||
+        !vox_digs_player_is_bot(&match, 3U)) {
         return 6;
+    }
+    /* Every slot still needs somewhere real to stand. */
+    {
+        vox_u16 slot;
+        for (slot = 0U; slot < 4U; ++slot) {
+            if (!test_player_spawn_has_supported_floor(&match, slot)) {
+                return 7;
+            }
+        }
+    }
+    /* A match with no human at all remains invalid. */
+    rules.bot_mask = 0x000fU;
+    if (vox_digs_match_init(&match, &rules) != VOX_ERR_INVALID) {
+        return 8;
     }
     return 0;
 }

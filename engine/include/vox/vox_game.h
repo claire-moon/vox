@@ -4,7 +4,13 @@
 
 #include "vox_physics.h"
 
-#define VOX_DIGS_MAX_BOTS 2U
+/*
+ * Three bots fill a four-slot match alongside a single human, which is the
+ * point of the count: a solo player gets a full four-combatant deathmatch
+ * without needing a second person at the keyboard.  Two humans still cap the
+ * bots at two, because VOX_DIGS_MAX_SLOTS is the real ceiling.
+ */
+#define VOX_DIGS_MAX_BOTS 3U
 #define VOX_DIGS_MAX_SLOTS 4U
 #define VOX_DIGS_TICKS_PER_SECOND 60U
 #define VOX_DIGS_MAP_GENERATOR_VERSION 4U

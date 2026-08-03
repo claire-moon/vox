@@ -1701,6 +1701,7 @@ static void demo_match_settings_defaults(demo_app *app)
     strcpy(app->human_names[1], "MINER 2");
     strcpy(app->bot_names[0], "RIVET");
     strcpy(app->bot_names[1], "CINDER");
+    strcpy(app->bot_names[2], "FLAMEY");
     app->match_minutes = 2;
     app->score_limit_index = 0;
     app->respawn_mode = 0;
@@ -5846,7 +5847,12 @@ static void demo_handle_setup_key(demo_app *app, SDL_Keycode key)
             demo_refresh_controller_claims(app);
             demo_refresh_roster(app);
         } else if (app->selection == 1) {
-            app->bots = (app->bots + direction + 3) % 3;
+            /* Four slots, so zero through three bots. */
+            app->bots = (app->bots + direction + (int)VOX_DIGS_MAX_BOTS + 1) %
+                        ((int)VOX_DIGS_MAX_BOTS + 1);
+            if (app->local_players + app->bots > (int)VOX_DIGS_MAX_SLOTS) {
+                app->bots = (int)VOX_DIGS_MAX_SLOTS - app->local_players;
+            }
             demo_refresh_roster(app);
         } else if (app->selection == 2) {
             app->game_mode = 1 - app->game_mode;
@@ -5914,7 +5920,7 @@ static void demo_finish_name_editor(demo_app *app, int accept)
             "MINER 1", "MINER 2"
         };
         static const char *bot_fallbacks[VOX_DIGS_MAX_BOTS] = {
-            "RIVET", "CINDER"
+            "RIVET", "CINDER", "FLAMEY"
         };
         const char *fallback = "MINER";
         if (slot < app->local_players && slot < (int)DEMO_LOCAL_MAX) {
@@ -6275,6 +6281,7 @@ static void demo_handle_key(demo_app *app, SDL_Keycode key,
                 key == SDLK_ESCAPE)) {
         strcpy(app->bot_names[0], "RIVET");
         strcpy(app->bot_names[1], "CINDER");
+        strcpy(app->bot_names[2], "FLAMEY");
         demo_refresh_roster(app);
         app->screen = DEMO_TITLE;
         app->selection = 0;
