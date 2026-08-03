@@ -1775,8 +1775,7 @@ static int test_match_results_and_final_batch(void)
     if (vox_digs_match_step(&match) != VOX_OK ||
         match.phase != VOX_DIGS_RESULTS ||
         match.result_reason != VOX_DIGS_END_TIME || match.result_draw ||
-        match.winner_player != 0U ||
-        match.winner_team != VOX_DIGS_NO_TEAM) {
+        match.winner_player != 0U) {
         return 2;
     }
     end_events = 0U;
@@ -1809,15 +1808,6 @@ static int test_match_results_and_final_batch(void)
 
     rules.player_count = 2U;
     rules.bot_mask = 0x0002U;
-    rules.team_mode = VOX_DIGS_MODE_MINERS_VS_MACHINES;
-    if (vox_digs_match_init(&match, &rules) != VOX_OK ||
-        vox_digs_record_kill(&match, 0U, 1U) != VOX_OK ||
-        vox_digs_match_step(&match) != VOX_OK ||
-        match.result_reason != VOX_DIGS_END_SCORE || match.result_draw ||
-        match.winner_team != VOX_DIGS_TEAM_MINERS ||
-        match.winner_player != VOX_DIGS_NO_PLAYER) {
-        return 5;
-    }
     return 0;
 }
 

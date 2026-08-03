@@ -271,8 +271,6 @@ typedef struct demo_app {
     int arsenal;
     vox_u32 seed;
     int local_players;
-    int game_mode;
-    int friendly_fire;
     int match_minutes;
     int score_limit_index;
     int respawn_mode;
@@ -401,7 +399,6 @@ static const char *demo_frame_names[DEMO_FRAME_CAP_COUNT] = {
 };
 static const char *demo_map_names[3] = {"COAL RIDGE", "DEEPWORKS", "FURNACE YARD"};
 static const char *demo_gi_names[3] = {"COMPATIBILITY", "BALANCED", "SHOWCASE"};
-static const char *demo_mode_names[2] = {"FREE FOR ALL", "MINERS VS MACHINES"};
 static const char *demo_toggle_names[2] = {"OFF", "ON"};
 static const char *demo_flash_names[3] = {"OFF", "REDUCED", "FULL"};
 static const char *demo_gore_names[3] = {"OFF", "REDUCED", "FULL"};
@@ -2877,19 +2874,15 @@ static void demo_draw_setup(demo_app *app)
     demo_value_line(43, "LOCAL PLAYERS", value, app->selection == 0);
     sprintf(value, "%d", app->bots);
     demo_value_line(57, "BOTS", value, app->selection == 1);
-    demo_value_line(71, "MODE", demo_mode_names[app->game_mode],
+    demo_value_line(71, "MAP", demo_map_names[app->map_style],
                     app->selection == 2);
-    demo_value_line(85, "FRIENDLY FIRE", demo_toggle_names[app->friendly_fire],
-                    app->selection == 3);
-    demo_value_line(99, "MAP", demo_map_names[app->map_style],
-                    app->selection == 4);
     sprintf(value, "%08lX", (unsigned long)app->seed);
-    demo_value_line(113, "SEED", value, app->selection == 5);
-    demo_value_line(127, "ARSENAL", demo_arsenal_names[app->arsenal],
-                    app->selection == 6);
-    demo_menu_item(140, "CUSTOMIZE GAME", app->selection == 7);
-    demo_menu_item(154, "START MATCH", app->selection == 8);
-    demo_menu_item(168, "BACK", app->selection == 9);
+    demo_value_line(85, "SEED", value, app->selection == 3);
+    demo_value_line(99, "ARSENAL", demo_arsenal_names[app->arsenal],
+                    app->selection == 4);
+    demo_menu_item(117, "CUSTOMIZE GAME", app->selection == 5);
+    demo_menu_item(131, "START MATCH", app->selection == 6);
+    demo_menu_item(145, "BACK", app->selection == 7);
     vox_ui_text_center(&demo_ui, 160, 180, 1,
                        "ARROWS CHANGE  ENTER SELECTS", DEMO_VGA_DARK_GRAY);
 }
@@ -4450,10 +4443,6 @@ static void demo_draw_results(demo_app *app)
                               DEMO_VGA_YELLOW);
     if (demo_match.result_draw) {
         strcpy(line, "DRAW");
-    } else if (demo_match.rules.team_mode ==
-               VOX_DIGS_MODE_MINERS_VS_MACHINES) {
-        strcpy(line, demo_match.winner_team == VOX_DIGS_TEAM_MINERS ?
-                     "MINERS WIN" : "MACHINES WIN");
     } else if (demo_match.winner_player < VOX_DIGS_MAX_SLOTS) {
         sprintf(line, "%s WINS",
                 app->player_names[demo_match.winner_player]);
@@ -4598,9 +4587,6 @@ static int demo_start_match(demo_app *app, int foundry)
         rules.bot_mask = (vox_u16)(rules.bot_mask |
                                    (vox_u16)(1U << player));
     }
-    rules.team_mode = (vox_u16)(foundry ? VOX_DIGS_MODE_FFA :
-                                app->game_mode);
-    rules.friendly_fire = (vox_u16)app->friendly_fire;
     rules.fx_budget = app->options.fx_profile == 0 ? VOX_DIGS_FX_RETRO :
                       (app->options.fx_profile == 2 ? VOX_DIGS_FX_CARNAGE :
                        VOX_DIGS_FX_STANDARD);
@@ -4780,10 +4766,6 @@ static int demo_aim_near_visible_target(int player, double direction_x,
         int target_x;
         int target_y;
         if (target == player || !demo_match.alive[target]) continue;
-        if (demo_match.rules.team_mode == VOX_DIGS_MODE_MINERS_VS_MACHINES &&
-            (demo_match.rules.bot_mask & (vox_u16)(1U << target)) == 0U) {
-            continue;
-        }
         target_x = (int)(demo_match.players[target].position_x.value_q16 /
                          65536L);
         target_y = (int)(demo_match.players[target].position_y.value_q16 /
@@ -5542,12 +5524,8 @@ static void demo_process_events(demo_app *app)
         } else if (event->type == VOX_DIGS_EVENT_MATCH_END) {
             if (demo_match.result_draw) {
                 demo_set_banner(app, "DRAW!", 1);
-            } else if ((demo_match.rules.team_mode ==
-                        VOX_DIGS_MODE_MINERS_VS_MACHINES &&
-                        demo_match.winner_team == VOX_DIGS_TEAM_MINERS) ||
-                       (demo_match.rules.team_mode == VOX_DIGS_MODE_FFA &&
-                        demo_match.winner_player <
-                        (vox_u16)app->local_players)) {
+            } else if (demo_match.winner_player <
+                       (vox_u16)app->local_players) {
                 demo_set_banner(app, "SHIFT WON!", 1);
             } else {
                 demo_set_banner(app, "SHIFT LOST!", 1);
@@ -5832,10 +5810,10 @@ static void demo_handle_setup_key(demo_app *app, SDL_Keycode key)
         app->screen = DEMO_TITLE;
         app->selection = 0;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 9) % 10;
+        app->selection = (app->selection + 7) % 8;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 10;
+        app->selection = (app->selection + 1) % 8;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (direction != 0) {
         demo_audio_play(app, DEMO_SOUND_MOVE);
@@ -5855,28 +5833,24 @@ static void demo_handle_setup_key(demo_app *app, SDL_Keycode key)
             }
             demo_refresh_roster(app);
         } else if (app->selection == 2) {
-            app->game_mode = 1 - app->game_mode;
-        } else if (app->selection == 3) {
-            app->friendly_fire = !app->friendly_fire;
-        } else if (app->selection == 4) {
             app->map_style = (app->map_style + direction + 3) % 3;
-        } else if (app->selection == 5) {
+        } else if (app->selection == 3) {
             app->seed += direction > 0 ? 1U : (vox_u32)-1;
-        } else if (app->selection == 6) {
+        } else if (app->selection == 4) {
             app->arsenal = (app->arsenal + direction +
                             DEMO_ARSENAL_COUNT) % DEMO_ARSENAL_COUNT;
         }
-    } else if (key == SDLK_r && app->selection == 5) {
+    } else if (key == SDLK_r && app->selection == 3) {
         app->seed = app->seed * 1664525U + 1013904223U;
         demo_audio_play(app, DEMO_SOUND_SELECT);
     } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
         demo_audio_play(app, DEMO_SOUND_SELECT);
-        if (app->selection == 7) {
+        if (app->selection == 5) {
             app->screen = DEMO_CUSTOMIZE;
             app->selection = 0;
-        } else if (app->selection == 8) {
+        } else if (app->selection == 6) {
             (void)demo_start_match(app, 0);
-        } else if (app->selection == 9) {
+        } else if (app->selection == 7) {
             app->screen = DEMO_TITLE;
             app->selection = 0;
         }
@@ -5965,10 +5939,10 @@ static void demo_handle_customize_key(demo_app *app, SDL_Keycode key)
         app->screen = DEMO_SETUP;
         app->selection = 7;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 9) % 10;
+        app->selection = (app->selection + 7) % 8;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 10;
+        app->selection = (app->selection + 1) % 8;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (direction != 0) {
         if (app->selection == 4) {
@@ -7080,7 +7054,7 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
         } else if (ticks == 600U &&
                    (fired != 20U || explosions != 16U || crushes != 1U ||
                     max_effects != 1097U || max_awake != 6799U ||
-                    demo_match.state_hash != (vox_u32)0x1740ACFAUL)) {
+                    demo_match.state_hash != (vox_u32)0xFFD5F6F9UL)) {
             fprintf(stderr,
                     "load self-test: canonical 600-tick activity/hash "
                     "mismatch\n");
@@ -8078,8 +8052,6 @@ int main(int argc, char **argv)
     app.screen = DEMO_TITLE;
     app.bots = 1;
     app.local_players = 1;
-    app.game_mode = VOX_DIGS_MODE_FFA;
-    app.friendly_fire = 0;
     app.map_style = VOX_DIGS_MAP_COAL_RIDGE;
     app.arsenal = DEMO_ARSENAL_FULL;
     app.seed = 0x564F5831U;

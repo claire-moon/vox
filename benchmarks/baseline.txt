@@ -4,7 +4,7 @@ seed=50303033
 ticks_requested=1800
 ticks_run=1800
 # deterministic work counters -- enforced
-state_hash=bae18453
+state_hash=cf06bff0
 world_hash=5664bec6
 awake_peak=7518
 awake_mean=711

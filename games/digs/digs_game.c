@@ -1578,11 +1578,9 @@ void vox_digs_rules_classic(vox_digs_rules *rules)
     rules->seed = 0x564F5831U;
     rules->player_count = 2U;
     rules->bot_mask = 0x0002U;
-    rules->team_mode = 0U;
     rules->map_style = VOX_DIGS_MAP_COAL_RIDGE;
     rules->weapon_mask = (vox_u16)((1U << VOX_DIGS_TOOL_COUNT) - 1U);
     rules->fx_budget = VOX_DIGS_FX_STANDARD;
-    rules->friendly_fire = 0U;
     rules->respawn_mode = VOX_DIGS_RESPAWN_AUTO;
     rules->respawn_delay_ticks = VOX_DIGS_RESPAWN_TICKS;
     rules->reserved = 0U;
@@ -1601,14 +1599,12 @@ static vox_result digs_validate_rules(const vox_digs_rules *rules)
         rules->lava_start_tick >= rules->match_ticks ||
         rules->player_count == 0U ||
         rules->player_count > VOX_DIGS_MAX_SLOTS ||
-        rules->team_mode > VOX_DIGS_MODE_MINERS_VS_MACHINES ||
         rules->map_style >= VOX_DIGS_MAP_COUNT || rules->weapon_mask == 0U ||
         (rules->weapon_mask &
          (vox_u16)~((1U << VOX_DIGS_TOOL_COUNT) - 1U)) != 0U ||
         (rules->fx_budget != VOX_DIGS_FX_RETRO &&
          rules->fx_budget != VOX_DIGS_FX_STANDARD &&
          rules->fx_budget != VOX_DIGS_FX_CARNAGE) ||
-        rules->friendly_fire > 1U ||
         rules->respawn_mode > VOX_DIGS_RESPAWN_ON_FIRE ||
         rules->respawn_delay_ticks >
             (vox_u16)(60U * VOX_DIGS_TICKS_PER_SECOND) ||
@@ -1648,7 +1644,6 @@ vox_result vox_digs_match_init(vox_digs_match *match,
     match->result_reason = VOX_DIGS_END_NONE;
     match->result_draw = 0U;
     match->winner_player = VOX_DIGS_NO_PLAYER;
-    match->winner_team = VOX_DIGS_NO_TEAM;
     match->lava_level_q16 = 0U;
     match->lava_surface_y = (vox_u16)DIGS_LAVA_BASIN_TOP;
     match->projectile_count = 0U;
@@ -1803,27 +1798,11 @@ vox_result vox_digs_match_init(vox_digs_match *match,
     return VOX_OK;
 }
 
-static vox_u16 digs_team_for_player(const vox_digs_match *match,
-                                    vox_u16 player)
-{
-    return vox_digs_player_is_bot(match, player) ?
-           VOX_DIGS_TEAM_MACHINES : VOX_DIGS_TEAM_MINERS;
-}
-
 static int digs_score_limit_reached(const vox_digs_match *match)
 {
     vox_u16 i;
     if (match->rules.score_limit == 0U) {
         return 0;
-    }
-    if (match->rules.team_mode == VOX_DIGS_MODE_MINERS_VS_MACHINES) {
-        vox_u32 team_scores[2] = {0U, 0U};
-        for (i = 0U; i < match->rules.player_count; ++i) {
-            vox_u16 team = digs_team_for_player(match, i);
-            team_scores[team] += match->scores[i];
-        }
-        return team_scores[0] >= match->rules.score_limit ||
-               team_scores[1] >= match->rules.score_limit;
     }
     for (i = 0U; i < match->rules.player_count; ++i) {
         if ((vox_u32)match->scores[i] >= match->rules.score_limit) {
@@ -1842,21 +1821,7 @@ static void digs_finish_match(vox_digs_match *match, vox_u16 reason)
     match->result_reason = reason;
     match->result_draw = 0U;
     match->winner_player = VOX_DIGS_NO_PLAYER;
-    match->winner_team = VOX_DIGS_NO_TEAM;
-    if (match->rules.team_mode == VOX_DIGS_MODE_MINERS_VS_MACHINES) {
-        vox_u32 team_scores[2] = {0U, 0U};
-        for (i = 0U; i < match->rules.player_count; ++i) {
-            vox_u16 team = digs_team_for_player(match, i);
-            team_scores[team] += match->scores[i];
-        }
-        if (team_scores[0] == team_scores[1]) {
-            match->result_draw = 1U;
-        } else {
-            match->winner_team = team_scores[0] > team_scores[1] ?
-                                 VOX_DIGS_TEAM_MINERS :
-                                 VOX_DIGS_TEAM_MACHINES;
-        }
-    } else {
+    {
         vox_u16 best_score = 0U;
         vox_u16 best_player = VOX_DIGS_NO_PLAYER;
         vox_u16 tied = 0U;
@@ -1883,7 +1848,7 @@ static void digs_finish_match(vox_digs_match *match, vox_u16 reason)
         match->move_y_q15[i] = 0;
     }
     digs_emit_event(match, VOX_DIGS_EVENT_MATCH_END,
-                    match->winner_player, match->winner_team,
+                    match->winner_player, VOX_DIGS_NO_PLAYER,
                     VOX_DIGS_TOOL_PICK, VOX_MAT_METAL, 0L, 0L,
                     reason, match->result_draw);
 }
@@ -2491,16 +2456,6 @@ static void digs_environment_defeat(vox_digs_match *match, vox_u16 victim)
                                          victim, 0xDEADU) & 15U));
 }
 
-static int digs_same_team(const vox_digs_match *match, vox_u16 first,
-                          vox_u16 second)
-{
-    if (match->rules.team_mode != VOX_DIGS_MODE_MINERS_VS_MACHINES) {
-        return 0;
-    }
-    return vox_digs_player_is_bot(match, first) ==
-           vox_digs_player_is_bot(match, second);
-}
-
 static vox_u16 digs_choose_hit_part(const vox_digs_match *match,
                                     vox_u16 attacker, vox_u16 victim,
                                     vox_u16 weapon, vox_u16 damage)
@@ -2621,11 +2576,6 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
         (attacker != VOX_DIGS_NO_PLAYER &&
          !vox_digs_player_is_active(match, attacker))) {
         return VOX_ERR_INVALID;
-    }
-    if (attacker != VOX_DIGS_NO_PLAYER && attacker != victim &&
-        !match->rules.friendly_fire &&
-        digs_same_team(match, attacker, victim)) {
-        return VOX_OK;
     }
     if (match->spawn_shield_ticks[victim] > 0U) {
         digs_emit_event(match, VOX_DIGS_EVENT_SHIELD_BLOCK, attacker, victim,
@@ -3763,10 +3713,6 @@ static int digs_ai_is_enemy(const vox_digs_match *match, vox_u16 player,
     if (candidate == player || !match->alive[candidate]) {
         return 0;
     }
-    if (match->rules.team_mode == VOX_DIGS_MODE_MINERS_VS_MACHINES &&
-        digs_same_team(match, player, candidate)) {
-        return 0;
-    }
     return 1;
 }
 
@@ -4835,11 +4781,9 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
     hash = digs_hash_mix(hash, match->rules.lava_start_tick);
     hash = digs_hash_mix(hash, (vox_u32)match->rules.player_count);
     hash = digs_hash_mix(hash, (vox_u32)match->rules.bot_mask);
-    hash = digs_hash_mix(hash, (vox_u32)match->rules.team_mode);
     hash = digs_hash_mix(hash, (vox_u32)match->rules.map_style);
     hash = digs_hash_mix(hash, (vox_u32)match->rules.weapon_mask);
     hash = digs_hash_mix(hash, (vox_u32)match->rules.fx_budget);
-    hash = digs_hash_mix(hash, (vox_u32)match->rules.friendly_fire);
     hash = digs_hash_mix(hash, (vox_u32)match->rules.respawn_mode);
     hash = digs_hash_mix(hash,
                          (vox_u32)match->rules.respawn_delay_ticks);
@@ -4849,7 +4793,6 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
     hash = digs_hash_mix(hash, (vox_u32)match->result_reason);
     hash = digs_hash_mix(hash, (vox_u32)match->result_draw);
     hash = digs_hash_mix(hash, (vox_u32)match->winner_player);
-    hash = digs_hash_mix(hash, (vox_u32)match->winner_team);
     hash = digs_hash_mix(hash, match->lava_level_q16);
     hash = digs_hash_mix(hash, (vox_u32)match->lava_surface_y);
     hash = digs_hash_mix(hash, (vox_u32)match->projectile_count);

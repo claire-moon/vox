@@ -46,11 +46,7 @@
 #define VOX_DIGS_ANATOMY_PART_COUNT 15U
 #define VOX_DIGS_ROPE_MAX_POINTS 12U
 #define VOX_DIGS_NO_PLAYER 65535U
-#define VOX_DIGS_NO_TEAM 65535U
 #define VOX_DIGS_NO_PART 65535U
-
-#define VOX_DIGS_TEAM_MINERS 0U
-#define VOX_DIGS_TEAM_MACHINES 1U
 
 #define VOX_DIGS_WEAPON_MELEE 1U
 #define VOX_DIGS_WEAPON_PROJECTILE 2U
@@ -90,11 +86,6 @@ typedef enum vox_digs_landform {
     VOX_DIGS_LANDFORM_TWIN_HILLS = 2,
     VOX_DIGS_LANDFORM_COUNT = 3
 } vox_digs_landform;
-
-typedef enum vox_digs_team_mode {
-    VOX_DIGS_MODE_FFA = 0,
-    VOX_DIGS_MODE_MINERS_VS_MACHINES = 1
-} vox_digs_team_mode;
 
 typedef enum vox_digs_respawn_mode {
     VOX_DIGS_RESPAWN_AUTO = 0,
@@ -314,11 +305,9 @@ typedef struct vox_digs_rules {
     vox_u32 seed;
     vox_u16 player_count;
     vox_u16 bot_mask;
-    vox_u16 team_mode;
     vox_u16 map_style;
     vox_u16 weapon_mask;
     vox_u16 fx_budget;
-    vox_u16 friendly_fire;
     vox_u16 respawn_mode;
     vox_u16 respawn_delay_ticks;
     vox_u16 reserved;
@@ -348,7 +337,6 @@ typedef struct vox_digs_match {
     vox_u16 result_reason;
     vox_u16 result_draw;
     vox_u16 winner_player;
-    vox_u16 winner_team;
     vox_u16 scores[VOX_DIGS_MAX_SLOTS];
     vox_u16 alive[VOX_DIGS_MAX_SLOTS];
     vox_u16 health[VOX_DIGS_MAX_SLOTS];
