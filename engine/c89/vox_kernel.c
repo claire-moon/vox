@@ -344,10 +344,69 @@ static int vox_is_structural_material(vox_u16 material)
            material == VOX_MAT_METAL;
 }
 
+/*
+ * Wake everything whose footing depends on (x, y, z).
+ *
+ * vox_cell_has_support reads the row below across VOX_STRUCTURE_COHESION_CELLS
+ * either side, so removing one cell can unfoot anything in that whole span
+ * above it -- not just the cell directly overhead.  Waking only the one
+ * directly above left a collapse stalling one column wide: the fleck under a
+ * roof fell, the roof cell above it woke, but its neighbours four cells away
+ * had also just lost their footing and stayed asleep, so the cave-in never
+ * spread sideways.
+ *
+ * Bounded at 2N+1 cells and only ever called when a cell is actually removed,
+ * so the cost tracks demolition rather than world size.
+ */
+static void vox_wake_support_dependents(vox_world *world, vox_u32 x,
+                                        vox_u32 y, vox_u32 z)
+{
+    vox_u32 span;
+    if (y == 0U) {
+        return;
+    }
+    for (span = 0U; span <= 2U * VOX_STRUCTURE_COHESION_CELLS; ++span) {
+        vox_u32 index;
+        vox_cell *above;
+        long offset = (long)span - (long)VOX_STRUCTURE_COHESION_CELLS;
+        long neighbor = (long)x + offset;
+        if (neighbor < 0L || neighbor >= (long)VOX_WORLD_WIDTH) {
+            continue;
+        }
+        index = vox_index((vox_u32)neighbor, y - 1U, z);
+        above = &world->cells[index];
+        if (!vox_is_structural_material(above->material)) {
+            continue;
+        }
+        vox_wake_cell(world,
+                      &world->chunks[vox_chunk_index((vox_u32)neighbor,
+                                                     y - 1U)],
+                      index, above);
+    }
+}
+
+/*
+ * Can this cell hold anything up?
+ *
+ * VOX_CELL_UNSTABLE means the cell has already been found to have nothing
+ * under it, so it must not be offered as footing to its neighbours.  Without
+ * that clause support is not transitive: a blast leaves a speckled fracture
+ * shell, each surviving fleck is "supported" by another fleck beside it, and
+ * the whole roof hangs in mid-air holding itself up by mutual reference to
+ * debris that is itself falling.  That is why an explosion could hollow out a
+ * chamber and leave a flat ceiling over it.
+ *
+ * Excluding unstable cells makes collapse propagate instead: the lowest
+ * unsupported layer is flagged on one tick, the layer above loses its footing
+ * on the next, and the cave-in walks upward until it reaches ground that is
+ * genuinely anchored.  It costs nothing per cell and needs no connectivity
+ * search.
+ */
 static int vox_cell_bears_load(const vox_cell *cell)
 {
     return cell->material != VOX_MAT_AIR &&
-           !(cell->flags & (VOX_CELL_PHASE_GAS | VOX_CELL_LOOSE));
+           !(cell->flags & (VOX_CELL_PHASE_GAS | VOX_CELL_LOOSE |
+                            VOX_CELL_UNSTABLE));
 }
 
 /*
@@ -529,6 +588,8 @@ static int vox_try_move(vox_world *world, vox_u32 source_x, vox_u32 source_y,
             vox_wake_cell(world, above_chunk,
                           vox_index(source_x, source_y - 1U, source_z), above);
         }
+        /* Footing reaches sideways, so a cave-in has to spread that way too. */
+        vox_wake_support_dependents(world, source_x, source_y, source_z);
     }
     return 1;
 }
@@ -760,39 +821,6 @@ const vox_material_properties *vox_material_get(vox_u16 material)
  * structural materials can be left hanging, so the rest are skipped to keep
  * the frontier small.
  */
-static void vox_wake_support_dependents(vox_world *world, vox_u32 x,
-                                        vox_u32 y, vox_u32 z)
-{
-    vox_u32 offset;
-    if (y == 0U) {
-        return;
-    }
-    for (offset = 0U; offset < 3U; ++offset) {
-        vox_u32 neighbor_x;
-        vox_u32 index;
-        vox_cell *above;
-        if (offset == 0U) {
-            if (x == 0U) {
-                continue;
-            }
-            neighbor_x = x - 1U;
-        } else if (offset == 1U) {
-            neighbor_x = x;
-        } else {
-            if (x + 1U >= VOX_WORLD_WIDTH) {
-                continue;
-            }
-            neighbor_x = x + 1U;
-        }
-        index = vox_index(neighbor_x, y - 1U, z);
-        above = &world->cells[index];
-        if (!vox_is_structural_material(above->material)) {
-            continue;
-        }
-        vox_wake_cell(world, &world->chunks[vox_chunk_index(neighbor_x, y - 1U)],
-                      index, above);
-    }
-}
 
 vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
                          vox_u16 material, vox_i32 temperature_q16)

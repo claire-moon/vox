@@ -7207,9 +7207,9 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
                     "load self-test: explosive/collapse load missing\n");
             status = 6;
         } else if (ticks == 600U &&
-                   (fired != 27U || explosions != 16U || crushes != 1U ||
-                    max_effects != 995U || max_awake != 8777U ||
-                    demo_match.state_hash != (vox_u32)0x33C384B6UL)) {
+                   (fired != 23U || explosions != 16U || crushes != 3U ||
+                    max_effects != 1050U || max_awake != 10009U ||
+                    demo_match.state_hash != (vox_u32)0xA5396B04UL)) {
             fprintf(stderr,
                     "load self-test: canonical 600-tick activity/hash "
                     "mismatch\n");
