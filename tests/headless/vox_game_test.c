@@ -11,6 +11,8 @@
 #define DIGS_TEST_BURIED_GUARD_TICKS 240U
 /* Mirrors DIGS_SMOKER_DIRECT_DAMAGE; below the head's 45 health. */
 #define DIGS_TEST_SMOKER_DAMAGE 40U
+/* Bolt Action is the gated one: below its charge it will not fire. */
+#define DIGS_TEST_MIN_GATED_CHARGE 30U
 
 /*
  * A match owns the complete fixed-size voxel world, so keeping one fixture per
@@ -2305,6 +2307,114 @@ static int test_v003_overlap_recovery_and_crush(void)
 }
 
 /*
+ * Bots are three distinct opponents, and they can use charge weapons.
+ *
+ * Identity comes from the bot ordinal, so the first bot is always RIVET
+ * whichever slot it sits in. Weapon choice is scored from an archetype
+ * preference table rather than flat distance bands, so the three must not
+ * converge on the same tool at the same range.
+ *
+ * The charge half matters because bots previously could not fire the Bolt
+ * Action at all: they held fire for one eight-tick decision window, reaching
+ * a charge of eight, and digs_release_charged_weapon needs thirty. It was
+ * their selected weapon for mid range, so they simply never shot.
+ */
+static int test_bot_archetypes_and_charge_weapons(void)
+{
+    vox_digs_rules rules;
+    vox_u32 tick;
+    vox_u32 charge_weapon_shots = 0U;
+    vox_u16 slot;
+    vox_u16 favourite[VOX_DIGS_MAX_SLOTS];
+    vox_u32 use[VOX_DIGS_MAX_SLOTS][VOX_DIGS_TOOL_COUNT];
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 4U;
+    rules.bot_mask = 0x000EU;
+    rules.weapon_mask = 0x07FFU;
+    rules.match_ticks = 3600U;
+    rules.lava_start_tick = 3500U;
+    rules.score_limit = 0U;
+    rules.seed = 0xC0A1C0DEU;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 1;
+
+    /* Identity is stable and derived from the bot ordinal. */
+    if (vox_digs_bot_archetype(&match, 0U) != VOX_DIGS_ARCHETYPE_COUNT ||
+        vox_digs_bot_archetype(&match, 1U) != VOX_DIGS_ARCHETYPE_ENGINEER ||
+        vox_digs_bot_archetype(&match, 2U) != VOX_DIGS_ARCHETYPE_BERSERKER ||
+        vox_digs_bot_archetype(&match, 3U) != VOX_DIGS_ARCHETYPE_TRICKSTER) {
+        return 2;
+    }
+    if (vox_digs_personality_get(VOX_DIGS_ARCHETYPE_BERSERKER) == 0 ||
+        vox_digs_personality_get(VOX_DIGS_ARCHETYPE_COUNT) != 0 ||
+        vox_digs_archetype_name(VOX_DIGS_ARCHETYPE_ENGINEER) == 0) {
+        return 3;
+    }
+    /* The berserker must want to fight closer than the engineer. */
+    if (vox_digs_personality_get(VOX_DIGS_ARCHETYPE_BERSERKER)->aggression <=
+        vox_digs_personality_get(VOX_DIGS_ARCHETYPE_ENGINEER)->aggression) {
+        return 4;
+    }
+
+    for (slot = 0U; slot < VOX_DIGS_MAX_SLOTS; ++slot) {
+        vox_u16 weapon;
+        favourite[slot] = VOX_DIGS_TOOL_COUNT;
+        for (weapon = 0U; weapon < VOX_DIGS_TOOL_COUNT; ++weapon) {
+            use[slot][weapon] = 0U;
+        }
+    }
+    for (tick = 0U; tick < 3600U && match.phase == VOX_DIGS_RUNNING; ++tick) {
+        vox_u16 ordinal;
+        if (vox_digs_match_step(&match) != VOX_OK) return 5;
+        for (ordinal = 0U; ordinal < match.event_count; ++ordinal) {
+            const vox_digs_event *event = vox_digs_event_get(&match, ordinal);
+            if (event == 0 ||
+                event->type != VOX_DIGS_EVENT_WEAPON_FIRE) {
+                continue;
+            }
+            if (event->weapon >= VOX_DIGS_TOOL_COUNT ||
+                event->source >= VOX_DIGS_MAX_SLOTS) {
+                continue;
+            }
+            use[event->source][event->weapon]++;
+            /* Any shot from a weapon that must be charged proves the hold. */
+            if (vox_digs_weapon_get(event->weapon)->charge_ticks >=
+                DIGS_TEST_MIN_GATED_CHARGE) {
+                charge_weapon_shots++;
+            }
+        }
+        if (match.event_count > 0U &&
+            vox_digs_consume_events(&match, match.event_count) != VOX_OK) {
+            return 6;
+        }
+    }
+    if (charge_weapon_shots == 0U) {
+        return 7;
+    }
+
+    /*
+     * Each bot must have shot at all, and the three must not converge on one
+     * favourite tool -- that is the whole point of the preference table.
+     */
+    for (slot = 1U; slot < 4U; ++slot) {
+        vox_u16 weapon;
+        vox_u32 best = 0U;
+        for (weapon = 0U; weapon < VOX_DIGS_TOOL_COUNT; ++weapon) {
+            if (use[slot][weapon] > best) {
+                best = use[slot][weapon];
+                favourite[slot] = weapon;
+            }
+        }
+        if (favourite[slot] == VOX_DIGS_TOOL_COUNT) {
+            return 8;
+        }
+    }
+    if (favourite[1] == favourite[2] && favourite[2] == favourite[3]) {
+        return 9;
+    }
+    return 0;
+}
+
+/*
  * Undermined terrain must actually come down.
  *
  * The collapse machinery -- structural support, UNSTABLE, bottom-up falling --
@@ -3027,6 +3137,13 @@ int main(void)
             fprintf(stderr,
                     "DIGS v0.0.3 AI event-drain mismatch (%d)\n", result);
             return 25;
+        }
+    }
+    {
+        int result = test_bot_archetypes_and_charge_weapons();
+        if (result != 0) {
+            fprintf(stderr, "DIGS archetype mismatch (%d)\n", result);
+            return 65;
         }
     }
     {

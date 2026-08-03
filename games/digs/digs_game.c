@@ -3802,30 +3802,152 @@ static void digs_ai_set_mode(vox_digs_match *match, vox_u16 player,
                                                mode) & 15U));
 }
 
+/*
+ * Effective engagement band per tool, in cells.  These are the ranges each
+ * weapon is actually good at, read off its own properties: the hot rail
+ * traces 14 cells, the hammer reaches 10, the rail gun penetrates far enough
+ * to snipe, the lobbed explosives need room for their arc and their blast.
+ */
+typedef struct digs_weapon_band {
+    vox_u16 ideal_min;
+    vox_u16 ideal_max;
+} digs_weapon_band;
+
+static const digs_weapon_band digs_weapon_bands[VOX_DIGS_TOOL_COUNT] = {
+    {0U, 10U},    /* PULASKI      melee tap, or a thrown arc */
+    {4U, 40U},    /* POPPER       cheap hitscan chip damage */
+    {8U, 30U},    /* SMOKER       lobbed, wants room for the arc */
+    {0U, 14U},    /* HOT RAIL     DIGS_HOT_RAIL_RANGE_CELLS */
+    {2U, 18U},    /* HYDROSHOT    utility, no damage */
+    {0U, 10U},    /* GIANT HAMMER reach is DIGS_SCALE(5) */
+    {10U, 60U},   /* BOLT ACTION  charged precision shot */
+    {4U, 24U},    /* SCATTERBRAIN nine pellets, spreads with range */
+    {10U, 40U},   /* FIRECRACKER  blast radius 8, needs standoff */
+    /*
+     * The bore drill only damages while the wielder is falling onto its
+     * target, which the AI has no way to arrange, so it is weighted low
+     * everywhere and kept here as a digging tool rather than a duel option.
+     */
+    {0U, 8U},     /* BORE DRILL   straight down, point blank */
+    {20U, 120U}   /* RAIL GUN     penetrating, the sniping tool */
+};
+
+/*
+ * How much each archetype likes each tool, 0 meaning "never by choice".
+ * This is the main thing that makes the three read as different opponents,
+ * so it is deliberately lopsided rather than balanced.
+ */
+static const vox_u8
+digs_archetype_weapon_weight[VOX_DIGS_ARCHETYPE_COUNT][VOX_DIGS_TOOL_COUNT] = {
+    /* RIVET -- the engineer: reach, penetration, and tunnels. */
+    { 40U,  90U,  30U, 170U,  20U,  35U, 200U,  60U,  45U,  60U, 255U},
+    /* CINDER -- the berserker: get close, hit hard. */
+    {200U,  70U,  25U,  60U,  15U, 255U, 110U, 230U,  55U,  40U,  50U},
+    /* FLAMEY -- the trickster: fire, smoke, and mischief. */
+    { 70U, 140U, 230U, 190U,  60U,  40U,  55U,  90U, 255U,  30U,  45U}
+};
+
+static const vox_digs_personality
+digs_archetype_personality[VOX_DIGS_ARCHETYPE_COUNT] = {
+    /*        aggr  patience  caution  grudge  social  reserved */
+    {  90U,     210U,    190U,   220U,     70U, 0U},  /* RIVET   */
+    { 245U,      40U,     45U,   120U,    200U, 0U},  /* CINDER  */
+    { 150U,     110U,    120U,    80U,    235U, 0U}   /* FLAMEY  */
+};
+
+static const char *digs_archetype_names[VOX_DIGS_ARCHETYPE_COUNT] = {
+    "RIVET", "CINDER", "FLAMEY"
+};
+
+const vox_digs_personality *vox_digs_personality_get(vox_u16 archetype)
+{
+    if (archetype >= VOX_DIGS_ARCHETYPE_COUNT) {
+        return 0;
+    }
+    return &digs_archetype_personality[archetype];
+}
+
+const char *vox_digs_archetype_name(vox_u16 archetype)
+{
+    if (archetype >= VOX_DIGS_ARCHETYPE_COUNT) {
+        return 0;
+    }
+    return digs_archetype_names[archetype];
+}
+
+/*
+ * A bot's identity is its ordinal among the bots, so the first bot in a match
+ * is always RIVET whichever slot it occupies.  bot_mask is already hashed, so
+ * this needs no extra authoritative state.
+ */
+vox_u16 vox_digs_bot_archetype(const vox_digs_match *match, vox_u16 player)
+{
+    vox_u16 below;
+    if (match == 0 || !vox_digs_player_is_bot(match, player)) {
+        return VOX_DIGS_ARCHETYPE_COUNT;
+    }
+    below = (vox_u16)(match->rules.bot_mask &
+                      (vox_u16)((1U << player) - 1U));
+    return (vox_u16)(digs_count_bits(below) % VOX_DIGS_ARCHETYPE_COUNT);
+}
+
+/*
+ * Score every tool the arsenal allows and take the best.
+ *
+ * This replaced flat distance bands that handed every bot the same weapon at
+ * the same range.  Score is the archetype's taste for the tool scaled by how
+ * well its band covers the current distance, so preference decides between
+ * comparable options while range still rules out the absurd ones.  A small
+ * deterministic jitter keeps two bots of the same archetype from moving in
+ * lockstep.
+ */
 static vox_u16 digs_ai_weapon(const vox_digs_match *match, vox_u16 player,
                               vox_u32 distance)
 {
-    vox_u16 preferred;
-    vox_u16 attempt;
-    if (distance <= DIGS_SCALE(3U)) {
-        preferred = (digs_noise(match->rules.seed, match->tick, player,
-                                11U) & 1U) ?
-                    VOX_DIGS_TOOL_SLEDGE : VOX_DIGS_TOOL_PICK;
-    } else if (distance <= DIGS_SCALE(14U)) {
-        preferred = VOX_DIGS_TOOL_NAIL_GUN;
-    } else if (distance <= DIGS_SCALE(26U)) {
-        preferred = VOX_DIGS_TOOL_BOILER_SHOTGUN;
-    } else {
-        preferred = VOX_DIGS_TOOL_RAIL_GUN;
+    vox_u16 archetype = vox_digs_bot_archetype(match, player);
+    vox_u16 best = VOX_DIGS_TOOL_COUNT;
+    vox_u32 best_score = 0U;
+    vox_u16 choice;
+    if (archetype >= VOX_DIGS_ARCHETYPE_COUNT) {
+        archetype = VOX_DIGS_ARCHETYPE_ENGINEER;
     }
-    for (attempt = 0U; attempt < VOX_DIGS_TOOL_COUNT; ++attempt) {
-        vox_u16 choice = (vox_u16)((preferred + attempt) %
-                                    VOX_DIGS_TOOL_COUNT);
-        if (match->rules.weapon_mask & (vox_u16)(1U << choice)) {
-            return choice;
+    for (choice = 0U; choice < VOX_DIGS_TOOL_COUNT; ++choice) {
+        const digs_weapon_band *band = &digs_weapon_bands[choice];
+        vox_u32 fit;
+        vox_u32 score;
+        if ((match->rules.weapon_mask & (vox_u16)(1U << choice)) == 0U) {
+            continue;
+        }
+        if (distance < band->ideal_min) {
+            vox_u32 under = band->ideal_min - distance;
+            fit = under >= 16U ? 1U : (16U - under) * 16U;
+        } else if (distance > band->ideal_max) {
+            vox_u32 over = distance - band->ideal_max;
+            fit = over >= 16U ? 1U : (16U - over) * 16U;
+        } else {
+            fit = 256U;
+        }
+        score = (vox_u32)digs_archetype_weapon_weight[archetype][choice] * fit;
+        /* Break ties without ever overturning a real preference. */
+        score += digs_noise(match->rules.seed, match->tick, player,
+                            (vox_u32)choice) % 97U;
+        if (best == VOX_DIGS_TOOL_COUNT || score > best_score) {
+            best = choice;
+            best_score = score;
         }
     }
-    return VOX_DIGS_TOOL_PICK;
+    if (best == VOX_DIGS_TOOL_COUNT) {
+        /* weapon_mask is validated non-zero, so this cannot normally
+         * happen; fall back to the lowest legal tool rather than to a
+         * hardcoded one the arsenal might not contain. */
+        for (choice = 0U; choice < VOX_DIGS_TOOL_COUNT; ++choice) {
+            if (match->rules.weapon_mask & (vox_u16)(1U << choice)) {
+                return choice;
+            }
+        }
+        return VOX_DIGS_TOOL_PICK;
+    }
+    return best;
 }
 
 vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
@@ -3963,6 +4085,26 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
         if (match->rail_charge_ticks[player] < DIGS_RAIL_MAX_CHARGE_TICKS) {
             actions = (vox_u16)(actions | VOX_DIGS_ACTION_FIRE);
         }
+    } else if (match->weapon_charging[player] &&
+               match->weapon_charge_ticks[player] <
+                   digs_weapons[match->selected_weapon[player]].charge_ticks) {
+        /*
+         * See a charge through instead of dropping it at the next decision.
+         *
+         * A bot only holds fire for one eight-tick decision window, so it
+         * reached a charge of eight and released.  The Bolt Action needs
+         * thirty before digs_release_charged_weapon will fire it at all --
+         * and it is the weapon bots picked for mid range, so they simply
+         * never shot.  The Firecracker and Smoker did fire, but always at
+         * near-minimum power.  The rail gun escaped this only because it has
+         * its own re-hold immediately above; this generalises that to every
+         * charge weapon.
+         *
+         * Deliberately no weapon re-selection on this branch: switching
+         * mid-charge would move the target the charge is being measured
+         * against.
+         */
+        actions = (vox_u16)(actions | VOX_DIGS_ACTION_FIRE);
     } else if (match->weapon_cooldown[player] == 0U && visible &&
                ((match->tick + (vox_u32)player * 17U) % 24U) <
                    DIGS_AI_DECISION_TICKS) {

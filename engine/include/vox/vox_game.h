@@ -149,6 +149,33 @@ typedef enum vox_digs_anatomy_id {
     VOX_DIGS_PART_RIGHT_FOOT = 14
 } vox_digs_anatomy_id;
 
+/*
+ * The three hardcoded opponents.  A bot's archetype is derived from its
+ * ordinal among the bots -- the number of bot_mask bits below its slot -- so
+ * identity is stable, needs no extra rules field, and is already covered by
+ * the hash through bot_mask.  When the save layer later supplies drifted
+ * traits it can override the base table without disturbing this.
+ */
+typedef enum vox_digs_archetype {
+    VOX_DIGS_ARCHETYPE_ENGINEER = 0,    /* RIVET  -- methodical, ranged */
+    VOX_DIGS_ARCHETYPE_BERSERKER = 1,   /* CINDER -- closes and brawls */
+    VOX_DIGS_ARCHETYPE_TRICKSTER = 2,   /* FLAMEY -- fire, traps, chaos */
+    VOX_DIGS_ARCHETYPE_COUNT = 3
+} vox_digs_archetype;
+
+/*
+ * Traits are 0..255 and each one maps to a decision the AI actually makes,
+ * so a value can always be pointed at the behaviour it produces.
+ */
+typedef struct vox_digs_personality {
+    vox_u16 aggression;    /* engage distance and retreat threshold */
+    vox_u16 patience;      /* ticks between decisions; ambush willingness */
+    vox_u16 caution;       /* weight given to hazards */
+    vox_u16 grudge;        /* how long a target stays preferred */
+    vox_u16 sociability;   /* bark rate and truce willingness */
+    vox_u16 reserved;
+} vox_digs_personality;
+
 typedef enum vox_digs_ai_mode {
     VOX_DIGS_AI_ROAMING = 0,
     VOX_DIGS_AI_SEARCHING = 1,
@@ -433,6 +460,10 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
                               vox_u16 part, vox_u16 damage,
                               vox_u16 damage_flags);
 vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player);
+/* VOX_DIGS_ARCHETYPE_COUNT for a slot that is not a bot. */
+vox_u16 vox_digs_bot_archetype(const vox_digs_match *match, vox_u16 player);
+const vox_digs_personality *vox_digs_personality_get(vox_u16 archetype);
+const char *vox_digs_archetype_name(vox_u16 archetype);
 const vox_digs_event *vox_digs_event_get(const vox_digs_match *match,
                                          vox_u16 ordinal);
 vox_result vox_digs_consume_events(vox_digs_match *match, vox_u16 count);
