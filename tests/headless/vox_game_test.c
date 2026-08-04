@@ -2457,6 +2457,84 @@ static int test_bot_archetypes_and_charge_weapons(void)
  * A wide excavation must cave in, and a narrow tunnel must stay usable --
  * otherwise the digging tools destroy the tunnels they exist to make.
  */
+static int test_bot_bores_through_a_wall(void)
+{
+    vox_digs_rules rules;
+    vox_u32 x;
+    vox_u32 y;
+    vox_u32 tick;
+    vox_u32 opened = 0U;
+    vox_i32 bot_x;
+    vox_i32 bot_y;
+    vox_u32 wall_x;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0x0002U;      /* slot 1 is the only bot: RIVET */
+    rules.weapon_mask = 0x07FFU;
+    rules.match_ticks = 3000U;
+    rules.lava_start_tick = 2900U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 1;
+    match.spawn_shield_ticks[0] = 0U;
+    match.spawn_shield_ticks[1] = 0U;
+    bot_x = match.players[1].position_x.value_q16 >> 16;
+    bot_y = match.players[1].position_y.value_q16 >> 16;
+    /*
+     * Seal the bot into a pocket with its goal on the far side of a wall it
+     * cannot jump, steam over, or walk around.  Before bots could dig, this
+     * was a life sentence.
+     */
+    for (x = (vox_u32)(bot_x - 20); x <= (vox_u32)(bot_x + 30); ++x) {
+        for (y = (vox_u32)(bot_y - 20); y <= (vox_u32)(bot_y + 6); ++y) {
+            if (!set_test_column(&match.world, x, y, VOX_MAT_SOIL)) return 2;
+        }
+    }
+    for (x = (vox_u32)(bot_x - 6); x <= (vox_u32)(bot_x + 5); ++x) {
+        for (y = (vox_u32)(bot_y - 4); y <= (vox_u32)(bot_y + 1); ++y) {
+            if (!set_test_column(&match.world, x, y, VOX_MAT_AIR)) return 3;
+        }
+    }
+    for (x = (vox_u32)(bot_x + 10); x <= (vox_u32)(bot_x + 30); ++x) {
+        for (y = (vox_u32)(bot_y - 4); y <= (vox_u32)(bot_y + 1); ++y) {
+            if (!set_test_column(&match.world, x, y, VOX_MAT_AIR)) return 4;
+        }
+    }
+    wall_x = (vox_u32)(bot_x + 6);
+    if (vox_world_sleep_all(&match.world) != VOX_OK) return 5;
+    match.players[0].position_x.value_q16 = (vox_i32)((bot_x + 24) << 16);
+    match.players[0].position_y.value_q16 =
+        match.players[1].position_y.value_q16;
+    for (tick = 0U; tick < 1200U && match.phase == VOX_DIGS_RUNNING; ++tick) {
+        /*
+         * Pin the intent rather than the behaviour: the bot wants to be on
+         * the far side.  How it gets there is what is under test.
+         */
+        match.bots[1].mode = VOX_DIGS_AI_ROAMING;
+        match.bots[1].roam_goal_x = (vox_u16)(bot_x + 24);
+        match.bots[1].roam_goal_ticks = 900U;
+        if (vox_digs_match_step(&match) != VOX_OK) return 6;
+        if (match.event_count > 0U) {
+            (void)vox_digs_consume_events(&match, match.event_count);
+        }
+    }
+    for (x = wall_x; x < wall_x + 4U; ++x) {
+        for (y = (vox_u32)(bot_y - 4); y <= (vox_u32)(bot_y + 1); ++y) {
+            if (vox_world_collision_classify(&match.world, x, y) !=
+                VOX_WORLD_COLLISION_SOLID) {
+                opened++;
+            }
+        }
+    }
+    /* The wall must be substantially gone, not merely scratched. */
+    if (opened < 8U) return 7;
+    /* And the miner must actually be on the other side of it. */
+    if ((match.players[1].position_x.value_q16 >> 16) <=
+        (vox_i32)(wall_x + 3U)) {
+        return 8;
+    }
+    return 0;
+}
+
 static int test_wide_excavation_caves_in(void)
 {
     vox_digs_rules rules;
@@ -3174,6 +3252,13 @@ int main(void)
         if (result != 0) {
             fprintf(stderr, "DIGS archetype mismatch (%d)\n", result);
             return 65;
+        }
+    }
+    {
+        int result = test_bot_bores_through_a_wall();
+        if (result != 0) {
+            fprintf(stderr, "DIGS bot breach mismatch (%d)\n", result);
+            return 66;
         }
     }
     {

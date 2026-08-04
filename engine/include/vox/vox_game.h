@@ -319,6 +319,16 @@ typedef struct vox_digs_ai_state {
      */
     vox_u16 roam_goal_x;
     vox_u16 roam_goal_ticks;
+    /*
+     * Consecutive ticks pinned against terrain that stands between this miner
+     * and where it wants to be, and ticks spent boring through it.  A miner
+     * that cannot walk around an obstacle digs through it instead -- which is
+     * the whole of RIVET's tunneller identity and the reason a bot no longer
+     * paces at a wall forever.
+     */
+    vox_u16 stuck_ticks;
+    vox_u16 breach_lock_ticks;
+    vox_u16 breach_ticks;
     vox_i32 last_seen_x_q16;
     vox_i32 last_seen_y_q16;
 } vox_digs_ai_state;

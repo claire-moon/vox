@@ -93,6 +93,51 @@
 #define DIGS_AI_ROAM_GOAL_TICKS 300U
 #define DIGS_AI_ROAM_ARRIVE_CELLS 6U
 /*
+ * Boring through an obstacle.
+ *
+ * A bore may be at most 2 * VOX_STRUCTURE_COHESION_CELLS + 1 cells thick.
+ * That is exactly the span the structural rule will hold up, so a tunnel this
+ * wide stays open; anything thicker caves in on the miner digging it, which
+ * is precisely the crush death the burial work made survivable but did not
+ * make pleasant.
+ */
+/*
+ * Widest wall a miner will bore through, in cells.
+ *
+ * This is not a taste knob -- it is bounded by the structural rule.  A cell
+ * is held up when solid material is within VOX_STRUCTURE_COHESION_CELLS
+ * horizontally, so the middle of a hole of width W needs (W + 1) / 2 <= 4,
+ * i.e. W <= 7.  Set to 9 the bots dug tunnels right at the collapse edge and
+ * stood in them: crushes went from 9 to 24 over a 10800-tick soak and hazard
+ * damage nearly doubled.  Six keeps a cell of margin.
+ */
+#define DIGS_AI_BREACH_MAX_CELLS 6U
+#define DIGS_AI_BREACH_PROBE_ROWS 3U
+#define DIGS_AI_BREACH_GIVEUP_TICKS 120U
+/*
+ * Quiet period after a bore before this miner may start another.
+ *
+ * Digging is the one thing a bot does that rearranges the world it is
+ * standing in, and cohesion only holds a span of about nine cells, so a miner
+ * that bores continuously eventually brings a roof down on itself.  Left
+ * unbounded that cost the soak 14 extra crushes and nearly doubled hazard
+ * damage -- the very "bots killing themselves randomly" this release set out
+ * to fix.  Five seconds between bores keeps digging a deliberate act.
+ */
+#define DIGS_AI_BREACH_LOCK_TICKS 300U
+/* How readily an archetype reaches for a tool rather than walking around. */
+/*
+ * How long a miner must be pinned against terrain before reaching for a tool.
+ *
+ * These were a quarter of a second, which is nothing -- a walking bot is
+ * BLOCKED_X against some lip or boulder constantly, so bots bored their way
+ * through the match and brought roofs down on themselves.  Digging has to be
+ * the last resort *after* the jump reflex has had time to fail, so the floor
+ * is a second and a half and the least eager archetype waits nearly three.
+ */
+#define DIGS_AI_STUCK_MIN_TICKS 90U
+#define DIGS_AI_STUCK_SPAN_TICKS 96U
+/*
  * How often a bot deliberates.
  *
  * The stored counter is one less than the period: the throttle decrements and
@@ -1807,6 +1852,9 @@ vox_result vox_digs_match_init(vox_digs_match *match,
         match->bots[i].retreat_lock_ticks = 0U;
         match->bots[i].roam_goal_x = 0U;
         match->bots[i].roam_goal_ticks = 0U;
+        match->bots[i].stuck_ticks = 0U;
+        match->bots[i].breach_lock_ticks = 0U;
+        match->bots[i].breach_ticks = 0U;
         match->bots[i].last_seen_x_q16 = 0L;
         match->bots[i].last_seen_y_q16 = 0L;
         digs_init_anatomy(match, i);
@@ -4018,6 +4066,160 @@ vox_u16 vox_digs_bot_archetype(const vox_digs_match *match, vox_u16 player)
  * match or a bounded cell probe, so the cost does not scale with the world.
  */
 /*
+ * How much appetite each archetype has for digging its way through rather
+ * than going around.  RIVET tunnels by nature, CINDER smashes whatever is
+ * directly in his way, FLAMEY would rather go around and leave something
+ * unpleasant behind.
+ */
+static const vox_u16
+digs_archetype_dig_appetite[VOX_DIGS_ARCHETYPE_COUNT] = {230U, 150U, 90U};
+
+/* Ticks pinned against terrain before this miner reaches for a tool. */
+static vox_u16 digs_ai_stuck_threshold(vox_u16 archetype)
+{
+    vox_u32 appetite = archetype < VOX_DIGS_ARCHETYPE_COUNT ?
+                       digs_archetype_dig_appetite[archetype] : 128U;
+    return (vox_u16)(DIGS_AI_STUCK_MIN_TICKS +
+                     ((255U - appetite) * DIGS_AI_STUCK_SPAN_TICKS) / 255U);
+}
+
+/*
+ * Can this tool open a horizontal hole without hurting the miner holding it?
+ *
+ * Breaching fires at rock two or three cells away, so blast radius matters
+ * more than damage.  The FIRECRACKER (radius 8, thrown on a fifty-tick fuse)
+ * and the GIANT HAMMER (radius 7 on a melee swing) both engulf the digger,
+ * and including them cost measurable self-inflicted damage in the soak.
+ * The MINING RAIL is excluded for the opposite reason -- it is too good at
+ * digging.  Soil costs it DIGS_RAIL_SOFT_COST (5) of a 180-energy shot, so
+ * one trigger pull bores some thirty-six cells: far past what cohesion holds
+ * up, and the miner walks into the tunnel it just undermined.  What is left
+ * cuts terrain at arm's length: the HOT RAIL that exists to tunnel, plus the
+ * POPPER and the PULASKI at radius 2.
+ *
+ * The bore drill is excluded despite being the obvious digging tool:
+ * digs_fire_bore_drill only ever cuts straight down, so a bot facing a wall
+ * would fire it into the floor forever.
+ *
+ * Every archetype keeps at least one of these -- RIVET the rails, CINDER the
+ * pulaski, FLAMEY the hot rail -- so nobody is left unable to dig.
+ */
+static int digs_ai_tool_breaches(vox_u16 weapon)
+{
+    return weapon == VOX_DIGS_TOOL_HOT_RAIL ||
+           weapon == VOX_DIGS_TOOL_POPPER ||
+           weapon == VOX_DIGS_TOOL_PULASKI;
+}
+
+/*
+ * Best breaching tool this arsenal allows, weighted by archetype taste so the
+ * three dig with the tools that suit them.  VOX_DIGS_TOOL_COUNT if none.
+ */
+static vox_u16 digs_ai_breach_tool(const vox_digs_match *match,
+                                   vox_u16 archetype)
+{
+    vox_u16 best = VOX_DIGS_TOOL_COUNT;
+    vox_u16 best_weight = 0U;
+    vox_u16 choice;
+    if (archetype >= VOX_DIGS_ARCHETYPE_COUNT) {
+        archetype = VOX_DIGS_ARCHETYPE_ENGINEER;
+    }
+    for (choice = 0U; choice < VOX_DIGS_TOOL_COUNT; ++choice) {
+        vox_u16 weight;
+        if ((match->rules.weapon_mask & (vox_u16)(1U << choice)) == 0U ||
+            !digs_ai_tool_breaches(choice)) {
+            continue;
+        }
+        weight = digs_archetype_weapon_weight[archetype][choice];
+        if (best == VOX_DIGS_TOOL_COUNT || weight > best_weight) {
+            best = choice;
+            best_weight = weight;
+        }
+    }
+    return best;
+}
+
+/*
+ * Should a bot hold FIRE this tick for the weapon it has selected?
+ *
+ * Charge weapons fire on *release*, so a miner that holds the trigger down
+ * forever -- which is exactly what boring through rock wants to do -- charges
+ * to maximum and never actually shoots.  Dropping FIRE for the one tick after
+ * the charge tops out is what pulls the trigger.
+ */
+static int digs_ai_hold_fire(const vox_digs_match *match, vox_u16 player)
+{
+    vox_u16 weapon = match->selected_weapon[player];
+    if (weapon >= VOX_DIGS_TOOL_COUNT) {
+        return 0;
+    }
+    if (weapon == VOX_DIGS_TOOL_RAIL_GUN) {
+        return !match->rail_charging[player] ||
+               match->rail_charge_ticks[player] < DIGS_RAIL_MAX_CHARGE_TICKS;
+    }
+    if (weapon == VOX_DIGS_TOOL_PULASKI ||
+        weapon == VOX_DIGS_TOOL_BOLT_ACTION ||
+        weapon == VOX_DIGS_TOOL_FIRECRACKER ||
+        weapon == VOX_DIGS_TOOL_SMOKER) {
+        return !match->weapon_charging[player] ||
+               match->weapon_charge_ticks[player] <
+               digs_weapons[weapon].charge_ticks;
+    }
+    return 1;   /* uncharged tools fire on the press */
+}
+
+/*
+ * Find the wall ahead at body height: the distance in cells to the first solid
+ * column within reach, with *thickness set to how many solid columns follow
+ * it.  Returns 0 when nothing solid is in reach, meaning there is no wall to
+ * breach and the miner should simply keep walking.
+ *
+ * Reporting the face separately from the thickness is what lets the shot be
+ * aimed past the far side.  Measuring thickness alone found "open one cell
+ * ahead" and aimed there, so a miner standing in the mouth of its own hole
+ * fired into the air it had already cleared.
+ *
+ * Bounded by DIGS_AI_BREACH_MAX_CELLS columns times DIGS_AI_BREACH_PROBE_ROWS
+ * rows, so the cost is a named constant and not a function of world size.
+ */
+static vox_u16 digs_ai_wall_ahead(const vox_digs_match *match,
+                                  vox_i32 bot_x, vox_i32 bot_y,
+                                  vox_i16 direction, vox_u16 *thickness)
+{
+    vox_i32 step = direction > 0 ? 1L : -1L;
+    vox_u16 depth;
+    vox_u16 face = 0U;
+    *thickness = (vox_u16)(DIGS_AI_BREACH_MAX_CELLS + 1U);
+    for (depth = 1U; depth <= DIGS_AI_BREACH_MAX_CELLS; ++depth) {
+        vox_i32 sample_x = bot_x + (vox_i32)depth * step;
+        vox_u16 row;
+        int blocked = 0;
+        if (sample_x < 0L || sample_x >= (vox_i32)VOX_WORLD_WIDTH) {
+            return 0U;
+        }
+        for (row = 0U; row < DIGS_AI_BREACH_PROBE_ROWS; ++row) {
+            vox_i32 sample_y = bot_y - (vox_i32)row;
+            if (sample_y < 0L || sample_y >= (vox_i32)VOX_WORLD_HEIGHT) {
+                continue;
+            }
+            if (digs_cell_is_solid(&match->world, (vox_u32)sample_x,
+                                   (vox_u32)sample_y)) {
+                blocked = 1;
+            }
+        }
+        if (blocked) {
+            if (face == 0U) {
+                face = depth;
+            }
+        } else if (face != 0U) {
+            *thickness = (vox_u16)(depth - face);
+            return face;
+        }
+    }
+    return face;    /* solid to the probe limit: thickness stays over budget */
+}
+
+/*
  * Health at or below which this miner disengages.  Aggression scales it, so
  * the same code makes CINDER reckless and RIVET careful.
  */
@@ -4222,6 +4424,8 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     vox_u16 visible = 0U;
     vox_u16 hazard;
     vox_i16 escape_x = 0;
+    vox_u16 archetype;
+    int breaching = 0;
     const vox_digs_personality *personality;
     if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
         !vox_digs_player_is_bot(match, player) || !match->alive[player]) {
@@ -4235,8 +4439,24 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     if (state->retreat_lock_ticks > 0U) {
         state->retreat_lock_ticks--;
     }
-    personality = vox_digs_personality_get(
-        vox_digs_bot_archetype(match, player));
+    /*
+     * Being pinned is measured per tick, not per deliberation.  Counting it
+     * on the decision cadence meant RIVET needed fifteen deliberations --
+     * nearly two hundred ticks -- to notice a wall, and any single airborne
+     * tick in between reset the count, so in practice it never noticed at all.
+     */
+    if (state->breach_lock_ticks > 0U) {
+        state->breach_lock_ticks--;
+    }
+    if ((match->players[player].flags & VOX_PHYSICS_BODY_BLOCKED_X) != 0U) {
+        if (state->stuck_ticks < 65535U) {
+            state->stuck_ticks++;
+        }
+    } else if (state->stuck_ticks > 0U) {
+        state->stuck_ticks--;
+    }
+    archetype = vox_digs_bot_archetype(match, player);
+    personality = vox_digs_personality_get(archetype);
     if (personality == 0) {
         personality = vox_digs_personality_get(VOX_DIGS_ARCHETYPE_ENGINEER);
     }
@@ -4406,6 +4626,113 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
         move_x = goal_x < bot_x ? 24575 : -24575;
     }
     /*
+     * Dig through what cannot be walked around.
+     *
+     * Roaming now aims at a real destination, which exposed the next problem:
+     * a bot that wants to be somewhere on the far side of a ridge walks into
+     * it and stays there. Being pinned against terrain that stands between
+     * the miner and its goal accrues stuck_ticks; past an archetype-scaled
+     * threshold it stops walking, points a tool at the obstruction, and bores.
+     *
+     * The bore is refused if the wall is thicker than the structural rule
+     * will hold open, because that tunnel collapses on the miner digging it.
+     * In that case the miner keeps walking and the wall stays a wall -- going
+     * around is still the fallback, and stuck_ticks is capped so it does not
+     * spend the match trying.
+     */
+    {
+        /*
+         * Breaching is a commitment, not a per-deliberation vote.
+         *
+         * The first cut of this reached for a tool only while the probe
+         * agreed, and re-ran the probe every deliberation.  A miner jitters
+         * by a cell as it settles, which moves the three probed rows, which
+         * flipped the reading between "one cell of rock" and "solid past the
+         * probe limit" -- and the too-thick branch zeroed stuck_ticks, so it
+         * forgot it was stuck and started over.  The rail needs seventy-two
+         * ticks of held FIRE to charge and never got past a handful.
+         *
+         * So the probe decides only whether to *start*.  After that the miner
+         * keeps cutting until it is through, or until DIGS_AI_BREACH_GIVEUP
+         * ticks say this rock has won and walking is the better idea.
+         */
+        vox_u16 tool = digs_ai_breach_tool(match, archetype);
+        int committed = state->breach_ticks > 0U;
+        int may_start = state->breach_lock_ticks == 0U &&
+                        state->stuck_ticks >=
+                        digs_ai_stuck_threshold(archetype);
+        if (state->breach_ticks >= DIGS_AI_BREACH_GIVEUP_TICKS) {
+            state->breach_ticks = 0U;
+            state->stuck_ticks = 0U;
+            state->breach_lock_ticks = DIGS_AI_BREACH_LOCK_TICKS;
+        } else if ((committed || may_start) && tool < VOX_DIGS_TOOL_COUNT &&
+                   hazard == 0U &&
+                   digs_abs_i32(goal_x - bot_x) >
+                   (vox_i32)DIGS_AI_ROAM_ARRIVE_CELLS) {
+            vox_i16 heading = goal_x < bot_x ? (vox_i16)-1 : (vox_i16)1;
+            vox_u16 thickness = 0U;
+            vox_u16 face = digs_ai_wall_ahead(match, bot_x, bot_y, heading,
+                                              &thickness);
+            if (face == 0U) {
+                /* Nothing solid ahead: through it, or never walled in. */
+                if (committed) {
+                    state->breach_lock_ticks = DIGS_AI_BREACH_LOCK_TICKS;
+                }
+                state->breach_ticks = 0U;
+                state->stuck_ticks = 0U;
+            } else if (!committed && thickness > DIGS_AI_BREACH_MAX_CELLS) {
+                /*
+                 * Too thick to start on.  Bore it and the tunnel caves in on
+                 * the miner digging it, so walk instead and let the wall win.
+                 */
+                state->stuck_ticks = 0U;
+            } else {
+                /*
+                 * Aim one cell past the far side so the shot cuts the whole
+                 * wall rather than stopping inside it, and alternate between
+                 * the feet row and the one above so the hole ends up tall
+                 * enough to walk into.  Cutting only at bot_y left a
+                 * knee-high slot the miner could see through and not enter.
+                 */
+                vox_u16 span = thickness > DIGS_AI_BREACH_MAX_CELLS ?
+                               DIGS_AI_BREACH_MAX_CELLS : thickness;
+                vox_i32 reach = (vox_i32)face + (vox_i32)span;
+                vox_i32 aim_cell_x = bot_x + (vox_i32)heading * reach;
+                vox_i32 aim_cell_y = bot_y -
+                                     (vox_i32)((match->tick >> 4) & 1UL);
+                if (aim_cell_x < 0L) {
+                    aim_cell_x = 0L;
+                }
+                if (aim_cell_x >= (vox_i32)VOX_WORLD_WIDTH) {
+                    aim_cell_x = (vox_i32)VOX_WORLD_WIDTH - 1L;
+                }
+                if (aim_cell_y < 0L) {
+                    aim_cell_y = 0L;
+                }
+                match->selected_weapon[player] = tool;
+                match->aim_x[player] = (vox_u16)aim_cell_x;
+                match->aim_y[player] = (vox_u16)aim_cell_y;
+                if (digs_ai_hold_fire(match, player)) {
+                    actions = (vox_u16)(actions | VOX_DIGS_ACTION_FIRE);
+                }
+                /*
+                 * Stop shoving only once actually against the rock; while the
+                 * face is still cells away, walk into the hole just cut.
+                 */
+                if (face <= 1U) {
+                    move_x = 0;
+                }
+                breaching = 1;
+                if (state->breach_ticks < 65535U) {
+                    state->breach_ticks++;
+                }
+            }
+        } else if (committed) {
+            /* Lost the reason to dig -- a hazard, or the goal moved. */
+            state->breach_ticks = 0U;
+        }
+    }
+    /*
      * Nothing is worth standing in lava for.  This overrides the combat and
      * roaming goals entirely, because a bot that keeps walking at its target
      * through a magma pool is the "killing themselves randomly" the lead
@@ -4452,7 +4779,9 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
         match->aim_x[player] = (vox_u16)goal_x;
         match->aim_y[player] = (vox_u16)goal_y;
     }
-    if (visible && match->rail_charging[player] &&
+    if (breaching) {
+        /* Aim, weapon and FIRE are already set by the bore. */
+    } else if (visible && match->rail_charging[player] &&
         match->selected_weapon[player] == VOX_DIGS_TOOL_RAIL_GUN) {
         if (match->rail_charge_ticks[player] < DIGS_RAIL_MAX_CHARGE_TICKS) {
             actions = (vox_u16)(actions | VOX_DIGS_ACTION_FIRE);
@@ -5415,6 +5744,10 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
         hash = digs_hash_mix(hash, (vox_u32)match->bots[i].roam_goal_x);
         hash = digs_hash_mix(hash,
                              (vox_u32)match->bots[i].roam_goal_ticks);
+        hash = digs_hash_mix(hash, (vox_u32)match->bots[i].stuck_ticks);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->bots[i].breach_lock_ticks);
+        hash = digs_hash_mix(hash, (vox_u32)match->bots[i].breach_ticks);
         hash = digs_hash_mix(hash,
                              (vox_u32)match->bots[i].last_seen_x_q16);
         hash = digs_hash_mix(hash,
