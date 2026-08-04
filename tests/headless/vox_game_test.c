@@ -2457,6 +2457,113 @@ static int test_bot_archetypes_and_charge_weapons(void)
  * A wide excavation must cave in, and a narrow tunnel must stay usable --
  * otherwise the digging tools destroy the tunnels they exist to make.
  */
+static int test_contracts_pair_index_and_tone(void)
+{
+    vox_digs_rules rules;
+    vox_u16 a;
+    vox_u16 b;
+    vox_u16 seen[VOX_DIGS_MAX_PAIRS];
+    vox_u32 tick;
+    const vox_digs_contract *contract;
+    vox_u16 first_tone;
+
+    /* Every unordered pair maps to its own slot, in either order. */
+    for (a = 0U; a < VOX_DIGS_MAX_PAIRS; ++a) seen[a] = 0U;
+    for (a = 0U; a < VOX_DIGS_MAX_SLOTS; ++a) {
+        for (b = 0U; b < VOX_DIGS_MAX_SLOTS; ++b) {
+            vox_u16 index = vox_digs_pair_index(a, b);
+            if (a == b) {
+                if (index != VOX_DIGS_MAX_PAIRS) return 1;
+                continue;
+            }
+            if (index >= VOX_DIGS_MAX_PAIRS) return 2;
+            if (index != vox_digs_pair_index(b, a)) return 3;
+            seen[index]++;
+        }
+    }
+    for (a = 0U; a < VOX_DIGS_MAX_PAIRS; ++a) {
+        if (seen[a] != 2U) return 4;      /* each pair hit once per order */
+    }
+    if (vox_digs_pair_index(0U, VOX_DIGS_MAX_SLOTS) != VOX_DIGS_MAX_PAIRS) {
+        return 5;
+    }
+
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 6;
+    match.spawn_shield_ticks[0] = 0U;
+    match.spawn_shield_ticks[1] = 0U;
+    contract = vox_digs_contract_get(&match, 0U, 1U);
+    if (contract == 0) return 7;
+    if (contract->tone != VOX_DIGS_TONE_NEUTRAL || contract->valence != 0) {
+        return 8;
+    }
+    if (contract->last_speaker != VOX_DIGS_NO_PLAYER || contract->met) {
+        return 9;
+    }
+
+    /*
+     * Shooting somebody should sour things -- but not instantly, and not
+     * before the dwell has elapsed.  This is the check that AI modes failed
+     * for two releases: a condition recomputed every tick with no dwell
+     * flips as fast as the condition wobbles.
+     */
+    if (vox_digs_apply_hit(&match, 0U, 1U, VOX_DIGS_TOOL_POPPER,
+                           VOX_DIGS_NO_PART, 40U,
+                           VOX_DIGS_DAMAGE_BALLISTIC) != VOX_OK) {
+        return 10;
+    }
+    if (!contract->met || contract->valence >= 0) return 11;
+    first_tone = contract->tone;
+    if (first_tone != VOX_DIGS_TONE_NEUTRAL) {
+        return 12;       /* one popper hit is not yet a quarrel */
+    }
+    for (tick = 0U; tick < 170U && match.phase == VOX_DIGS_RUNNING; ++tick) {
+        if (match.alive[1] &&
+            vox_digs_apply_hit(&match, 0U, 1U, VOX_DIGS_TOOL_POPPER,
+                               VOX_DIGS_NO_PART, 20U,
+                               VOX_DIGS_DAMAGE_BALLISTIC) != VOX_OK) {
+            return 13;
+        }
+        if (vox_digs_match_step(&match) != VOX_OK) return 14;
+        if (match.event_count > 0U) {
+            (void)vox_digs_consume_events(&match, match.event_count);
+        }
+    }
+    /*
+     * The balance is already deep in the red, but the dwell has not elapsed,
+     * so the tone must not have moved yet.  This is the assertion that would
+     * have caught the AI mode oscillation before it shipped.
+     */
+    if (contract->valence > VOX_DIGS_TONE_NEUTRAL) return 15;
+    if (contract->tone != VOX_DIGS_TONE_NEUTRAL) return 16;
+    for (tick = 0U; tick < 260U && match.phase == VOX_DIGS_RUNNING; ++tick) {
+        if (match.alive[1] &&
+            vox_digs_apply_hit(&match, 0U, 1U, VOX_DIGS_TOOL_POPPER,
+                               VOX_DIGS_NO_PART, 20U,
+                               VOX_DIGS_DAMAGE_BALLISTIC) != VOX_OK) {
+            return 17;
+        }
+        if (vox_digs_match_step(&match) != VOX_OK) return 18;
+        if (match.event_count > 0U) {
+            (void)vox_digs_consume_events(&match, match.event_count);
+        }
+    }
+    /* Past the dwell, sustained violence must show in the tone. */
+    if (contract->tone >= VOX_DIGS_TONE_NEUTRAL) return 19;
+    if (contract->valence > 0) return 20;
+
+    /* Every tone must name itself, and out-of-range must not read past. */
+    for (a = 0U; a < VOX_DIGS_TONE_COUNT; ++a) {
+        if (vox_digs_tone_name(a) == 0 || vox_digs_tone_name(a)[0] == '\0') {
+            return 21;
+        }
+    }
+    if (vox_digs_tone_name(VOX_DIGS_TONE_COUNT) == 0) return 22;
+    return 0;
+}
+
 static int test_kill_heals_the_killer(void)
 {
     vox_digs_rules rules;
@@ -3282,6 +3389,13 @@ int main(void)
         if (result != 0) {
             fprintf(stderr, "DIGS archetype mismatch (%d)\n", result);
             return 65;
+        }
+    }
+    {
+        int result = test_contracts_pair_index_and_tone();
+        if (result != 0) {
+            fprintf(stderr, "DIGS contract mismatch (%d)\n", result);
+            return 68;
         }
     }
     {

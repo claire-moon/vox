@@ -7352,7 +7352,7 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
         } else if (ticks == 600U &&
                    (fired != 43U || explosions != 16U || crushes != 1U ||
                     max_effects != 474U || max_awake != 10754U ||
-                    demo_match.state_hash != (vox_u32)0xD8F1D67EUL)) {
+                    demo_match.state_hash != (vox_u32)0x962267BAUL)) {
             fprintf(stderr,
                     "load self-test: canonical 600-tick activity/hash "
                     "mismatch\n");

@@ -212,6 +212,32 @@
  * waits for health to recover is now merely rare rather than unreachable.
  */
 #define DIGS_KILL_HEAL 50U
+
+/*
+ * Contracts: the running account between each pair of miners.
+ *
+ * Valence is the raw balance and tone is the band it falls in.  Two things
+ * keep the tone from chattering the way AI modes used to flip every eight
+ * ticks: a minimum dwell before any change, and a margin that makes leaving
+ * a tone harder than entering it.  Without the margin a pair sitting exactly
+ * on a boundary would oscillate every time a stray pebble hit somebody.
+ *
+ * Valence also creeps back toward zero while nothing is happening, so a
+ * grudge earned in the first minute does not lock the rest of the match --
+ * this is the mechanism by which peace is reachable at all.
+ */
+#define DIGS_CONTRACT_VALENCE_MAX 1000
+#define DIGS_CONTRACT_BONDED_AT 600
+#define DIGS_CONTRACT_TRUCE_AT 300
+#define DIGS_CONTRACT_WARM_AT 100
+#define DIGS_CONTRACT_NEEDLE_AT (-100)
+#define DIGS_CONTRACT_HOSTILE_AT (-300)
+#define DIGS_CONTRACT_FEUD_AT (-600)
+#define DIGS_CONTRACT_TONE_MARGIN 40
+#define DIGS_CONTRACT_TONE_DWELL_TICKS 180U
+#define DIGS_CONTRACT_DECAY_TICKS 300U
+#define DIGS_CONTRACT_DECAY_STEP 4
+#define DIGS_CONTRACT_KILL_VALENCE 140L
 #define DIGS_MUZZLE_CLEARANCE_Q16 16384L
 
 static const vox_digs_weapon_properties digs_weapons[VOX_DIGS_TOOL_COUNT] = {
@@ -248,6 +274,9 @@ static const vox_digs_weapon_properties digs_weapons[VOX_DIGS_TOOL_COUNT] = {
 
 static void digs_step_projectiles(vox_digs_match *match);
 static void digs_step_effects(vox_digs_match *match);
+static void digs_step_contracts(vox_digs_match *match);
+static void digs_contract_adjust(vox_digs_match *match, vox_u16 a, vox_u16 b,
+                                 vox_i32 delta);
 static void digs_step_reactions(vox_digs_match *match);
 static void digs_update_lava(vox_digs_match *match);
 static void digs_apply_lava_hazards(vox_digs_match *match);
@@ -1763,6 +1792,23 @@ vox_result vox_digs_match_init(vox_digs_match *match,
                               rules->seed) != VOX_OK) {
         return VOX_ERR_INVALID;
     }
+    {
+        vox_u16 pair;
+        for (pair = 0U; pair < VOX_DIGS_MAX_PAIRS; ++pair) {
+            vox_u16 slot;
+            match->contracts[pair].tone = (vox_u16)VOX_DIGS_TONE_NEUTRAL;
+            match->contracts[pair].valence = 0;
+            match->contracts[pair].tone_ticks = 0U;
+            match->contracts[pair].quiet_ticks = 0U;
+            match->contracts[pair].last_speaker = VOX_DIGS_NO_PLAYER;
+            match->contracts[pair].exchanges = 0U;
+            match->contracts[pair].met = 0U;
+            match->contracts[pair].recent_cursor = 0U;
+            for (slot = 0U; slot < VOX_DIGS_RECENT_LINES; ++slot) {
+                match->contracts[pair].recent_lines[slot] = 0U;
+            }
+        }
+    }
     match->tick = 0U;
     match->phase = VOX_DIGS_RUNNING;
     match->result_reason = VOX_DIGS_END_NONE;
@@ -2234,6 +2280,7 @@ vox_result vox_digs_match_step(vox_digs_match *match)
     }
     digs_step_bleeding(match);
     digs_step_reactions(match);
+    digs_step_contracts(match);
     if (match->tick >= match->rules.lava_start_tick) {
         remaining = match->rules.match_ticks - match->rules.lava_start_tick;
         match->lava_level_q16 = digs_scale_lava_level(
@@ -2309,6 +2356,148 @@ static void digs_spawn_death_gore(vox_digs_match *match, vox_u16 victim,
     }
 }
 
+
+/*
+ * Pairs are unordered, so (a, b) and (b, a) are the same account.  Four slots
+ * give six of them: (0,1) (0,2) (0,3) (1,2) (1,3) (2,3).
+ */
+vox_u16 vox_digs_pair_index(vox_u16 a, vox_u16 b)
+{
+    vox_u16 low;
+    vox_u16 high;
+    if (a == b || a >= VOX_DIGS_MAX_SLOTS || b >= VOX_DIGS_MAX_SLOTS) {
+        return (vox_u16)VOX_DIGS_MAX_PAIRS;
+    }
+    low = a < b ? a : b;
+    high = a < b ? b : a;
+    return (vox_u16)((low * (2U * VOX_DIGS_MAX_SLOTS - low - 1U)) / 2U +
+                     (high - low - 1U));
+}
+
+const vox_digs_contract *vox_digs_contract_get(const vox_digs_match *match,
+                                               vox_u16 a, vox_u16 b)
+{
+    vox_u16 index;
+    if (match == 0) {
+        return 0;
+    }
+    index = vox_digs_pair_index(a, b);
+    if (index >= VOX_DIGS_MAX_PAIRS) {
+        return 0;
+    }
+    return &match->contracts[index];
+}
+
+const char *vox_digs_tone_name(vox_u16 tone)
+{
+    static const char *names[VOX_DIGS_TONE_COUNT] = {
+        "FEUD", "HOSTILE", "NEEDLING", "NEUTRAL",
+        "WARY", "THAWING", "TRUCE", "BONDED"
+    };
+    return tone < VOX_DIGS_TONE_COUNT ? names[tone] : "NEUTRAL";
+}
+
+/* Which band of feeling a balance falls in, read from where we already are. */
+static vox_u16 digs_contract_band(vox_i32 valence, vox_u16 current)
+{
+    if (valence >= DIGS_CONTRACT_BONDED_AT) {
+        return (vox_u16)VOX_DIGS_TONE_BONDED;
+    }
+    if (valence >= DIGS_CONTRACT_TRUCE_AT) {
+        return (vox_u16)VOX_DIGS_TONE_TRUCE;
+    }
+    if (valence >= DIGS_CONTRACT_WARM_AT) {
+        return (current == (vox_u16)VOX_DIGS_TONE_TRUCE ||
+                current == (vox_u16)VOX_DIGS_TONE_BONDED ||
+                current == (vox_u16)VOX_DIGS_TONE_WARY) ?
+               (vox_u16)VOX_DIGS_TONE_WARY : (vox_u16)VOX_DIGS_TONE_THAWING;
+    }
+    if (valence <= DIGS_CONTRACT_FEUD_AT) {
+        return (vox_u16)VOX_DIGS_TONE_FEUD;
+    }
+    if (valence <= DIGS_CONTRACT_HOSTILE_AT) {
+        return (vox_u16)VOX_DIGS_TONE_HOSTILE;
+    }
+    if (valence <= DIGS_CONTRACT_NEEDLE_AT) {
+        return (vox_u16)VOX_DIGS_TONE_NEEDLING;
+    }
+    return (vox_u16)VOX_DIGS_TONE_NEUTRAL;
+}
+
+/*
+ * Settle the tone against the balance.  The margin is applied toward wherever
+ * we already are, which is what makes leaving a tone cost more than entering
+ * it; the dwell stops even a decisive swing from flipping twice in a second.
+ */
+static void digs_contract_settle(vox_digs_contract *contract)
+{
+    vox_i32 biased = contract->valence;
+    vox_u16 raw = digs_contract_band(contract->valence, contract->tone);
+    vox_u16 target;
+    if (contract->tone > raw) {
+        biased += DIGS_CONTRACT_TONE_MARGIN;
+    } else if (contract->tone < raw) {
+        biased -= DIGS_CONTRACT_TONE_MARGIN;
+    }
+    target = digs_contract_band(biased, contract->tone);
+    if (target != contract->tone &&
+        contract->tone_ticks >= DIGS_CONTRACT_TONE_DWELL_TICKS) {
+        contract->tone = target;
+        contract->tone_ticks = 0U;
+    }
+}
+
+/*
+ * Move the balance between two miners.  Everything that happens between them
+ * -- a shot, a kill, a near miss, a word -- arrives here.
+ */
+static void digs_contract_adjust(vox_digs_match *match, vox_u16 a, vox_u16 b,
+                                 vox_i32 delta)
+{
+    vox_digs_contract *contract;
+    vox_i32 valence;
+    vox_u16 index = vox_digs_pair_index(a, b);
+    if (index >= VOX_DIGS_MAX_PAIRS) {
+        return;
+    }
+    contract = &match->contracts[index];
+    contract->met = 1U;
+    valence = (vox_i32)contract->valence + delta;
+    if (valence > DIGS_CONTRACT_VALENCE_MAX) {
+        valence = DIGS_CONTRACT_VALENCE_MAX;
+    } else if (valence < -DIGS_CONTRACT_VALENCE_MAX) {
+        valence = -DIGS_CONTRACT_VALENCE_MAX;
+    }
+    contract->valence = (vox_i16)valence;
+    digs_contract_settle(contract);
+}
+
+/* One tick of drift back toward indifference, plus the dwell clocks. */
+static void digs_step_contracts(vox_digs_match *match)
+{
+    vox_u16 index;
+    int decay = (match->tick % DIGS_CONTRACT_DECAY_TICKS) == 0U;
+    for (index = 0U; index < VOX_DIGS_MAX_PAIRS; ++index) {
+        vox_digs_contract *contract = &match->contracts[index];
+        if (contract->tone_ticks < 65535U) {
+            contract->tone_ticks++;
+        }
+        if (contract->quiet_ticks < 65535U) {
+            contract->quiet_ticks++;
+        }
+        if (decay && contract->valence > 0) {
+            contract->valence = (vox_i16)(contract->valence >
+                DIGS_CONTRACT_DECAY_STEP ?
+                contract->valence - DIGS_CONTRACT_DECAY_STEP : 0);
+        } else if (decay && contract->valence < 0) {
+            contract->valence = (vox_i16)(contract->valence <
+                -DIGS_CONTRACT_DECAY_STEP ?
+                contract->valence + DIGS_CONTRACT_DECAY_STEP : 0);
+        }
+        digs_contract_settle(contract);
+    }
+}
+
 vox_result vox_digs_record_kill(vox_digs_match *match, vox_u16 killer,
                                 vox_u16 victim)
 {
@@ -2321,6 +2510,7 @@ vox_result vox_digs_record_kill(vox_digs_match *match, vox_u16 killer,
     if (match->scores[killer] < 65535U) {
         match->scores[killer]++;
     }
+    digs_contract_adjust(match, killer, victim, -DIGS_CONTRACT_KILL_VALENCE);
     if (match->alive[killer]) {
         vox_u32 healed = (vox_u32)match->health[killer] + DIGS_KILL_HEAL;
         match->health[killer] = healed > (vox_u32)VOX_DIGS_MAX_HEALTH ?
@@ -2712,6 +2902,15 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
         (attacker != VOX_DIGS_NO_PLAYER &&
          !vox_digs_player_is_active(match, attacker))) {
         return VOX_ERR_INVALID;
+    }
+    /*
+     * Taking a hit sours the account between two miners in proportion to what
+     * it cost.  Scaled down hard: a whole match of ordinary skirmishing should
+     * be worth a grudge, not an instant blood feud.
+     */
+    if (attacker != VOX_DIGS_NO_PLAYER && attacker != victim) {
+        digs_contract_adjust(match, attacker, victim,
+                             -(vox_i32)(damage / 8U) - 1L);
     }
     if (match->spawn_shield_ticks[victim] > 0U) {
         digs_emit_event(match, VOX_DIGS_EVENT_SHIELD_BLOCK, attacker, victim,
@@ -5778,6 +5977,22 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
                 hash = digs_hash_mix(hash,
                                      (vox_u32)anatomy->bleed_rate_q8);
             }
+        }
+    }
+    for (i = 0U; i < VOX_DIGS_MAX_PAIRS; ++i) {
+        const vox_digs_contract *contract = &match->contracts[i];
+        vox_u16 recent;
+        hash = digs_hash_mix(hash, (vox_u32)contract->tone);
+        hash = digs_hash_mix(hash, (vox_u32)(vox_u16)contract->valence);
+        hash = digs_hash_mix(hash, (vox_u32)contract->tone_ticks);
+        hash = digs_hash_mix(hash, (vox_u32)contract->quiet_ticks);
+        hash = digs_hash_mix(hash, (vox_u32)contract->last_speaker);
+        hash = digs_hash_mix(hash, (vox_u32)contract->exchanges);
+        hash = digs_hash_mix(hash, (vox_u32)contract->met);
+        hash = digs_hash_mix(hash, (vox_u32)contract->recent_cursor);
+        for (recent = 0U; recent < VOX_DIGS_RECENT_LINES; ++recent) {
+            hash = digs_hash_mix(hash,
+                                 (vox_u32)contract->recent_lines[recent]);
         }
     }
     for (i = 0U; i < VOX_DIGS_MAX_PROJECTILES; ++i) {

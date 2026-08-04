@@ -176,6 +176,46 @@ typedef struct vox_digs_personality {
     vox_u16 reserved;
 } vox_digs_personality;
 
+/*
+ * How two miners currently stand with one another.
+ *
+ * Every unordered pair of slots carries one of these.  The story of a match
+ * is what happens to these eight values, and they are what the bots read when
+ * they decide who to shoot at and what to say about it.
+ *
+ * WARY and THAWING occupy the same band of feeling and differ only in which
+ * direction it was reached from: coming down off a truce is wariness, coming
+ * up out of a quarrel is a thaw.
+ */
+typedef enum vox_digs_tone {
+    VOX_DIGS_TONE_FEUD = 0,
+    VOX_DIGS_TONE_HOSTILE = 1,
+    VOX_DIGS_TONE_NEEDLING = 2,
+    VOX_DIGS_TONE_NEUTRAL = 3,
+    VOX_DIGS_TONE_WARY = 4,
+    VOX_DIGS_TONE_THAWING = 5,
+    VOX_DIGS_TONE_TRUCE = 6,
+    VOX_DIGS_TONE_BONDED = 7,
+    VOX_DIGS_TONE_COUNT = 8
+} vox_digs_tone;
+
+/* Four slots choose two. */
+#define VOX_DIGS_MAX_PAIRS 6U
+/* How many lines a pair remembers, so it does not repeat itself immediately. */
+#define VOX_DIGS_RECENT_LINES 4U
+
+typedef struct vox_digs_contract {
+    vox_u16 tone;
+    vox_i16 valence;          /* below zero is bad blood, above is warmth */
+    vox_u16 tone_ticks;       /* dwell in the current tone */
+    vox_u16 quiet_ticks;      /* since either of them last spoke to the other */
+    vox_u16 last_speaker;     /* VOX_DIGS_NO_PLAYER until someone speaks */
+    vox_u16 exchanges;        /* how much these two have talked this match */
+    vox_u16 met;              /* have they actually laid eyes on each other */
+    vox_u16 recent_lines[VOX_DIGS_RECENT_LINES];
+    vox_u16 recent_cursor;
+} vox_digs_contract;
+
 typedef enum vox_digs_ai_mode {
     VOX_DIGS_AI_ROAMING = 0,
     VOX_DIGS_AI_SEARCHING = 1,
@@ -431,6 +471,7 @@ typedef struct vox_digs_match {
      * physics resolves normally.
      */
     vox_u16 buried_ticks[VOX_DIGS_MAX_SLOTS];
+    vox_digs_contract contracts[VOX_DIGS_MAX_PAIRS];
     vox_u32 lava_level_q16;
     vox_u16 lava_surface_y;
     vox_u16 projectile_count;
@@ -468,6 +509,11 @@ vox_result vox_digs_request_respawn(vox_digs_match *match,
                                     vox_u16 player);
 vox_result vox_digs_record_kill(vox_digs_match *match, vox_u16 killer,
                                 vox_u16 victim);
+/* Index of the contract between two slots; VOX_DIGS_MAX_PAIRS if invalid. */
+vox_u16 vox_digs_pair_index(vox_u16 a, vox_u16 b);
+const vox_digs_contract *vox_digs_contract_get(const vox_digs_match *match,
+                                               vox_u16 a, vox_u16 b);
+const char *vox_digs_tone_name(vox_u16 tone);
 vox_result vox_digs_submit_input(vox_digs_match *match,
                                  const vox_digs_input *input);
 vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
