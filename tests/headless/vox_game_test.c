@@ -1348,9 +1348,18 @@ static int test_player_controls(void)
         match.players[0].position_y.value_q16 >= start_y) {
         return 11;
     }
-    input.actions = (vox_u16)(VOX_DIGS_ACTION_MASK | 64U);
-    if (vox_digs_submit_input(&match, &input) != VOX_ERR_INVALID) {
+    /*
+     * Speaking is a real action now, so the old literal 64 is valid.  Derive
+     * the first bit above the mask instead of hardcoding another one, so the
+     * next action added does not silently turn this back into a no-op.
+     */
+    input.actions = VOX_DIGS_ACTION_BARK;
+    if (vox_digs_submit_input(&match, &input) != VOX_OK) {
         return 12;
+    }
+    input.actions = (vox_u16)(VOX_DIGS_ACTION_MASK + 1U);
+    if (vox_digs_submit_input(&match, &input) != VOX_ERR_INVALID) {
+        return 13;
     }
     return 0;
 }
@@ -2458,6 +2467,85 @@ static int test_bot_archetypes_and_charge_weapons(void)
  * A wide excavation must cave in, and a narrow tunnel must stay usable --
  * otherwise the digging tools destroy the tunnels they exist to make.
  */
+static int test_speech_is_paced_and_answered(void)
+{
+    vox_digs_rules rules;
+    vox_u32 tick;
+    vox_u32 spoke = 0U;
+    vox_u16 spoke_by[VOX_DIGS_MAX_SLOTS];
+    vox_u16 slot;
+    vox_u16 first_line = 65535U;
+    vox_u16 repeats = 0U;
+    vox_u16 seen[16];
+    vox_u16 seen_count = 0U;
+
+    for (slot = 0U; slot < VOX_DIGS_MAX_SLOTS; ++slot) spoke_by[slot] = 0U;
+
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0x0002U;
+    rules.match_ticks = 4000U;
+    rules.lava_start_tick = 3900U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 1;
+    match.spawn_shield_ticks[0] = 0U;
+    match.spawn_shield_ticks[1] = 0U;
+
+    /* Nobody speaks the instant something happens -- there is a pause. */
+    if (vox_digs_apply_hit(&match, 0U, 1U, VOX_DIGS_TOOL_POPPER,
+                           VOX_DIGS_NO_PART, 15U,
+                           VOX_DIGS_DAMAGE_BALLISTIC) != VOX_OK) {
+        return 2;
+    }
+    if (match.speech_stimulus[0] == VOX_DIGS_STIMULUS_NONE) return 3;
+    if (match.speech_delay[0] == 0U) return 4;
+    if (match.speech_stimulus[1] != VOX_DIGS_STIMULUS_HURT_BY) return 5;
+
+    for (tick = 0U; tick < 1200U && match.phase == VOX_DIGS_RUNNING; ++tick) {
+        vox_u16 index;
+        if (vox_digs_match_step(&match) != VOX_OK) return 6;
+        for (index = 0U; index < match.event_count; ++index) {
+            const vox_digs_event *event =
+                &match.events[(match.event_head + index) %
+                              VOX_DIGS_MAX_EVENTS];
+            if (event->type != VOX_DIGS_EVENT_AI_BARK) continue;
+            spoke++;
+            if (event->source < VOX_DIGS_MAX_SLOTS) {
+                spoke_by[event->source]++;
+            }
+            /* Every spoken line must resolve to real words. */
+            if (digs_lines_text(event->variant)[0] == '\0') return 7;
+            if (event->magnitude >= VOX_DIGS_STIMULUS_COUNT) return 8;
+            if (event->reserved >= VOX_DIGS_TONE_COUNT) return 9;
+            if (first_line == 65535U) first_line = event->variant;
+            if (seen_count < 16U) {
+                vox_u16 look;
+                for (look = 0U; look < seen_count; ++look) {
+                    if (seen[look] == event->variant) repeats++;
+                }
+                seen[seen_count++] = event->variant;
+            }
+        }
+        if (match.event_count > 0U) {
+            (void)vox_digs_consume_events(&match, match.event_count);
+        }
+        if (match.alive[0] && match.alive[1] && (tick % 200U) == 0U) {
+            (void)vox_digs_apply_hit(&match, 0U, 1U, VOX_DIGS_TOOL_POPPER,
+                                     VOX_DIGS_NO_PART, 12U,
+                                     VOX_DIGS_DAMAGE_BALLISTIC);
+        }
+    }
+    if (spoke == 0U) return 10;
+    /* Both sides of a fight get to speak, not just the one throwing punches. */
+    if (spoke_by[0] == 0U || spoke_by[1] == 0U) return 11;
+    /*
+     * The recent-line ring exists so a pair does not say the same thing twice
+     * running.  Some repetition is fine once a pool is exhausted; wall-to-wall
+     * repetition means the ring is not being consulted.
+     */
+    if (seen_count >= 8U && repeats > seen_count / 2U) return 12;
+    return 0;
+}
+
 static int test_every_line_cell_resolves(void)
 {
     vox_u16 voice;
@@ -3529,6 +3617,13 @@ int main(void)
         if (result != 0) {
             fprintf(stderr, "DIGS archetype mismatch (%d)\n", result);
             return 65;
+        }
+    }
+    {
+        int result = test_speech_is_paced_and_answered();
+        if (result != 0) {
+            fprintf(stderr, "DIGS speech mismatch (%d)\n", result);
+            return 71;
         }
     }
     {

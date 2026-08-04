@@ -9,6 +9,7 @@
 #include "digs_miner_art.h"
 #include "vox/vox_audio.h"
 #include "vox/vox_game.h"
+#include "digs_lines.h"
 #include "vox/vox_render.h"
 #include "vox_sdl_ui.h"
 
@@ -425,194 +426,6 @@ static const int demo_respawn_delays[5] = {0, 1, 2, 3, 5};
 static const char *demo_respawn_mode_names[2] = {"AUTO", "ON FIRE"};
 static const char demo_name_grid[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
-static const char *demo_bark_phrases[DEMO_BARK_CONTEXT_COUNT]
-                                   [DEMO_BARK_PHRASE_COUNT] = {
-    {
-        "BACK TO WORK!", "KEEP DIGGING!", "DIG THAT COAL!",
-        "THE SHIFT IS LONG!", "WHERE IS MY TEA?", "GOOD WORK MINER!",
-        "PICK UP THE COAL!", "MIND THE LAVA!", "I SMELL FIRE!",
-        "DOWN WE GO!", "THE ROCK LOOKS SHY!", "MY PICK IS HUMMING!",
-        "ONE MORE SHOVEL!", "THE BOILER NEEDS BREAKFAST!",
-        "DUST IN MY TEA AGAIN!", "THAT WALL OWES ME COAL!",
-        "HELLO LITTLE TUNNEL!", "THE CART WILL NOT PUSH ITSELF!",
-        "STEADY BOOTS STEADY!", "I FOUND A VERY SMALL ROCK!",
-        "CLOCK IN AND DIG DOWN!", "THE MINE IS LISTENING!",
-        "MY HELMET HAS A PLAN!", "COAL FIRST QUESTIONS LATER!",
-        "THIS SHAFT NEEDS WINDOWS!", "A FINE DAY FOR DIRT!",
-        "WHO POLISHED THE BEDROCK?", "THE DUST TASTES PRODUCTIVE!",
-        "I CALL THIS TUNNEL KEVIN!", "MY LAMP WANTS ADVENTURE!",
-        "SWING PICK REPEAT!", "NO ROCK LEFT UNBOTHERED!",
-        "THE DEEP SHIFT BEGINS!", "BOOTS DOWN LAMP UP!",
-        "I HEAR BONUS COAL!", "THE WALL BLINKED FIRST!",
-        "MAKE ROOM FOR THE CART!", "MY BEARD KNOWS NORTH!",
-        "DIG NEATLY OR DIG TWICE!", "THE BOILER SAYS HELLO!",
-        "TODAY WE MINE TOMORROW ALSO!", "THIS DIRT HAS POTENTIAL!",
-        "A TUNNEL IS JUST A HALLWAY!", "I BROUGHT THE GOOD PICK!",
-        "KEEP CALM AND FIND BEDROCK!", "THE SHIFT BELL FEARS ME!",
-        "EVERY PEBBLE COUNTS!", "MY LUNCH IS SOMEWHERE BELOW!",
-        "THE MOUNTAIN LOOKS NERVOUS!", "I AM PAID BY THE CRATER!"
-    },
-    {
-        "WHERE ARE YOU?", "COME OUT MINER!", "I HEAR YOU!",
-        "CHECK THE SHAFT!", "SHOW YOUR HELMET!", "I SEE TRACKS!",
-        "NO HIDING HERE!", "I SEE YOUR TUNNEL!", "TOO QUIET!",
-        "THE DUST MOVES!", "YOUR BOOTS ARE LOUD!", "I SAW THAT LAMP!",
-        "THE ROCKS ARE WHISPERING!", "COME OUT AND CLOCK IN!",
-        "I KNOW THAT COUGH!", "SOMEONE MOVED MY PEBBLE!",
-        "THIS TUNNEL SMELLS SUSPICIOUS!", "I HEAR A NERVOUS PICK!",
-        "YOUR SHADOW NEEDS A HELMET!", "THE SHAFT HAS EYES TODAY!",
-        "STOP HIDING BEHIND GEOLOGY!", "I FOUND YOUR FOOTPRINT!",
-        "THAT WAS NOT THE WIND!", "HELLO MYSTERY MINER!",
-        "I WILL CHECK EVERY CRATER!", "THE LAVA KNOWS WHERE YOU ARE!",
-        "YOUR CART LEFT TRACKS!", "AHA A FRESH TUNNEL!",
-        "I CAN HEAR YOUR BEARD!", "THE DUST JUST SNEEZED!",
-        "COME OUT TINY MENACE!", "WHO KICKED THAT COAL?",
-        "THE WALL POINTED THAT WAY!", "YOUR LAMP GAVE YOU AWAY!",
-        "I HAVE A MAP SORT OF!", "NO CORNER IS THAT DARK!",
-        "I SMELL FRESH TROUBLE!", "THE BOILER HEARD YOU TOO!",
-        "ARE YOU UNDER THIS ROCK?", "THE TUNNEL IS STILL WARM!",
-        "I COUNT ONE EXTRA SHADOW!", "SHOW YOURSELF SHIFT DODGER!",
-        "THOSE TRACKS ARE NOT MINE!", "I HEARD A WEAPON CLICK!",
-        "THE MINE CANNOT KEEP SECRETS!", "YOUR HIDING SPOT HAS ECHOES!",
-        "I WILL FOLLOW THE SMOKE!", "SOMETHING JUST DUCKED!",
-        "THE COAL LOOKS ALARMED!", "READY OR NOT I AM DIGGING!"
-    },
-    {
-        "I WILL GET YOU!", "EAT HOT IRON!", "GET OUT MINER!",
-        "HERE I COME!", "DUCK THIS!", "YOUR SHIFT ENDS NOW!",
-        "EAT THE BOILER!", "MAKE A CRATER!", "FIRE IN THE HOLE!",
-        "YOU ARE MINE!", "MIND THE FLYING HARDWARE!",
-        "SPECIAL DELIVERY MINER!", "THIS PICK HAS OPINIONS!",
-        "CLOCK OUT THE LOUD WAY!", "CATCH THIS BRASS SURPRISE!",
-        "YOUR HELMET NEEDS TESTING!", "I BROUGHT EXTRA CRATERS!",
-        "THE BOILER DEMANDS JUSTICE!", "DUCK LOWER!",
-        "LET US DISCUSS BALLISTICS!", "MY AIM IS MOSTLY CERTAIN!",
-        "TIME FOR RAPID EXCAVATION!", "HERE COMES THE TOOLBOX!",
-        "THE SHIFT JUST GOT PERSONAL!", "I HAVE A LOUD SOLUTION!",
-        "STAND STILL FOR SCIENCE!", "YOUR TUNNEL ENDS HERE!",
-        "MEET MY INDUSTRIAL METHOD!", "I FOUND THE FIRE BUTTON!",
-        "THIS ONE HAS YOUR NAME!", "PREPARE FOR UNPLANNED MINING!",
-        "I AM REDECORATING YOUR HILL!", "BRACE YOUR BOOTS!",
-        "THE CART SENDS REGARDS!", "I CALL THIS AGGRESSIVE DIGGING!",
-        "YOUR COVER LOOKS TEMPORARY!", "HOT METAL COMING THROUGH!",
-        "LET THE ROCKS DECIDE!", "I HAVE TOO MANY NAILS!",
-        "AIM LAMP FIRE!", "THIS WILL WAKE THE FOREMAN!",
-        "THE CRATER IS RESERVED!", "NOTHING PERSONAL JUST MINING!",
-        "YOUR BEARD CANNOT SAVE YOU!", "FULL STEAM AND BAD IDEAS!",
-        "THE MOUNTAIN WANTS A REMATCH!", "TRY DODGING THE TOOL CHEST!",
-        "I BROUGHT THUNDER UNDERGROUND!", "LOOK OUT BELOW AND ABOVE!",
-        "THE MINE HAS CHOSEN VIOLENCE!"
-    },
-    {
-        "TEA BREAK!", "NOT ENOUGH COAL!", "FALL BACK!",
-        "I NEED A PLAN!", "SAVE MY BEARD!", "TO THE SHAFT!",
-        "THE TUNNEL FALLS!", "I WILL BE BACK!", "TOO HOT HERE!",
-        "RUN MINER RUN!", "TACTICAL TEA IMMEDIATELY!",
-        "MY BOOTS VOTE NO!", "THE BOILER CAN COVER ME!",
-        "THIS WAY LOOKS LESS EXPLODEY!", "I FORGOT MY BRAVE PICK!",
-        "RETREAT WITH PROFESSIONAL DIGNITY!", "THE ROCKS ARE WINNING!",
-        "I NEED A SAFER HOLE!", "NOPE NOPE DOWN THE SHAFT!",
-        "MY HELMET SAYS LEAVE!", "TIME FOR REVERSE MINING!",
-        "I HAVE SEEN ENOUGH FIRE!", "THE CART IS MY EXIT PLAN!",
-        "SAVE THE TEA FIRST!", "THAT CRATER WAS TOO CLOSE!",
-        "I AM REPOSITIONING HEROICALLY!", "THE LAVA HAS BAD MANNERS!",
-        "NEW PLAN RUN SIDEWAYS!", "I REQUIRE MORE WALLS!",
-        "THIS TUNNEL NEEDS A BACK DOOR!", "MY BEARD IS RETREATING!",
-        "I LEFT THE STOVE ON!", "BACK TO THE NICE DARK CORNER!",
-        "THE SHIFT CAN WAIT!", "I NEED FRESH TROUSERS!",
-        "THAT SOUND MEANS GO!", "I AM TOO VALUABLE TO CRATER!",
-        "THE BOILER DID NOT WARN ME!", "MOVE BOOTS MOVE!",
-        "I PREFER DISTANT DANGER!", "THIS HILL IS COMPROMISED!",
-        "MY PLAN HAS BECOME RUNNING!", "FIND COVER FIND TEA!",
-        "THE FOREMAN WILL UNDERSTAND!", "I AM SAVING AMMUNITION AND ME!",
-        "TO THE EMERGENCY TUNNEL!", "THE DUST IS TOO EXCITED!",
-        "LET SOMEONE ELSE STAND THERE!", "I SHALL PANIC METHODICALLY!",
-        "THE SAFE DIRECTION IS AWAY!"
-    },
-    {
-        "THAT HURTS!", "MY BONES!", "WHO DID THAT?",
-        "MY TROUSERS!", "I AM HURT!", "THAT WAS MEAN!",
-        "GET THE MEDIC!", "OW MY BEARD!", "I FELT THAT!",
-        "YOU WILL PAY!", "MY HELMET RANG!", "THAT HIT MY EVERYTHING!",
-        "I NEEDED THAT LIMB!", "MY BOOTS HAVE COMPLAINTS!",
-        "THE MEDIC OWES ME TEA!", "THAT WAS NOT IN TRAINING!",
-        "MY SPINE JUST CLOCKED OUT!", "WHO THREW THE MOUNTAIN?",
-        "I HAVE DEVELOPED EXTRA PAIN!", "MY BEARD TOOK THE WORST OF IT!",
-        "THAT DENT HAS A DENT!", "I HEARD MY BONES ARGUE!",
-        "PLEASE STOP REMODELING ME!", "MY HELMET SAW STARS!",
-        "THAT WAS EXTREMELY RUDE!", "I AM LEAKING SHIFT HOURS!",
-        "MY KNEES HAVE RESIGNED!", "THAT TOOL WAS NOT FRIENDLY!",
-        "I TASTE COPPER AND REGRET!", "MY COAT NEEDS A MEDIC!",
-        "OW RIGHT IN THE MINER!", "THAT MOVED MY INTERNAL COAL!",
-        "MY ANKLES FILED A REPORT!", "I WAS USING THAT SHOULDER!",
-        "THE PAIN HAS ECHOES!", "MY LAMP WENT SIDEWAYS!",
-        "I AM MOSTLY BRUISE NOW!", "THAT RATTLED THE TOOLBOX!",
-        "MY TEETH CHANGED SHIFTS!", "I OBJECT TO THIS DAMAGE!",
-        "THAT FOUND THE SORE BIT!", "MY BOOTS CANNOT FEEL THEIR BOOTS!",
-        "I REQUIRE INDUSTRIAL BANDAGES!", "THE FLOOR HIT ME TOO!",
-        "MY BEARD IS IN SHOCK!", "THAT WAS A WHOLE CRATER!",
-        "I HAVE BEEN POORLY MINED!", "MY ELBOW HAS LEFT THE CHAT!",
-        "EVERYTHING HURTS IN STEREO!", "I WANT MY OLD SHAPE BACK!"
-    },
-    {
-        "SHIFT COMPLETE!", "THAT IS HOW WE DIG!", "GOOD WORK!",
-        "ANOTHER ONE DOWN!", "THAT ONE IS MINE!", "WHAT A BLAST!",
-        "THE SHAFT IS MINE!", "BACK IN THE CART!", "TOO EASY!",
-        "MINER WINS AGAIN!", "PUT THAT ON MY TIMESHEET!",
-        "THE BOILER APPLAUDS!", "CRATER DELIVERED ON TIME!",
-        "MY BEARD NEVER DOUBTED ME!", "THAT WAS TEXTBOOK MINING!",
-        "TEA FOR THE CHAMPION!", "THE MOUNTAIN KNOWS MY NAME!",
-        "CLOCK THAT VICTORY!", "A FINE PIECE OF LOUD WORK!",
-        "THE CART GETS A TROPHY!", "I CALL THAT QUALITY CONTROL!",
-        "ANOTHER SHIFT ANOTHER LEGEND!", "THE ROCKS CHEER QUIETLY!",
-        "PERFECTLY PLANNED PROBABLY!", "MY HELMET TAKES THE CREDIT!",
-        "THAT CRATER HAS STYLE!", "THE FOREMAN MISSED EVERYTHING!",
-        "BOOTS ONE TROUBLE ZERO!", "A WIN FOR INDUSTRIAL SCIENCE!",
-        "I DESERVE THE GOOD TEA!", "THE DUST SETTLED IN MY FAVOR!",
-        "THIS IS WHY I BROUGHT NAILS!", "THE SHIFT BELL SALUTES ME!",
-        "I MINED THE COMPETITION!", "THE BOILER NEVER MISFIRES TWICE!",
-        "A MASTERPIECE IN DIRT!", "THE TOOLBOX REMAINS UNDEFEATED!",
-        "VICTORY SMELLS LIKE COAL!", "MY CART HAS FRONT ROW SEATS!",
-        "THAT OUGHT TO BE IN THE MANUAL!", "THE DEEP SHIFT DELIVERS!",
-        "BRASS BOOTS AND BRILLIANCE!", "THE MOUNTAIN WILL REMEMBER THAT!",
-        "AN EFFICIENT LITTLE DISASTER!", "WRITE THAT DOWN FOREMAN!",
-        "THE LAMP STAYED ON MOSTLY!", "A CLEAN WIN AND DIRTY COAT!",
-        "MY PICK DEMANDS AN ENCORE!", "SHIFT WON LUNCH EARNED!",
-        "THE LAST COAL IS ON ME!"
-    },
-    {
-        /*
-         * Context 6: the miner is going into the basin. Gallows humour --
-         * a miner meeting the thing the whole job warned them about, and
-         * finding it funnier than tragic.
-         */
-        "GOODBYE CRUEL MINE!", "NO MORE SHIFTS FOR ME!",
-        "TELL THE FOREMAN I QUIT!", "I FOUND THE HOT SEAM!",
-        "CLOCKING OUT PERMANENTLY!", "THIS COUNTS AS OVERTIME!",
-        "THE FLOOR WAS A SUGGESTION!", "I REGRET THE SHORTCUT!",
-        "SEND MY TEA TO THE SURFACE!", "WORST BATH IN THE MINE!",
-        "MY BOOTS ARE BRIEFLY FAMOUS!", "SO THAT IS WHAT ORANGE MEANS!",
-        "THE LAMP WILL NOT HELP HERE!", "I HAVE MADE A CAREER CHOICE!",
-        "DOWNWARD MOBILITY AT LAST!", "THE BASIN SAYS HELLO!",
-        "PUT ME IN THE LEDGER!", "THIS IS NOT THE GOOD KIND OF WARM!",
-        "I SHOULD HAVE READ THE SIGN!", "MY PENSION IS MOLTEN!",
-        "TELL MY CART I LOVED IT!", "A VERY THOROUGH RETIREMENT!",
-        "THE ROCK WINS THIS ROUND!", "I AM BECOMING GEOLOGY!",
-        "SAFETY MEETING CANCELLED!", "REMEMBER ME AS A HARD WORKER!",
-        "THE DEEP SHIFT CLAIMS ANOTHER!", "I BLAME THE LIGHTING!",
-        "MY LAST MISTAKE IS GLOWING!", "SOMEONE LOG THE HOURS!",
-        "THIS SEAM IS TOO RICH!", "I AM OFF TO THE FURNACE YARD!",
-        "NOT THE EXIT I PLANNED!", "THE MOUNTAIN SENDS ITS REGARDS!",
-        "TELL THEM I WENT DOWN DIGGING!", "WORTH IT FOR THE VIEW!",
-        "MY HELMET WAS DECORATIVE!", "A WARM WELCOME INDEED!",
-        "THE COMPANY KEEPS THE DEPOSIT!", "I HAVE STRUCK SOMETHING!",
-        "THIS WAS NOT IN TRAINING!", "GRAVITY REMAINS UNDEFEATED!",
-        "SAVE MY SPOT IN THE LIFT!", "THE FLOOR AND I ARE THROUGH!",
-        "AT LEAST IT IS QUICK!", "MY LUNCH IS UP THERE SOMEWHERE!",
-        "SOMEBODY MOVED THE GROUND!", "I ALWAYS RAN HOT!",
-        "THE SHIFT BELL CAN WAIT!", "GOING WHERE THE COAL WENT!"
-    }
-};
 static const vox_u16 demo_arsenal_masks[DEMO_ARSENAL_COUNT] = {
     0x07FFU, 0x00F1U, 0x030EU
 };
@@ -1076,177 +889,11 @@ static void demo_copy_text(char *destination, size_t capacity,
     destination[index] = '\0';
 }
 
-static int demo_bark_context(const demo_app *app, int player)
-{
-    /*
-     * Nothing else matters once a miner is going into the basin, so this
-     * outranks every other mood.  It reads the same exact surface line the
-     * simulation uses for lava damage rather than guessing from health.
-     */
-    if (demo_match.alive[player]) {
-        vox_i32 foot = (demo_match.players[player].position_y.value_q16 +
-                        demo_match.players[player].half_height_q16) >> 16;
-        if (foot + 2L >= (vox_i32)demo_match.lava_surface_y) {
-            return DEMO_BARK_CONTEXT_DOOMED;
-        }
-    }
-    if (app->miner_hit_ttl[player] > 0U) return 4;
-    if (app->victory_bark_ttl[player] > 0U) return 5;
-    if (demo_match.health[player] < 35U) return 3;
-    if (demo_match.weapon_cooldown[player] > 0U) return 2;
-    if (vox_digs_player_is_bot(&demo_match, (vox_u16)player)) {
-        int state = (int)demo_match.bots[player].mode;
-        return state >= 0 && state <= 3 ? state : 0;
-    }
-    if (demo_match.player_actions[player] != 0U) return 1;
-    return 0;
-}
 
-static vox_u32 demo_bark_hash(vox_u32 seed, vox_u32 value)
-{
-    seed ^= value + 0x9E3779B9U + (seed << 6) + (seed >> 2);
-    seed *= 16777619U;
-    return seed;
-}
 
-static int demo_bark_target(int player)
-{
-    int target;
-    int best = -1;
-    long best_distance = 0x7FFFFFFFL;
-    long player_x = demo_match.players[player].position_x.value_q16 /
-                    65536L;
-    long player_y = demo_match.players[player].position_y.value_q16 /
-                    65536L;
-    for (target = 0; target < (int)demo_match.rules.player_count; ++target) {
-        long dx;
-        long dy;
-        long distance;
-        if (target == player || !demo_match.alive[target]) continue;
-        dx = demo_match.players[target].position_x.value_q16 / 65536L -
-             player_x;
-        dy = demo_match.players[target].position_y.value_q16 / 65536L -
-             player_y;
-        if (dx < 0L) dx = -dx;
-        if (dy < 0L) dy = -dy;
-        distance = dx + dy;
-        if (distance < best_distance) {
-            best_distance = distance;
-            best = target;
-        }
-    }
-    return best;
-}
 
-static const char *demo_bark_material_name(vox_u16 material)
-{
-    static const char *names[VOX_MAT_COUNT] = {
-        "OPEN AIR", "BEDROCK", "STONE", "SOIL", "COAL", "BIOMASS",
-        "SAND", "WATER", "LAVA", "METAL", "FLESH", "BLOOD",
-        "SMOKE", "FIREDAMP"
-    };
-    return material < VOX_MAT_COUNT ? names[material] : "ROCK";
-}
 
-static vox_u16 demo_bark_nearby_material(int player)
-{
-    int center_x = (int)(demo_match.players[player].position_x.value_q16 /
-                         65536L);
-    int center_y = (int)(demo_match.players[player].position_y.value_q16 /
-                         65536L);
-    int radius;
-    for (radius = 0; radius <= 6; ++radius) {
-        int y;
-        for (y = center_y - radius; y <= center_y + radius; ++y) {
-            int x;
-            for (x = center_x - radius; x <= center_x + radius; ++x) {
-                const vox_cell *cell;
-                if (x < 0 || y < 0 || x >= (int)VOX_WORLD_WIDTH ||
-                    y >= (int)VOX_WORLD_HEIGHT) continue;
-                cell = vox_world_cell(&demo_match.world, (vox_u32)x,
-                                      (vox_u32)y, VOX_WORLD_DEPTH - 1U);
-                if (cell != 0 && cell->material != VOX_MAT_AIR) {
-                    return cell->material;
-                }
-            }
-        }
-    }
-    return VOX_MAT_AIR;
-}
 
-static const char *demo_bark_hazard(int player)
-{
-    int center_x = (int)(demo_match.players[player].position_x.value_q16 /
-                         65536L);
-    int center_y = (int)(demo_match.players[player].position_y.value_q16 /
-                         65536L);
-    int y;
-    if (demo_match.lava_surface_y < VOX_WORLD_HEIGHT &&
-        center_y + 28 >= (int)demo_match.lava_surface_y) return "THE LAVA";
-    for (y = center_y - 8; y <= center_y + 8; ++y) {
-        int x;
-        for (x = center_x - 8; x <= center_x + 8; ++x) {
-            const vox_cell *cell;
-            if (x < 0 || y < 0 || x >= (int)VOX_WORLD_WIDTH ||
-                y >= (int)VOX_WORLD_HEIGHT) continue;
-            cell = vox_world_cell(&demo_match.world, (vox_u32)x,
-                                  (vox_u32)y, VOX_WORLD_DEPTH - 1U);
-            if (cell == 0) continue;
-            if (cell->material == VOX_MAT_LAVA) return "THE LAVA";
-            if (cell->material == VOX_MAT_FIREDAMP) return "THE FIREDAMP";
-            if (cell->material == VOX_MAT_SMOKE) return "THE SMOKE";
-            if (cell->material == VOX_MAT_WATER) return "THE WATER";
-        }
-    }
-    return "THAT TROUBLE";
-}
-
-static void demo_bark_generate(demo_app *app, int player, int context,
-                               vox_u32 hash, char *phrase)
-{
-    static const char *adjectives[12] = {
-        "BRASS", "DUSTY", "SNEAKY", "WOBBLY", "BOILING", "TINY",
-        "LOUD", "GRUMPY", "RUSTY", "FANCY", "CROOKED", "STEAMY"
-    };
-    static const char *nouns[12] = {
-        "BOILER", "PICK", "CART", "HELMET", "BEARD", "SHOVEL",
-        "LAMP", "CRATER", "TUNNEL", "BOOT", "GEAR", "PEBBLE"
-    };
-    static const char *verbs[12] = {
-        "RATTLES", "GRUMBLES", "DIGS", "SPARKS", "WOBBLES", "SINGS",
-        "PLOTS", "ROLLS", "HISSES", "CLANKS", "BOUNCES", "SNORES"
-    };
-    int target = demo_bark_target(player);
-    const char *target_name = target >= 0 ?
-        demo_player_name(app, (vox_u16)target) : "MYSTERY MINER";
-    vox_u16 weapon_id = demo_match.selected_weapon[player];
-    const vox_digs_weapon_properties *weapon =
-        vox_digs_weapon_get(weapon_id);
-    const char *weapon_name = weapon == 0 ? "TOOL" : weapon->name;
-    const char *material = demo_bark_material_name(
-        demo_bark_nearby_material(player));
-    const char *hazard = demo_bark_hazard(player);
-    const char *adjective = adjectives[(hash >> 4) % 12U];
-    const char *noun = nouns[(hash >> 9) % 12U];
-    const char *verb = verbs[(hash >> 14) % 12U];
-    if (context == 0) {
-        sprintf(phrase, "MY %s %s %s BY THE %s!", adjective, noun,
-                verb, material);
-    } else if (context == 1) {
-        sprintf(phrase, "%s, I HEAR YOU BY THE %s!", target_name,
-                material);
-    } else if (context == 2) {
-        sprintf(phrase, "%s, MEET MY %s!", target_name, weapon_name);
-    } else if (context == 3) {
-        sprintf(phrase, "GET ME AWAY FROM %s, %s!", hazard, target_name);
-    } else if (context == 4) {
-        sprintf(phrase, "%s HIT ME WITH THAT %s NONSENSE!", target_name,
-                adjective);
-    } else {
-        sprintf(phrase, "%s, MY %s %s VICTORIOUSLY!", target_name,
-                noun, verb);
-    }
-}
 
 /*
  * Which voice speaks for this slot.
@@ -1273,32 +920,42 @@ static vox_u8 demo_speech_profile(int player)
     return (vox_u8)VOX_AUDIO_SPEECH_FLAMEY;
 }
 
-static void demo_bark(demo_app *app, int player, int context, int bot)
+/*
+ * Speak a line the simulation already chose.
+ *
+ * The port no longer decides what anyone says.  It used to pick a phrase from
+ * a table and, one time in four, assemble one from adjective/noun/verb lists
+ * -- which is where the nonsense came from.  Selection now happens in the
+ * simulation, where it is hashed and reproducible, and all that is left here
+ * is substituting the name and putting it on the screen.
+ */
+static void demo_speak_line(demo_app *app, int player, int target,
+                            vox_u16 line_id, int bot)
 {
-    vox_u32 required_gap = bot ? DEMO_BOT_BARK_COOLDOWN :
-        (app->options.dummy_mode ? 0U : DEMO_BARK_COOLDOWN);
-    vox_u32 phrase_index;
-    const char *phrase;
-    char generated[64];
-    vox_u32 hash;
+    const char *source = digs_lines_text(line_id);
+    char phrase[96];
+    size_t out = 0U;
+    size_t in = 0U;
     if (player < 0 || player >= (int)demo_match.rules.player_count ||
-        !demo_match.alive[player] || context < 0 || context >= DEMO_BARK_CONTEXT_COUNT) return;
-    if ((required_gap > 0U && app->last_bark_tick[player] != 0U &&
-         demo_match.tick < app->last_bark_tick[player] + required_gap) ||
-        (app->global_bark_tick != 0U &&
-         demo_match.tick < app->global_bark_tick + DEMO_GLOBAL_BARK_GAP)) {
+        source == 0 || source[0] == '\0') {
         return;
     }
-    hash = demo_bark_hash(demo_match.rules.seed, demo_match.tick / 7U);
-    hash = demo_bark_hash(hash, (vox_u32)player * 131U +
-                          (vox_u32)context * 977U);
-    hash = demo_bark_hash(hash, ++app->bark_sequence[player]);
-    phrase_index = hash % DEMO_BARK_PHRASE_COUNT;
-    phrase = demo_bark_phrases[context][phrase_index];
-    if ((hash & 3U) == 0U) {
-        demo_bark_generate(app, player, context, hash, generated);
-        phrase = generated;
+    while (source[in] != '\0' && out + 1U < sizeof(phrase)) {
+        if (source[in] == '%' && source[in + 1] == 'T') {
+            const char *name = (target >= 0 &&
+                                target < (int)demo_match.rules.player_count) ?
+                               demo_player_name(app, (vox_u16)target) :
+                               "SOMEBODY";
+            size_t copied = 0U;
+            while (name[copied] != '\0' && out + 1U < sizeof(phrase)) {
+                phrase[out++] = name[copied++];
+            }
+            in += 2U;
+            continue;
+        }
+        phrase[out++] = source[in++];
     }
+    phrase[out] = '\0';
     demo_copy_text(app->bubbles[player].text,
                    sizeof(app->bubbles[player].text), phrase);
     app->bubbles[player].ttl = DEMO_BUBBLE_TICKS;
@@ -5240,8 +4897,14 @@ static void demo_submit_human_input(demo_app *app)
             app->keyboard_previous_down[player] = previous_down;
             app->keyboard_next_down[player] = next_down;
         }
-        if (bark && !app->bark_down[player]) {
-            demo_bark(app, player, demo_bark_context(app, player), 0);
+        if (bark && !app->bark_down[player] && demo_match.alive[player]) {
+            /*
+             * Speaking goes through the input stream like everything else,
+             * because what gets said moves contract state and therefore the
+             * match hash.  A bark raised straight into the port would make a
+             * replay diverge from the match it was recorded from.
+             */
+            input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_BARK);
         }
         app->bark_down[player] = bark;
         if (!demo_match.alive[player] && fire && !app->fire_down[player]) {
@@ -5602,10 +5265,6 @@ static void demo_process_events(demo_app *app)
             if (event->source < demo_match.rules.player_count &&
                 event->source != event->target) {
                 app->victory_bark_ttl[event->source] = 180U;
-                if (vox_digs_player_is_bot(&demo_match, event->source) &&
-                    ((event->sequence + event->source) & 3U) == 0U) {
-                    demo_bark(app, (int)event->source, 5, 1);
-                }
             }
             if (event->target < DEMO_LOCAL_MAX) {
                 app->rope_latched[event->target] = 0;
@@ -5657,13 +5316,11 @@ static void demo_process_events(demo_app *app)
         } else if (event->type == VOX_DIGS_EVENT_CRUSH) {
             demo_haptic_world(app, event, DEMO_HAPTIC_CRUMBLE);
         } else if (event->type == VOX_DIGS_EVENT_AI_BARK) {
-            if (event->source < demo_match.rules.player_count &&
-                ((event->sequence + event->source * 7U) & 3U) == 0U) {
-                int context = event->magnitude < 4U ?
-                              (int)event->magnitude :
-                              demo_bark_context(app, (int)event->source);
-                demo_bark(app, (int)event->source, context, 1);
-            }
+            demo_speak_line(app, (int)event->source,
+                            event->target < demo_match.rules.player_count ?
+                            (int)event->target : -1, event->variant,
+                            vox_digs_player_is_bot(&demo_match,
+                                                   event->source));
         } else if (event->type == VOX_DIGS_EVENT_MATCH_END) {
             if (demo_match.result_draw) {
                 demo_set_banner(app, "DRAW!", 1);
@@ -7352,7 +7009,7 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
         } else if (ticks == 600U &&
                    (fired != 43U || explosions != 16U || crushes != 1U ||
                     max_effects != 474U || max_awake != 10754U ||
-                    demo_match.state_hash != (vox_u32)0x5FC62D61UL)) {
+                    demo_match.state_hash != (vox_u32)0xED84590CUL)) {
             fprintf(stderr,
                     "load self-test: canonical 600-tick activity/hash "
                     "mismatch\n");
@@ -7656,7 +7313,6 @@ static int demo_bark_self_test(void)
     demo_app app;
     vox_u8 tokens[VOX_AUDIO_SPEECH_TOKEN_CAPACITY];
     vox_u16 count = 0U;
-    vox_u32 sequence;
     int context;
     int phrase;
     memset(&app, 0, sizeof(app));
@@ -7673,12 +7329,14 @@ static int demo_bark_self_test(void)
     demo_match.selected_weapon[1] = VOX_DIGS_TOOL_NAIL_GUN;
     strcpy(app.player_names[0], "RIVET");
     strcpy(app.player_names[1], "CINDER");
-    for (context = 0; context < DEMO_BARK_CONTEXT_COUNT; ++context) {
-        for (phrase = 0; phrase < (int)DEMO_BARK_PHRASE_COUNT; ++phrase) {
-            if (demo_bark_phrases[context][phrase] == 0 ||
-                demo_bark_phrases[context][phrase][0] == '\0') {
+    for (context = 0; context < (int)DIGS_VOICE_COUNT; ++context) {
+        for (phrase = 1; phrase < (int)VOX_DIGS_STIMULUS_COUNT; ++phrase) {
+            digs_line_pool pool = digs_lines_pool((vox_u16)context,
+                (vox_u16)VOX_DIGS_TONE_NEUTRAL, (vox_u16)phrase);
+            if (pool.count == 0U ||
+                digs_lines_text(pool.first)[0] == '\0') {
                 fprintf(stderr,
-                    "bark self-test: missing curated phrase state=%d slot=%d\n",
+                    "bark self-test: no line for voice=%d stimulus=%d\n",
                     context, phrase);
                 return 1;
             }
@@ -7694,41 +7352,50 @@ static int demo_bark_self_test(void)
         fprintf(stderr, "bark self-test: spelling fallback failed\n");
         return 3;
     }
+    /*
+     * Cooldowns and repeat suppression moved into the simulation, where they
+     * are hashed and covered by the headless tests.  What is left for the
+     * port to prove is that it renders what it is handed: the name goes in,
+     * and nothing is assembled here any more.
+     */
     demo_match.tick = 10U;
-    demo_bark(&app, 0, 0, 0);
-    sequence = app.bark_sequence[0];
-    demo_match.tick = 11U;
-    demo_bark(&app, 0, 1, 0);
-    if (app.bark_sequence[0] != sequence) {
-        fprintf(stderr, "bark self-test: normal cooldown leaked\n");
-        return 4;
+    strcpy(app.player_names[1], "CINDER");
+    {
+        digs_line_pool pool = digs_lines_pool((vox_u16)DIGS_VOICE_RIVET,
+            (vox_u16)VOX_DIGS_TONE_NEUTRAL,
+            (vox_u16)VOX_DIGS_STIMULUS_FIRST_MEETING);
+        vox_u16 id;
+        int substituted = 0;
+        if (pool.count == 0U) {
+            fprintf(stderr, "bark self-test: no first-meeting lines\n");
+            return 4;
+        }
+        for (id = 0U; id < pool.count; ++id) {
+            const char *raw = digs_lines_text((vox_u16)(pool.first + id));
+            if (strstr(raw, "%T") == 0) {
+                continue;
+            }
+            app.bubbles[0].text[0] = '\0';
+            demo_speak_line(&app, 0, 1, (vox_u16)(pool.first + id), 1);
+            if (strstr(app.bubbles[0].text, "%T") != 0) {
+                fprintf(stderr, "bark self-test: %%T was not substituted\n");
+                return 5;
+            }
+            if (strstr(app.bubbles[0].text, "CINDER") == 0) {
+                fprintf(stderr, "bark self-test: name did not reach the "
+                                "bubble\n");
+                return 6;
+            }
+            substituted = 1;
+            break;
+        }
+        if (!substituted) {
+            fprintf(stderr, "bark self-test: no line carried a name slot\n");
+            return 7;
+        }
     }
-    app.options.dummy_mode = 1;
-    demo_match.tick = 100U;
-    demo_bark(&app, 0, 1, 0);
-    if (app.bark_sequence[0] != sequence) {
-        fprintf(stderr, "bark self-test: global spacing was bypassed\n");
-        return 5;
-    }
-    demo_match.tick = 131U;
-    demo_bark(&app, 0, 1, 0);
-    if (app.bark_sequence[0] != sequence + 1U) {
-        fprintf(stderr, "bark self-test: Dummy Mode local bypass failed\n");
-        return 6;
-    }
-    demo_match.tick = 260U;
-    demo_bark(&app, 1, 2, 1);
-    sequence = app.bark_sequence[1];
-    demo_match.tick = 400U;
-    demo_bark(&app, 1, 2, 1);
-    if (sequence == 0U || app.bark_sequence[1] != sequence) {
-        fprintf(stderr, "bark self-test: bot cooldown was bypassed\n");
-        return 7;
-    }
-    printf("DIGS bark self-test passed curated=%u g2p=%u\n",
-           (unsigned int)DEMO_BARK_CONTEXT_COUNT *
-               (unsigned int)DEMO_BARK_PHRASE_COUNT,
-           (unsigned int)count);
+    printf("DIGS bark self-test passed lines=%u g2p=%u\n",
+           (unsigned int)digs_lines_total(), (unsigned int)count);
     return 0;
 }
 

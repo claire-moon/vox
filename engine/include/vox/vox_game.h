@@ -21,9 +21,17 @@
 #define VOX_DIGS_ACTION_STEAM 8U
 #define VOX_DIGS_ACTION_ROPE 16U
 #define VOX_DIGS_ACTION_FIRE 32U
+/*
+ * Speaking is an input like any other.  It has to travel the same path as
+ * movement and fire, because what a miner says moves the contract state and
+ * therefore the match hash -- a bark raised out of band would make a replay
+ * diverge from the match it was recorded from.
+ */
+#define VOX_DIGS_ACTION_BARK 64U
 #define VOX_DIGS_ACTION_MASK (VOX_DIGS_ACTION_LEFT | VOX_DIGS_ACTION_RIGHT | \
                               VOX_DIGS_ACTION_JUMP | VOX_DIGS_ACTION_STEAM | \
-                              VOX_DIGS_ACTION_ROPE | VOX_DIGS_ACTION_FIRE)
+                              VOX_DIGS_ACTION_ROPE | VOX_DIGS_ACTION_FIRE | \
+                              VOX_DIGS_ACTION_BARK)
 
 #define VOX_DIGS_MAX_HEALTH 100U
 #define VOX_DIGS_RESPAWN_TICKS 180U
@@ -514,6 +522,15 @@ typedef struct vox_digs_match {
      * physics resolves normally.
      */
     vox_u16 buried_ticks[VOX_DIGS_MAX_SLOTS];
+    /*
+     * What this miner is about to say, and how long until they say it.  The
+     * delay is the whole point: a conversation is an exchange with a pause in
+     * it, and the length of the pause is a character trait.
+     */
+    vox_u16 speech_stimulus[VOX_DIGS_MAX_SLOTS];
+    vox_u16 speech_subject[VOX_DIGS_MAX_SLOTS];
+    vox_u16 speech_delay[VOX_DIGS_MAX_SLOTS];
+    vox_u16 speech_cooldown[VOX_DIGS_MAX_SLOTS];
     vox_digs_contract contracts[VOX_DIGS_MAX_PAIRS];
     vox_u32 lava_level_q16;
     vox_u16 lava_surface_y;
