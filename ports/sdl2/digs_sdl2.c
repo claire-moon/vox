@@ -3193,18 +3193,18 @@ static void demo_draw_how_to(demo_app *app)
             demo_pad_button_label(family, app->bindings.pad_jump));
     vox_ui_text(&demo_ui, 72, 52, 1, prompt, DEMO_VGA_WHITE);
     vox_ui_text(&demo_ui, 20, 64, 1, "ROPE", DEMO_VGA_LIGHT_CYAN);
-    sprintf(prompt, "RMB OR [%s]  HOLD/TOGGLE IN OPTIONS",
+    sprintf(prompt, "MMB / OR [%s]  HOLD/TOGGLE IN OPTIONS",
             demo_pad_button_label(family, app->bindings.pad_rope));
     vox_ui_text(&demo_ui, 72, 64, 1, prompt, DEMO_VGA_WHITE);
     vox_ui_text(&demo_ui, 20, 76, 1, "AIM", DEMO_VGA_LIGHT_CYAN);
     vox_ui_text(&demo_ui, 72, 76, 1, "MOUSE ARROWS OR R-STICK",
                 DEMO_VGA_WHITE);
     vox_ui_text(&demo_ui, 20, 88, 1, "FIRE", DEMO_VGA_LIGHT_CYAN);
-    sprintf(prompt, "LMB E OR [%s]",
+    sprintf(prompt, "LMB E RCTRL OR [%s]",
             demo_pad_button_label(family, app->bindings.pad_fire));
     vox_ui_text(&demo_ui, 72, 88, 1, prompt, DEMO_VGA_WHITE);
     vox_ui_text(&demo_ui, 20, 100, 1, "STEAM", DEMO_VGA_LIGHT_CYAN);
-    sprintf(prompt, "SHIFT OR [%s]  ZL+R-STICK ZOOMS",
+    sprintf(prompt, "SHIFT RMB RSHIFT OR [%s]",
             demo_pad_button_label(family, app->bindings.pad_steam));
     vox_ui_text(&demo_ui, 72, 100, 1, prompt, DEMO_VGA_WHITE);
     vox_ui_text_wrap(&demo_ui, 20, 119, 280, 5, 1,
@@ -4290,12 +4290,30 @@ static void demo_draw_world_feedback(demo_app *app)
                                    app->bubbles[player].text,
                                    255U, 255U, 255U);
         }
-        if (app->options.debug && vox_digs_player_is_bot(&demo_match,
-                                                         (vox_u16)player)) {
-            vox_u16 mode = demo_match.bots[player].mode;
-            const char *name = mode < 4U ? ai_names[mode] : "AI";
-            vox_ui_text_center(&demo_ui, x, y + 10, 1, name,
-                               DEMO_VGA_LIGHT_CYAN);
+        if (app->options.debug) {
+            /*
+             * With F1 held down, label every miner with the tool it is
+             * actually holding.  Without this the archetype weapon
+             * preferences can only be read off a histogram after the fact,
+             * which makes them impossible to judge while playing.
+             */
+            const vox_digs_weapon_properties *held =
+                vox_digs_weapon_get(demo_match.selected_weapon[player]);
+            if (held != 0) {
+                vox_ui_text_center(&demo_ui, x, y + 10, 1, held->name,
+                                   DEMO_VGA_YELLOW);
+            }
+            if (vox_digs_player_is_bot(&demo_match, (vox_u16)player)) {
+                vox_u16 mode = demo_match.bots[player].mode;
+                vox_u16 archetype = vox_digs_bot_archetype(&demo_match,
+                                                           (vox_u16)player);
+                const char *name = mode < 4U ? ai_names[mode] : "AI";
+                const char *who = vox_digs_archetype_name(archetype);
+                char label[48];
+                sprintf(label, "%s %s", who != 0 ? who : "BOT", name);
+                vox_ui_text_center(&demo_ui, x, y + 18, 1, label,
+                                   DEMO_VGA_LIGHT_CYAN);
+            }
         }
     }
     for (player = 0; app->screen == DEMO_PLAY &&
@@ -4925,11 +4943,21 @@ static void demo_submit_human_input(demo_app *app)
                 keys[*rope]) physical_rope = 1;
             if (fire_key != 0 && keys[*fire_key]) fire = 1;
             if (player == 0 && app->mouse_inside) {
+                /*
+                 * Left fires, middle throws the rope, right runs the steam
+                 * pack.  Rope moved off the right button so the two
+                 * continuous-hold actions sit under the two large buttons
+                 * and the rope gets its own.
+                 */
                 if ((mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0U) {
                     fire = 1;
                 }
-                if ((mouse_buttons & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0U) {
+                if ((mouse_buttons & SDL_BUTTON(SDL_BUTTON_MIDDLE)) != 0U) {
                     physical_rope = 1;
+                }
+                if ((mouse_buttons & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0U) {
+                    input.actions = (vox_u16)(input.actions |
+                                              VOX_DIGS_ACTION_STEAM);
                 }
             }
             if (bark_key != 0 && keys[*bark_key]) bark = 1;
@@ -4944,6 +4972,25 @@ static void demo_submit_human_input(demo_app *app)
                  */
                 if (app->local_players == 1) {
                     int aimed = 0;
+                    /*
+                     * Solo play leaves player two's whole right-hand cluster
+                     * free, so it becomes a complete keyboard scheme: left
+                     * hand moves and jumps, right hand aims, fires, thrusts,
+                     * and ropes. Nothing here is reachable with two locals.
+                     */
+                    if (keys[SDL_SCANCODE_RCTRL] ||
+                        keys[SDL_SCANCODE_RETURN] ||
+                        keys[SDL_SCANCODE_KP_ENTER]) {
+                        fire = 1;
+                    }
+                    if (keys[SDL_SCANCODE_RSHIFT]) {
+                        input.actions = (vox_u16)(input.actions |
+                                                  VOX_DIGS_ACTION_STEAM);
+                    }
+                    if (keys[SDL_SCANCODE_SLASH] ||
+                        keys[SDL_SCANCODE_RALT]) {
+                        physical_rope = 1;
+                    }
                     if (keys[SDL_SCANCODE_UP] &&
                         app->aim_world_y[0] > 0U) {
                         --app->aim_world_y[0];

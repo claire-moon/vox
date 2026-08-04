@@ -130,12 +130,18 @@ Player 1 keyboard and mouse:
   A / D             Move left/right.
   Space             Jump.
   Left Shift        Steam pack.
-  Right mouse       Operate rope in the selected Hold/Toggle mode.
+  Middle mouse      Operate rope in the selected Hold/Toggle mode.
+  Right mouse       Steam pack thrust.
   E or left mouse   Fire/use selected tool.
   Mouse             Aim exactly through the current camera transform.
   Arrow keys        Aim without a mouse, in single-player only. Moving the
                     mouse takes the cursor back. With two local players the
                     arrows stay Player 2's movement and are not used here.
+  R-Ctrl / Enter    Fire, single-player only. With the arrows above this
+                    gives a complete no-mouse scheme: left hand moves and
+                    jumps, right hand aims, fires, thrusts, and ropes.
+  R-Shift           Steam pack, single-player only.
+  / or R-Alt        Rope, single-player only.
   W / S             Reel an attached rope shorter/longer.
   1 through 0       Direct-select the ten tools.
   -                 Direct-select the charged Mining Rail.
