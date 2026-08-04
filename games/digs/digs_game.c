@@ -84,6 +84,13 @@
 #define DIGS_AI_HEARING_TICKS 120U
 #define DIGS_AI_DECISION_TICKS 8U
 #define DIGS_AI_RETREAT_HEALTH 28U
+/*
+ * How far a bot looks for lava, in cells, before and after caution scaling.
+ * A cautious miner starts backing away roughly twice as early as a reckless
+ * one, which is most of what separates RIVET from CINDER in a hot cavern.
+ */
+#define DIGS_AI_HAZARD_BASE_MARGIN 4U
+#define DIGS_AI_HAZARD_CAUTION_SPAN 8U
 #define DIGS_SPAWN_HEADROOM_CELLS DIGS_SCALE(2U)
 #define DIGS_SPAWN_SUPPORT_CELLS DIGS_SCALE(2U)
 #define DIGS_LAVA_BASIN_TOP (VOX_WORLD_HEIGHT - DIGS_SCALE(12U))
@@ -3892,6 +3899,81 @@ vox_u16 vox_digs_bot_archetype(const vox_digs_match *match, vox_u16 player)
 }
 
 /*
+ * How much trouble is this miner standing in, and which way is out?
+ *
+ * Bots read no hazards at all before this: vox_digs_bot_think never looked at
+ * lava_surface_y, never sampled a material, and never checked how far it was
+ * to the floor.  They walked into lava and died there, and those deaths were
+ * the largest single cause of bots appearing to kill themselves -- every one
+ * of the twenty-three unattributed deaths in a four-match sample carried the
+ * lava damage tag, with no crush events at all.
+ *
+ * Returns 0 clear, 1 wary, 2 get out now, and writes a horizontal escape
+ * direction.  Caution scales how early a miner starts worrying, so RIVET backs
+ * off long before CINDER does.  Everything read here is either a scalar on the
+ * match or a bounded cell probe, so the cost does not scale with the world.
+ */
+static vox_u16 digs_ai_hazard(const vox_digs_match *match, vox_u16 player,
+                              vox_u16 caution, vox_i16 *escape_x)
+{
+    vox_i32 bot_x = digs_q16_to_cell(match->players[player].position_x.value_q16);
+    vox_i32 bot_y = digs_q16_to_cell(match->players[player].position_y.value_q16 +
+                                     match->players[player].half_height_q16);
+    vox_i32 margin = (vox_i32)DIGS_AI_HAZARD_BASE_MARGIN +
+                     (vox_i32)((vox_u32)caution * DIGS_AI_HAZARD_CAUTION_SPAN /
+                               255U);
+    vox_i32 probe;
+    vox_u16 level = 0U;
+    vox_i32 left_clear = 0;
+    vox_i32 right_clear = 0;
+    *escape_x = 0;
+    /* The rising basin is an exact line, so no sampling is needed for it. */
+    if (bot_y + margin >= (vox_i32)match->lava_surface_y) {
+        level = bot_y + (margin / 2L) >= (vox_i32)match->lava_surface_y ? 2U : 1U;
+    }
+    /* Pooled or tool-made lava has to be looked for. */
+    for (probe = -margin; probe <= margin; ++probe) {
+        vox_i32 sample_x = bot_x + probe;
+        vox_i32 sample_y;
+        if (sample_x < 0L || sample_x >= (vox_i32)VOX_WORLD_WIDTH) {
+            continue;
+        }
+        for (sample_y = bot_y; sample_y <= bot_y + 2L; ++sample_y) {
+            const vox_cell *cell;
+            if (sample_y < 0L || sample_y >= (vox_i32)VOX_WORLD_HEIGHT) {
+                continue;
+            }
+            cell = vox_world_cell(&match->world, (vox_u32)sample_x,
+                                  (vox_u32)sample_y, VOX_WORLD_DEPTH - 1U);
+            if (cell == 0 || cell->material != VOX_MAT_LAVA) {
+                continue;
+            }
+            if (probe == 0L) {
+                level = 2U;
+            } else if (level < 1U) {
+                level = 1U;
+            }
+            if (probe < 0L) {
+                left_clear = 1;
+            } else if (probe > 0L) {
+                right_clear = 1;
+            }
+        }
+    }
+    if (level != 0U) {
+        /* Run from the side that has lava; ties break away from the basin. */
+        if (left_clear && !right_clear) {
+            *escape_x = 1;
+        } else if (right_clear && !left_clear) {
+            *escape_x = -1;
+        } else {
+            *escape_x = bot_x < (vox_i32)(VOX_WORLD_WIDTH / 2U) ? 1 : -1;
+        }
+    }
+    return level;
+}
+
+/*
  * Score every tool the arsenal allows and take the best.
  *
  * This replaced flat distance bands that handed every bot the same weapon at
@@ -3963,6 +4045,9 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     vox_u16 actions = 0U;
     vox_i16 move_x = 0;
     vox_u16 visible = 0U;
+    vox_u16 hazard;
+    vox_i16 escape_x = 0;
+    const vox_digs_personality *personality;
     if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
         !vox_digs_player_is_bot(match, player) || !match->alive[player]) {
         return VOX_ERR_INVALID;
@@ -3977,6 +4062,12 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
         return VOX_OK;
     }
     state->decision_ticks = DIGS_AI_DECISION_TICKS;
+    personality = vox_digs_personality_get(
+        vox_digs_bot_archetype(match, player));
+    if (personality == 0) {
+        personality = vox_digs_personality_get(VOX_DIGS_ARCHETYPE_ENGINEER);
+    }
+    hazard = digs_ai_hazard(match, player, personality->caution, &escape_x);
     bot_x = digs_q16_to_cell(match->players[player].position_x.value_q16);
     bot_y = digs_q16_to_cell(match->players[player].position_y.value_q16);
     for (candidate = 0U; candidate < match->rules.player_count; ++candidate) {
@@ -4051,6 +4142,25 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     }
     if (state->mode == VOX_DIGS_AI_ATTACKING && nearest < 10U) {
         move_x = goal_x < bot_x ? 24575 : -24575;
+    }
+    /*
+     * Nothing is worth standing in lava for.  This overrides the combat and
+     * roaming goals entirely, because a bot that keeps walking at its target
+     * through a magma pool is the "killing themselves randomly" the lead
+     * reported -- and it should be personality, not pathfinding, that decides
+     * a miner dies.
+     */
+    if (hazard != 0U && escape_x != 0) {
+        move_x = escape_x > 0 ? 32767 : -32767;
+        goal_x = bot_x + (escape_x > 0 ? 12L : -12L);
+        if (hazard >= 2U) {
+            /* Climb out: jump, and burn steam if there is any left. */
+            actions = (vox_u16)(actions | VOX_DIGS_ACTION_JUMP);
+            if (match->steam_q16[player] > 4096U) {
+                actions = (vox_u16)(actions | VOX_DIGS_ACTION_STEAM);
+            }
+            goal_y = bot_y - 12L;
+        }
     }
     if ((match->players[player].flags & VOX_PHYSICS_BODY_BLOCKED_X) ||
         ((match->tick + (vox_u32)player * 31U) % 181U) == 0U) {
