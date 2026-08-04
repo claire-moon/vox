@@ -2457,6 +2457,36 @@ static int test_bot_archetypes_and_charge_weapons(void)
  * A wide excavation must cave in, and a narrow tunnel must stay usable --
  * otherwise the digging tools destroy the tunnels they exist to make.
  */
+static int test_kill_heals_the_killer(void)
+{
+    vox_digs_rules rules;
+    vox_u16 before;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 1;
+    match.spawn_shield_ticks[0] = 0U;
+    match.spawn_shield_ticks[1] = 0U;
+    /* Hurt, but not so hurt that a full heal would be capped. */
+    match.health[0] = 20U;
+    before = match.health[0];
+    if (vox_digs_record_kill(&match, 0U, 1U) != VOX_OK) return 2;
+    if (match.health[0] <= before) return 3;
+    if (match.health[0] > VOX_DIGS_MAX_HEALTH) return 4;
+
+    /* A kill at near-full health must cap rather than overflow. */
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 5;
+    match.spawn_shield_ticks[0] = 0U;
+    match.spawn_shield_ticks[1] = 0U;
+    match.health[0] = (vox_u16)(VOX_DIGS_MAX_HEALTH - 1U);
+    if (vox_digs_record_kill(&match, 0U, 1U) != VOX_OK) return 6;
+    if (match.health[0] != VOX_DIGS_MAX_HEALTH) return 7;
+
+    /* The victim stays dead at zero -- healing is the killer's alone. */
+    if (match.health[1] != 0U || match.alive[1]) return 8;
+    return 0;
+}
+
 static int test_bot_bores_through_a_wall(void)
 {
     vox_digs_rules rules;
@@ -3252,6 +3282,13 @@ int main(void)
         if (result != 0) {
             fprintf(stderr, "DIGS archetype mismatch (%d)\n", result);
             return 65;
+        }
+    }
+    {
+        int result = test_kill_heals_the_killer();
+        if (result != 0) {
+            fprintf(stderr, "DIGS kill-heal mismatch (%d)\n", result);
+            return 67;
         }
     }
     {

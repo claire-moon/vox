@@ -5181,6 +5181,27 @@ static void demo_submit_human_input(demo_app *app)
             input.actions = (vox_u16)(input.actions |
                                       VOX_DIGS_ACTION_FIRE);
         }
+        /*
+         * Keep holding jump after the hop tops out and the steampack takes
+         * over, so nobody has to discover a separate control to get height.
+         * A dedicated steam binding still works, and still works on the
+         * ground, which this deliberately does not.
+         *
+         * This is an input binding and lives here rather than in the
+         * simulation: making it a movement rule applied it to bots too, and
+         * a bot holds JUMP as its reflex for being blocked and latches that
+         * for a whole decision window.  All three of them flew constantly,
+         * which cost sixteen extra unattributed deaths over a 10800-tick
+         * soak.  Bots reach for the steampack where they mean it instead.
+         */
+        if ((input.actions & VOX_DIGS_ACTION_JUMP) != 0U &&
+            demo_match.alive[player] &&
+            demo_match.jump_hold_ticks[player] == 0U &&
+            (demo_match.players[player].flags &
+             VOX_PHYSICS_BODY_GROUNDED) == 0U) {
+            input.actions = (vox_u16)(input.actions |
+                                      VOX_DIGS_ACTION_STEAM);
+        }
         (void)vox_digs_submit_input(&demo_match, &input);
         if (player < (int)DEMO_LOCAL_MAX) {
             if (previous_down && !app->keyboard_previous_down[player]) {

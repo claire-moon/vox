@@ -203,6 +203,15 @@
 #define DIGS_SPAWN_SUPPORT_CELLS DIGS_SCALE(2U)
 #define DIGS_LAVA_BASIN_TOP (VOX_WORLD_HEIGHT - DIGS_SCALE(12U))
 #define DIGS_RESPAWN_RETRY_TICKS 30U
+/*
+ * Health returned to a miner for a kill.
+ *
+ * This is the first and only path in the simulation that raises the health of
+ * a living miner -- every other write decrements or zeroes it -- so it is
+ * deliberately modest and capped at full.  It also means any AI rule that
+ * waits for health to recover is now merely rare rather than unreachable.
+ */
+#define DIGS_KILL_HEAL 50U
 #define DIGS_MUZZLE_CLEARANCE_Q16 16384L
 
 static const vox_digs_weapon_properties digs_weapons[VOX_DIGS_TOOL_COUNT] = {
@@ -230,9 +239,9 @@ static const vox_digs_weapon_properties digs_weapons[VOX_DIGS_TOOL_COUNT] = {
     {"FIRECRACKER", 48U, 42U, 8U, 768U, 50U,
      VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_EXPLOSIVE |
      VOX_DIGS_WEAPON_GRAVITY, DIGS_FIRECRACKER_CHARGE_TICKS, 0U},
-    {"BORE DRILL", 10U, 100U, 3U, 0U, 0U,
+    {"BORING DRILL", 10U, 100U, 3U, 0U, 0U,
      VOX_DIGS_WEAPON_MELEE | VOX_DIGS_WEAPON_PENETRATING, 0U, 0U},
-    {"MINING RAIL", DIGS_RAIL_COOLDOWN_TICKS, DIGS_RAIL_MAX_DAMAGE, 0U,
+    {"RAILSHOT", DIGS_RAIL_COOLDOWN_TICKS, DIGS_RAIL_MAX_DAMAGE, 0U,
      0U, 0U, VOX_DIGS_WEAPON_HITSCAN | VOX_DIGS_WEAPON_PENETRATING,
      DIGS_RAIL_MAX_CHARGE_TICKS, DIGS_RAIL_START_ENERGY}
 };
@@ -2312,6 +2321,12 @@ vox_result vox_digs_record_kill(vox_digs_match *match, vox_u16 killer,
     if (match->scores[killer] < 65535U) {
         match->scores[killer]++;
     }
+    if (match->alive[killer]) {
+        vox_u32 healed = (vox_u32)match->health[killer] + DIGS_KILL_HEAL;
+        match->health[killer] = healed > (vox_u32)VOX_DIGS_MAX_HEALTH ?
+                                (vox_u16)VOX_DIGS_MAX_HEALTH :
+                                (vox_u16)healed;
+    }
     match->alive[victim] = 0U;
     match->health[victim] = 0U;
     match->deaths[victim]++;
@@ -3987,7 +4002,7 @@ static const digs_weapon_band digs_weapon_bands[VOX_DIGS_TOOL_COUNT] = {
      * target, which the AI has no way to arrange, so it is weighted low
      * everywhere and kept here as a digging tool rather than a duel option.
      */
-    {0U, 8U},     /* BORE DRILL   straight down, point blank */
+    {0U, 8U},     /* BORING DRILL straight down, point blank */
     {20U, 120U}   /* RAIL GUN     penetrating, the sniping tool */
 };
 
@@ -4090,7 +4105,7 @@ static vox_u16 digs_ai_stuck_threshold(vox_u16 archetype)
  * more than damage.  The FIRECRACKER (radius 8, thrown on a fifty-tick fuse)
  * and the GIANT HAMMER (radius 7 on a melee swing) both engulf the digger,
  * and including them cost measurable self-inflicted damage in the soak.
- * The MINING RAIL is excluded for the opposite reason -- it is too good at
+ * The RAILSHOT is excluded for the opposite reason -- it is too good at
  * digging.  Soil costs it DIGS_RAIL_SOFT_COST (5) of a 180-energy shot, so
  * one trigger pull bores some thirty-six cells: far past what cohesion holds
  * up, and the miner walks into the tunnel it just undermined.  What is left

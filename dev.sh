@@ -77,8 +77,12 @@ run_gates() {
     say "Benchmark"
     # A changed state hash exits 2 and means the simulation behaves
     # differently.  That is sometimes correct -- './dev.sh rebase' records it.
-    if ! "$ROOT/tools/vox-bench.sh" "$BUILD_DIR"; then
-        status=$?
+    # Capture the status directly: inside "if ! cmd", $? is the exit of the
+    # negation and is therefore always 0, so the old form reported every
+    # behaviour change as a pass and "All green" printed over a failed gate.
+    status=0
+    "$ROOT/tools/vox-bench.sh" "$BUILD_DIR" || status=$?
+    if [ "$status" -ne 0 ]; then
         if [ "$status" = 2 ]; then
             printf '\n\033[1;33mSimulation behaviour changed.\033[0m\n'
             printf 'If that was intended: ./dev.sh rebase\n'
@@ -115,7 +119,7 @@ case "$command" in
     check)
         build "$BUILD_DIR"
         run_tests
-        run_gates
+        run_gates || exit $?
         say "All green -- safe to commit"
         ;;
     rebase)
