@@ -82,13 +82,40 @@
 #define DIGS_REACTION_SAMPLES 128U
 #define DIGS_AI_MEMORY_TICKS 180U
 #define DIGS_AI_HEARING_TICKS 120U
-#define DIGS_AI_DECISION_TICKS 8U
+/*
+ * How often a bot deliberates.
+ *
+ * The stored counter is one less than the period: the throttle decrements and
+ * returns before it resets, so storing N yields N+1 ticks between
+ * deliberations.  The old fixed value of 8 therefore ran at a true period of
+ * 9, and every cadence figure derived from it was off by one.
+ *
+ * Period is personality-driven.  An impatient miner re-decides often and looks
+ * twitchy; a patient one commits to a choice and looks deliberate.  This is
+ * what makes CINDER frantic and RIVET measured, and it is the first use of the
+ * patience trait, which was dead weight until now.
+ *
+ *   period = MIN + patience * SPAN / 255      CINDER 5, FLAMEY 9, RIVET 13
+ */
+#define DIGS_AI_PERIOD_MIN_TICKS 4U
+#define DIGS_AI_PERIOD_SPAN_TICKS 12U
+/*
+ * Separate from the period: these are the widths of the duty-cycle windows the
+ * fire and bark gates test against.  They happen to have been the same number
+ * as the old period, which made the coupling look intentional when it was not.
+ */
+#define DIGS_AI_FIRE_WINDOW_TICKS 8U
+#define DIGS_AI_BARK_WINDOW_TICKS 8U
 #define DIGS_AI_RETREAT_HEALTH 28U
 /*
  * How far a bot looks for lava, in cells, before and after caution scaling.
  * A cautious miner starts backing away roughly twice as early as a reckless
  * one, which is most of what separates RIVET from CINDER in a hot cavern.
  */
+/* Hazard level at which survival pre-empts the decision cadence entirely. */
+#define DIGS_AI_HAZARD_CRITICAL 2U
+/* Keep a little steam in reserve rather than arriving out of thrust. */
+#define DIGS_AI_HAZARD_STEAM_RESERVE 4096U
 #define DIGS_AI_HAZARD_BASE_MARGIN 4U
 #define DIGS_AI_HAZARD_CAUTION_SPAN 8U
 #define DIGS_SPAWN_HEADROOM_CELLS DIGS_SCALE(2U)
@@ -3913,6 +3940,23 @@ vox_u16 vox_digs_bot_archetype(const vox_digs_match *match, vox_u16 player)
  * off long before CINDER does.  Everything read here is either a scalar on the
  * match or a bounded cell probe, so the cost does not scale with the world.
  */
+/*
+ * Ticks a bot waits before deliberating again.  Returns the value to STORE in
+ * decision_ticks, which is one less than the true period -- see the constants.
+ */
+static vox_u16 digs_ai_decision_delay(const vox_digs_personality *personality)
+{
+    vox_u32 period = DIGS_AI_PERIOD_MIN_TICKS;
+    if (personality != 0) {
+        period += ((vox_u32)personality->patience *
+                   DIGS_AI_PERIOD_SPAN_TICKS) / 255U;
+    }
+    if (period < 1U) {
+        period = 1U;
+    }
+    return (vox_u16)(period - 1U);
+}
+
 static vox_u16 digs_ai_hazard(const vox_digs_match *match, vox_u16 player,
                               vox_u16 caution, vox_i16 *escape_x)
 {
@@ -4057,16 +4101,50 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     if (state->memory_ticks > 0U) {
         state->memory_ticks--;
     }
-    if (state->decision_ticks > 0U) {
-        state->decision_ticks--;
-        return VOX_OK;
-    }
-    state->decision_ticks = DIGS_AI_DECISION_TICKS;
     personality = vox_digs_personality_get(
         vox_digs_bot_archetype(match, player));
     if (personality == 0) {
         personality = vox_digs_personality_get(VOX_DIGS_ARCHETYPE_ENGINEER);
     }
+    /*
+     * Reflex pass -- runs every tick, ahead of the decision throttle.
+     *
+     * Hazard used to be read inside the throttled path, so a patient miner
+     * only noticed lava when it next deliberated.  Once cadence became
+     * personality-driven that got measurably worse: RIVET deliberates every
+     * thirteen ticks, and lava deals twelve damage per tick, so he could take
+     * more than a full health bar of damage before looking down.  Making the
+     * cadence expressive therefore required making survival exempt from it.
+     *
+     * The probe is small -- about 2 * margin + 1 columns at one depth -- so
+     * paying it every tick for three bots is far cheaper than the deliberation
+     * it guards.
+     */
+    hazard = digs_ai_hazard(match, player, personality->caution, &escape_x);
+    if (hazard >= DIGS_AI_HAZARD_CRITICAL && escape_x != 0) {
+        vox_u16 reflex = (vox_u16)(escape_x > 0 ? VOX_DIGS_ACTION_RIGHT :
+                                                  VOX_DIGS_ACTION_LEFT);
+        reflex = (vox_u16)(reflex | VOX_DIGS_ACTION_JUMP);
+        if (match->steam_q16[player] > DIGS_AI_HAZARD_STEAM_RESERVE) {
+            reflex = (vox_u16)(reflex | VOX_DIGS_ACTION_STEAM);
+        }
+        match->player_actions[player] = reflex;
+        match->move_x_q15[player] = escape_x > 0 ? 32767 : -32767;
+        match->move_y_q15[player] = 0;
+        /*
+         * Still age the throttle, so escaping does not also buy a free
+         * deliberation the moment the miner is clear.
+         */
+        if (state->decision_ticks > 0U) {
+            state->decision_ticks--;
+        }
+        return VOX_OK;
+    }
+    if (state->decision_ticks > 0U) {
+        state->decision_ticks--;
+        return VOX_OK;
+    }
+    state->decision_ticks = digs_ai_decision_delay(personality);
     hazard = digs_ai_hazard(match, player, personality->caution, &escape_x);
     bot_x = digs_q16_to_cell(match->players[player].position_x.value_q16);
     bot_y = digs_q16_to_cell(match->players[player].position_y.value_q16);
@@ -4217,7 +4295,7 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
         actions = (vox_u16)(actions | VOX_DIGS_ACTION_FIRE);
     } else if (match->weapon_cooldown[player] == 0U && visible &&
                ((match->tick + (vox_u32)player * 17U) % 24U) <
-                   DIGS_AI_DECISION_TICKS) {
+                   DIGS_AI_FIRE_WINDOW_TICKS) {
         match->selected_weapon[player] =
             digs_ai_weapon(match, player, nearest);
         actions = (vox_u16)(actions | VOX_DIGS_ACTION_FIRE);
@@ -4226,7 +4304,7 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     match->move_x_q15[player] = move_x;
     match->move_y_q15[player] = 0;
     if (((match->tick + (vox_u32)player * 43U) % 240U) <
-        DIGS_AI_DECISION_TICKS) {
+        DIGS_AI_BARK_WINDOW_TICKS) {
         digs_emit_event(match, VOX_DIGS_EVENT_AI_BARK, player, target,
                         match->selected_weapon[player], VOX_MAT_SMOKE,
                         match->players[player].position_x.value_q16,
