@@ -311,6 +311,14 @@ typedef struct vox_digs_ai_state {
      * for the rest of its life: the entry condition stays true forever.
      */
     vox_u16 retreat_lock_ticks;
+    /*
+     * Where a roaming miner is actually walking to, and how long it has left
+     * to get there.  Roaming used to be a wall-to-wall ping-pong with no
+     * destination, which is why bots spent three quarters of a match
+     * wandering and almost never found one another.
+     */
+    vox_u16 roam_goal_x;
+    vox_u16 roam_goal_ticks;
     vox_i32 last_seen_x_q16;
     vox_i32 last_seen_y_q16;
 } vox_digs_ai_state;

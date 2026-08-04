@@ -83,6 +83,16 @@
 #define DIGS_AI_MEMORY_TICKS 180U
 #define DIGS_AI_HEARING_TICKS 120U
 /*
+ * Gunfire carries 52 cells.  An explosion carries across the arena -- it is
+ * the loudest thing in the mine and the surest sign of where the fight is.
+ * Bots use it to choose where to roam, which is the difference between three
+ * bots wandering separate pockets and three bots converging on trouble.
+ */
+#define DIGS_AI_COMMOTION_CELLS 220U
+/* How long a roam destination stands before it is reconsidered. */
+#define DIGS_AI_ROAM_GOAL_TICKS 300U
+#define DIGS_AI_ROAM_ARRIVE_CELLS 6U
+/*
  * How often a bot deliberates.
  *
  * The stored counter is one less than the period: the throttle decrements and
@@ -1795,6 +1805,8 @@ vox_result vox_digs_match_init(vox_digs_match *match,
         match->bots[i].roam_direction = (vox_i16)((i & 1U) ? -1 : 1);
         match->bots[i].decision_ticks = (vox_u16)(i * 2U);
         match->bots[i].retreat_lock_ticks = 0U;
+        match->bots[i].roam_goal_x = 0U;
+        match->bots[i].roam_goal_ticks = 0U;
         match->bots[i].last_seen_x_q16 = 0L;
         match->bots[i].last_seen_y_q16 = 0L;
         digs_init_anatomy(match, i);
@@ -3805,6 +3817,44 @@ static int digs_ai_line_of_sight(const vox_world *world,
     return 1;
 }
 
+/*
+ * Where the loudest recent explosion was, in cells, or -1 for silence.
+ * Unlike hearing a target this does not need line of sight or a live enemy --
+ * it is the sound of trouble, and it is what gives roaming a direction.
+ */
+static vox_i32 digs_ai_commotion_x(const vox_digs_match *match,
+                                   vox_u16 player, vox_i32 bot_x,
+                                   vox_i32 bot_y)
+{
+    vox_u16 slot;
+    vox_u32 newest_sequence = 0U;
+    vox_i32 found = -1L;
+    for (slot = 0U; slot < VOX_DIGS_MAX_EVENTS; ++slot) {
+        const vox_digs_event *event = &match->events[slot];
+        vox_i32 event_x;
+        vox_i32 event_y;
+        if (event->sequence == 0U || event->sequence <= newest_sequence ||
+            event->tick > match->tick ||
+            match->tick - event->tick > DIGS_AI_HEARING_TICKS) {
+            continue;
+        }
+        if (event->type != VOX_DIGS_EVENT_EXPLOSION) {
+            continue;
+        }
+        if (event->source == player) {
+            continue;
+        }
+        event_x = digs_q16_to_cell(event->position_x_q16);
+        event_y = digs_q16_to_cell(event->position_y_q16);
+        if (digs_abs_i32(event_x - bot_x) + digs_abs_i32(event_y - bot_y) <=
+            DIGS_AI_COMMOTION_CELLS) {
+            newest_sequence = event->sequence;
+            found = event_x;
+        }
+    }
+    return found;
+}
+
 static vox_u16 digs_ai_heard_target(const vox_digs_match *match,
                                     vox_u16 player, vox_i32 bot_x,
                                     vox_i32 bot_y)
@@ -4305,14 +4355,46 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     goal_x = digs_q16_to_cell(state->last_seen_x_q16);
     goal_y = digs_q16_to_cell(state->last_seen_y_q16);
     if (state->mode == VOX_DIGS_AI_ROAMING) {
-        if ((match->players[player].flags & VOX_PHYSICS_BODY_BLOCKED_X) ||
-            state->state_ticks > 240U) {
-            state->roam_direction = (vox_i16)-state->roam_direction;
-            state->state_ticks = 0U;
+        /*
+         * Roam toward somewhere, not merely away from a wall.
+         *
+         * This used to walk until BLOCKED_X and reverse, which trapped bots
+         * in whatever pocket of the map they spawned in: measured over 3600
+         * ticks they spent 70-79% of a match roaming and 1-2% attacking,
+         * because they simply never found each other. A destination is chosen
+         * from the loudest recent explosion when there is one -- trouble is
+         * worth walking toward -- and otherwise from a deterministic sweep
+         * across the arena so separate pockets still eventually meet.
+         */
+        vox_i32 commotion;
+        if (state->roam_goal_ticks > 0U) {
+            state->roam_goal_ticks--;
         }
-        move_x = state->roam_direction > 0 ? 24575 : -24575;
-        goal_x = bot_x + (state->roam_direction > 0 ? 16L : -16L);
+        commotion = digs_ai_commotion_x(match, player, bot_x, bot_y);
+        if (commotion >= 0L) {
+            state->roam_goal_x = (vox_u16)commotion;
+            state->roam_goal_ticks = DIGS_AI_ROAM_GOAL_TICKS;
+        } else if (state->roam_goal_ticks == 0U ||
+                   digs_abs_i32((vox_i32)state->roam_goal_x - bot_x) <=
+                       DIGS_AI_ROAM_ARRIVE_CELLS) {
+            /*
+             * No trouble to walk toward, so sweep. The salt keeps the three
+             * bots from picking the same spot, and the destination is a
+             * genuine map position rather than a few cells ahead of the nose.
+             */
+            vox_u32 pick = digs_noise(match->rules.seed, match->tick, player,
+                                      0x5EEDU) % (vox_u32)VOX_WORLD_WIDTH;
+            state->roam_goal_x = (vox_u16)pick;
+            state->roam_goal_ticks = DIGS_AI_ROAM_GOAL_TICKS;
+        }
+        goal_x = (vox_i32)state->roam_goal_x;
         goal_y = bot_y - 8L;
+        if (goal_x + (vox_i32)DIGS_AI_ROAM_ARRIVE_CELLS < bot_x) {
+            state->roam_direction = -1;
+        } else if (goal_x > bot_x + (vox_i32)DIGS_AI_ROAM_ARRIVE_CELLS) {
+            state->roam_direction = 1;
+        }
+        move_x = state->roam_direction > 0 ? 32767 : -32767;
     } else if (state->mode == VOX_DIGS_AI_RETREATING) {
         move_x = goal_x < bot_x ? 32767 : -32767;
     } else if (goal_x + 2L < bot_x) {
@@ -5330,6 +5412,9 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
         hash = digs_hash_mix(hash, (vox_u32)match->bots[i].decision_ticks);
         hash = digs_hash_mix(hash,
                              (vox_u32)match->bots[i].retreat_lock_ticks);
+        hash = digs_hash_mix(hash, (vox_u32)match->bots[i].roam_goal_x);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->bots[i].roam_goal_ticks);
         hash = digs_hash_mix(hash,
                              (vox_u32)match->bots[i].last_seen_x_q16);
         hash = digs_hash_mix(hash,
