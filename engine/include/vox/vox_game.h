@@ -199,6 +199,46 @@ typedef enum vox_digs_tone {
     VOX_DIGS_TONE_COUNT = 8
 } vox_digs_tone;
 
+/*
+ * What just happened between two miners, from the point of view of whoever is
+ * about to speak about it.
+ *
+ * Severity is expressed by *which* stimulus fires, not by scaling a number:
+ * taking a leg off is its own entry rather than a large HURT.  That keeps the
+ * valence table readable and means a line pool can be written per stimulus
+ * without also having to cover a range of intensities.
+ */
+typedef enum vox_digs_stimulus {
+    VOX_DIGS_STIMULUS_NONE = 0,
+    VOX_DIGS_STIMULUS_FIRST_MEETING = 1,
+    VOX_DIGS_STIMULUS_SPOTTED = 2,
+    VOX_DIGS_STIMULUS_HURT_THEM = 3,
+    VOX_DIGS_STIMULUS_HURT_BY = 4,
+    VOX_DIGS_STIMULUS_NEAR_MISS = 5,
+    VOX_DIGS_STIMULUS_LIMB_TAKEN = 6,
+    VOX_DIGS_STIMULUS_LIMB_LOST = 7,
+    VOX_DIGS_STIMULUS_KILLED_THEM = 8,
+    VOX_DIGS_STIMULUS_KILLED_BY = 9,
+    VOX_DIGS_STIMULUS_REVENGE = 10,
+    VOX_DIGS_STIMULUS_HUMILIATED = 11,
+    VOX_DIGS_STIMULUS_STREAK = 12,
+    VOX_DIGS_STIMULUS_SAVED_BY = 13,
+    VOX_DIGS_STIMULUS_TEAMED_UP = 14,
+    VOX_DIGS_STIMULUS_BETRAYED = 15,
+    VOX_DIGS_STIMULUS_TRUCE_OFFERED = 16,
+    VOX_DIGS_STIMULUS_TRUCE_ACCEPTED = 17,
+    VOX_DIGS_STIMULUS_TRUCE_BROKEN = 18,
+    VOX_DIGS_STIMULUS_TAUNTED = 19,
+    VOX_DIGS_STIMULUS_LAVA_CLOSE = 20,
+    VOX_DIGS_STIMULUS_BURIED = 21,
+    VOX_DIGS_STIMULUS_DOOMED = 22,
+    VOX_DIGS_STIMULUS_LONG_ABSENCE = 23,
+    VOX_DIGS_STIMULUS_MATCH_START = 24,
+    VOX_DIGS_STIMULUS_MATCH_END = 25,
+    VOX_DIGS_STIMULUS_IDLE = 26,
+    VOX_DIGS_STIMULUS_COUNT = 27
+} vox_digs_stimulus;
+
 /* Four slots choose two. */
 #define VOX_DIGS_MAX_PAIRS 6U
 /* How many lines a pair remembers, so it does not repeat itself immediately. */
@@ -214,6 +254,9 @@ typedef struct vox_digs_contract {
     vox_u16 met;              /* have they actually laid eyes on each other */
     vox_u16 recent_lines[VOX_DIGS_RECENT_LINES];
     vox_u16 recent_cursor;
+    vox_u16 last_stimulus;    /* freshest thing that happened between them */
+    vox_u16 last_actor;       /* who did it; the other one is the subject */
+    vox_u32 last_stimulus_tick;
 } vox_digs_contract;
 
 typedef enum vox_digs_ai_mode {
@@ -514,6 +557,7 @@ vox_u16 vox_digs_pair_index(vox_u16 a, vox_u16 b);
 const vox_digs_contract *vox_digs_contract_get(const vox_digs_match *match,
                                                vox_u16 a, vox_u16 b);
 const char *vox_digs_tone_name(vox_u16 tone);
+const char *vox_digs_stimulus_name(vox_u16 stimulus);
 vox_result vox_digs_submit_input(vox_digs_match *match,
                                  const vox_digs_input *input);
 vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,

@@ -2457,6 +2457,83 @@ static int test_bot_archetypes_and_charge_weapons(void)
  * A wide excavation must cave in, and a narrow tunnel must stay usable --
  * otherwise the digging tools destroy the tunnels they exist to make.
  */
+static int test_stimuli_reach_the_contract(void)
+{
+    vox_digs_rules rules;
+    vox_u16 stimulus;
+    const vox_digs_contract *contract;
+    vox_i16 after_hit;
+
+    /* Every stimulus must name itself, and out of range must not read past. */
+    for (stimulus = 0U; stimulus < VOX_DIGS_STIMULUS_COUNT; ++stimulus) {
+        const char *name = vox_digs_stimulus_name(stimulus);
+        if (name == 0 || name[0] == '\0') return 1;
+    }
+    if (vox_digs_stimulus_name(VOX_DIGS_STIMULUS_COUNT) == 0) return 2;
+
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 3;
+    match.spawn_shield_ticks[0] = 0U;
+    match.spawn_shield_ticks[1] = 0U;
+    contract = vox_digs_contract_get(&match, 0U, 1U);
+    if (contract == 0) return 4;
+    if (contract->last_stimulus != VOX_DIGS_STIMULUS_NONE) return 5;
+    if (contract->last_actor != VOX_DIGS_NO_PLAYER) return 6;
+
+    /* A hit records who did it and which way round it was. */
+    if (vox_digs_apply_hit(&match, 0U, 1U, VOX_DIGS_TOOL_POPPER,
+                           VOX_DIGS_NO_PART, 18U,
+                           VOX_DIGS_DAMAGE_BALLISTIC) != VOX_OK) {
+        return 7;
+    }
+    if (contract->last_stimulus != VOX_DIGS_STIMULUS_HURT_THEM) return 8;
+    if (contract->last_actor != 0U) return 9;
+    after_hit = contract->valence;
+    if (after_hit >= 0) return 10;
+
+    /*
+     * A kill is worth far more than a hit, and killing the miner who last
+     * killed you reads as settling a score rather than starting one.
+     */
+    if (vox_digs_record_kill(&match, 0U, 1U) != VOX_OK) return 11;
+    if (contract->last_stimulus != VOX_DIGS_STIMULUS_KILLED_THEM) return 12;
+    if (contract->valence >= after_hit) return 13;
+
+    /*
+     * Measure the two kinds of kill against each other through the real path
+     * rather than reaching for the weight table -- that proves the wiring,
+     * not a constant.
+     */
+    {
+        vox_i16 plain;
+        vox_i16 revenge;
+        if (vox_digs_match_init(&match, &rules) != VOX_OK) return 14;
+        match.spawn_shield_ticks[0] = 0U;
+        match.spawn_shield_ticks[1] = 0U;
+        contract = vox_digs_contract_get(&match, 0U, 1U);
+        if (vox_digs_record_kill(&match, 0U, 1U) != VOX_OK) return 15;
+        if (contract->last_stimulus != VOX_DIGS_STIMULUS_KILLED_THEM) {
+            return 16;
+        }
+        plain = contract->valence;
+
+        if (vox_digs_match_init(&match, &rules) != VOX_OK) return 17;
+        match.spawn_shield_ticks[0] = 0U;
+        match.spawn_shield_ticks[1] = 0U;
+        contract = vox_digs_contract_get(&match, 0U, 1U);
+        match.last_attacker[0] = 1U;
+        if (vox_digs_record_kill(&match, 0U, 1U) != VOX_OK) return 18;
+        if (contract->last_stimulus != VOX_DIGS_STIMULUS_REVENGE) return 19;
+        revenge = contract->valence;
+
+        /* Settling a score must cost the account less than starting one. */
+        if (revenge <= plain) return 20;
+    }
+    return 0;
+}
+
 static int test_contracts_pair_index_and_tone(void)
 {
     vox_digs_rules rules;
@@ -3389,6 +3466,13 @@ int main(void)
         if (result != 0) {
             fprintf(stderr, "DIGS archetype mismatch (%d)\n", result);
             return 65;
+        }
+    }
+    {
+        int result = test_stimuli_reach_the_contract();
+        if (result != 0) {
+            fprintf(stderr, "DIGS stimulus mismatch (%d)\n", result);
+            return 69;
         }
     }
     {

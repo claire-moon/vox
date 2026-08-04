@@ -237,7 +237,6 @@
 #define DIGS_CONTRACT_TONE_DWELL_TICKS 180U
 #define DIGS_CONTRACT_DECAY_TICKS 300U
 #define DIGS_CONTRACT_DECAY_STEP 4
-#define DIGS_CONTRACT_KILL_VALENCE 140L
 #define DIGS_MUZZLE_CLEARANCE_Q16 16384L
 
 static const vox_digs_weapon_properties digs_weapons[VOX_DIGS_TOOL_COUNT] = {
@@ -277,6 +276,8 @@ static void digs_step_effects(vox_digs_match *match);
 static void digs_step_contracts(vox_digs_match *match);
 static void digs_contract_adjust(vox_digs_match *match, vox_u16 a, vox_u16 b,
                                  vox_i32 delta);
+static void digs_contract_note(vox_digs_match *match, vox_u16 actor,
+                               vox_u16 subject, vox_u16 stimulus);
 static void digs_step_reactions(vox_digs_match *match);
 static void digs_update_lava(vox_digs_match *match);
 static void digs_apply_lava_hazards(vox_digs_match *match);
@@ -1804,6 +1805,10 @@ vox_result vox_digs_match_init(vox_digs_match *match,
             match->contracts[pair].exchanges = 0U;
             match->contracts[pair].met = 0U;
             match->contracts[pair].recent_cursor = 0U;
+            match->contracts[pair].last_stimulus =
+                (vox_u16)VOX_DIGS_STIMULUS_NONE;
+            match->contracts[pair].last_actor = VOX_DIGS_NO_PLAYER;
+            match->contracts[pair].last_stimulus_tick = 0U;
             for (slot = 0U; slot < VOX_DIGS_RECENT_LINES; ++slot) {
                 match->contracts[pair].recent_lines[slot] = 0U;
             }
@@ -2472,6 +2477,83 @@ static void digs_contract_adjust(vox_digs_match *match, vox_u16 a, vox_u16 b,
     digs_contract_settle(contract);
 }
 
+
+/*
+ * What each thing that can happen between two miners is worth to the account.
+ *
+ * Zero is not "nothing happened" -- it is "this is worth saying something
+ * about, but it does not change what they think of each other".  Meeting
+ * someone is not yet an opinion, and the lava rising is nobody's fault.
+ */
+static const vox_i16
+digs_stimulus_valence[VOX_DIGS_STIMULUS_COUNT] = {
+    0,      /* NONE           */
+    0,      /* FIRST_MEETING  */
+    0,      /* SPOTTED        */
+    -6,     /* HURT_THEM      */
+    -6,     /* HURT_BY        */
+    -4,     /* NEAR_MISS      */
+    -50,    /* LIMB_TAKEN     */
+    -50,    /* LIMB_LOST      */
+    -140,   /* KILLED_THEM    */
+    -140,   /* KILLED_BY      */
+    -60,    /* REVENGE        -- settling a score stings less than starting one */
+    -180,   /* HUMILIATED     */
+    0,      /* STREAK         */
+    150,    /* SAVED_BY       */
+    90,     /* TEAMED_UP      */
+    -260,   /* BETRAYED       */
+    40,     /* TRUCE_OFFERED  */
+    200,    /* TRUCE_ACCEPTED */
+    -300,   /* TRUCE_BROKEN   */
+    -20,    /* TAUNTED        */
+    0,      /* LAVA_CLOSE     */
+    0,      /* BURIED         */
+    0,      /* DOOMED         */
+    0,      /* LONG_ABSENCE   */
+    0,      /* MATCH_START    */
+    0,      /* MATCH_END      */
+    0       /* IDLE           */
+};
+
+const char *vox_digs_stimulus_name(vox_u16 stimulus)
+{
+    static const char *names[VOX_DIGS_STIMULUS_COUNT] = {
+        "NONE", "FIRST MEETING", "SPOTTED", "HURT THEM", "HURT BY",
+        "NEAR MISS", "LIMB TAKEN", "LIMB LOST", "KILLED THEM", "KILLED BY",
+        "REVENGE", "HUMILIATED", "STREAK", "SAVED BY", "TEAMED UP",
+        "BETRAYED", "TRUCE OFFERED", "TRUCE ACCEPTED", "TRUCE BROKEN",
+        "TAUNTED", "LAVA CLOSE", "BURIED", "DOOMED", "LONG ABSENCE",
+        "MATCH START", "MATCH END", "IDLE"
+    };
+    return stimulus < VOX_DIGS_STIMULUS_COUNT ? names[stimulus] : "NONE";
+}
+
+/*
+ * Record that something happened between two miners.  This is the single door
+ * every stimulus comes through: it moves the account by the table above and
+ * leaves the event on the contract for whoever speaks next to talk about.
+ */
+static void digs_contract_note(vox_digs_match *match, vox_u16 actor,
+                               vox_u16 subject, vox_u16 stimulus)
+{
+    vox_digs_contract *contract;
+    vox_u16 index;
+    if (stimulus >= VOX_DIGS_STIMULUS_COUNT) {
+        return;
+    }
+    index = vox_digs_pair_index(actor, subject);
+    if (index >= VOX_DIGS_MAX_PAIRS) {
+        return;
+    }
+    contract = &match->contracts[index];
+    contract->last_stimulus = stimulus;
+    contract->last_actor = actor;
+    contract->last_stimulus_tick = match->tick;
+    digs_contract_adjust(match, actor, subject,
+                         (vox_i32)digs_stimulus_valence[stimulus]);
+}
+
 /* One tick of drift back toward indifference, plus the dwell clocks. */
 static void digs_step_contracts(vox_digs_match *match)
 {
@@ -2510,7 +2592,14 @@ vox_result vox_digs_record_kill(vox_digs_match *match, vox_u16 killer,
     if (match->scores[killer] < 65535U) {
         match->scores[killer]++;
     }
-    digs_contract_adjust(match, killer, victim, -DIGS_CONTRACT_KILL_VALENCE);
+    /*
+     * Killing the miner who last killed you is a different thing from picking
+     * a fight, and the account should read it that way.
+     */
+    digs_contract_note(match, killer, victim,
+                       match->last_attacker[killer] == victim ?
+                       (vox_u16)VOX_DIGS_STIMULUS_REVENGE :
+                       (vox_u16)VOX_DIGS_STIMULUS_KILLED_THEM);
     if (match->alive[killer]) {
         vox_u32 healed = (vox_u32)match->health[killer] + DIGS_KILL_HEAL;
         match->health[killer] = healed > (vox_u32)VOX_DIGS_MAX_HEALTH ?
@@ -2870,6 +2959,10 @@ static void digs_sever_limb_chain(vox_digs_match *match, vox_u16 attacker,
                 (vox_u16)(54U + noise % 72U), victim,
                 (vox_u16)((candidate << 3) | gib));
         }
+        if (attacker != VOX_DIGS_NO_PLAYER && attacker != victim) {
+            digs_contract_note(match, attacker, victim,
+                               (vox_u16)VOX_DIGS_STIMULUS_LIMB_TAKEN);
+        }
         digs_emit_event(match, VOX_DIGS_EVENT_LIMB_SEVER, attacker, victim,
                         weapon, VOX_MAT_FLESH, wound_x_q16, wound_y_q16,
                         candidate, (vox_u16)(damage_flags & 15U));
@@ -2903,14 +2996,9 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
          !vox_digs_player_is_active(match, attacker))) {
         return VOX_ERR_INVALID;
     }
-    /*
-     * Taking a hit sours the account between two miners in proportion to what
-     * it cost.  Scaled down hard: a whole match of ordinary skirmishing should
-     * be worth a grudge, not an instant blood feud.
-     */
     if (attacker != VOX_DIGS_NO_PLAYER && attacker != victim) {
-        digs_contract_adjust(match, attacker, victim,
-                             -(vox_i32)(damage / 8U) - 1L);
+        digs_contract_note(match, attacker, victim,
+                           (vox_u16)VOX_DIGS_STIMULUS_HURT_THEM);
     }
     if (match->spawn_shield_ticks[victim] > 0U) {
         digs_emit_event(match, VOX_DIGS_EVENT_SHIELD_BLOCK, attacker, victim,
@@ -4737,6 +4825,12 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
         }
     }
     if (target != VOX_DIGS_NO_PLAYER) {
+        const vox_digs_contract *seen = vox_digs_contract_get(match, player,
+                                                              target);
+        if (seen != 0 && !seen->met) {
+            digs_contract_note(match, player, target,
+                               (vox_u16)VOX_DIGS_STIMULUS_FIRST_MEETING);
+        }
         visible = 1U;
         state->target = target;
         state->memory_ticks = DIGS_AI_MEMORY_TICKS;
@@ -5990,6 +6084,9 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
         hash = digs_hash_mix(hash, (vox_u32)contract->exchanges);
         hash = digs_hash_mix(hash, (vox_u32)contract->met);
         hash = digs_hash_mix(hash, (vox_u32)contract->recent_cursor);
+        hash = digs_hash_mix(hash, (vox_u32)contract->last_stimulus);
+        hash = digs_hash_mix(hash, (vox_u32)contract->last_actor);
+        hash = digs_hash_mix(hash, contract->last_stimulus_tick);
         for (recent = 0U; recent < VOX_DIGS_RECENT_LINES; ++recent) {
             hash = digs_hash_mix(hash,
                                  (vox_u32)contract->recent_lines[recent]);
