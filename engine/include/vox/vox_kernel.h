@@ -117,6 +117,15 @@ typedef enum vox_world_collision_class {
  */
 #define VOX_STRUCTURE_COHESION_CELLS 4U
 
+/*
+ * Smoke lives for a bounded number of ticks and then clears, and cools toward
+ * ambient while it does.  Without a lifetime it rose to the nearest ceiling
+ * and accumulated there permanently.  Three hundred ticks is five seconds at
+ * 60 Hz -- long enough for a smoke pot to still hide a miner.
+ */
+#define VOX_SMOKE_LIFETIME_Q16 (300L << 16)
+#define VOX_SMOKE_COOLING_SHIFT 6U
+
 typedef struct vox_cell {
     vox_u16 material;
     vox_u16 flags;

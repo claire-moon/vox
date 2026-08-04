@@ -725,7 +725,42 @@ static void vox_step_materials(vox_world *world,
                         if (!(cell->flags & VOX_CELL_AWAKE)) {
                             continue;
                         }
-                        if (cell->flags & VOX_CELL_MOVED) {
+                        if (cell->material == VOX_MAT_SMOKE) {
+                            /*
+                             * Smoke thins out and goes away.
+                             *
+                             * It had no lifetime at all: gases rise, so every
+                             * puff an explosion made climbed to the nearest
+                             * ceiling and stayed there forever, building a
+                             * grey slab that could not be walked on but could
+                             * be blown up.
+                             *
+                             * Age is counted in damage_q16, which is unused
+                             * for gases and already hashed, so this needs no
+                             * new per-cell state.  Temperature is not the
+                             * clock -- smoke can legitimately be created at
+                             * ambient, and using warmth alone would delete
+                             * those puffs the instant they appeared.
+                             */
+                            vox_toggle_cell_signature(chunk,
+                                vox_index(x, y, depth), cell);
+                            cell->flags = (vox_u16)(cell->flags &
+                                                    (vox_u16)~VOX_CELL_MOVED);
+                            cell->damage_q16 += 1L << 16;
+                            if (cell->temperature_q16 > VOX_AMBIENT_Q16) {
+                                cell->temperature_q16 -=
+                                    (cell->temperature_q16 -
+                                     VOX_AMBIENT_Q16) >>
+                                    VOX_SMOKE_COOLING_SHIFT;
+                            }
+                            vox_toggle_cell_signature(chunk,
+                                vox_index(x, y, depth), cell);
+                            if (cell->damage_q16 >= VOX_SMOKE_LIFETIME_Q16) {
+                                vox_clear_cell(world, chunk,
+                                               vox_index(x, y, depth), cell);
+                            }
+                            vox_mark_dirty(chunk);
+                        } else if (cell->flags & VOX_CELL_MOVED) {
                             vox_toggle_cell_signature(chunk, vox_index(x, y, depth),
                                                       cell);
                             cell->flags = (vox_u16)(cell->flags &
