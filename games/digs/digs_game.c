@@ -106,7 +106,33 @@
  */
 #define DIGS_AI_FIRE_WINDOW_TICKS 8U
 #define DIGS_AI_BARK_WINDOW_TICKS 8U
-#define DIGS_AI_RETREAT_HEALTH 28U
+/*
+ * Retreat entry is aggression-scaled: a berserker fights until almost dead, an
+ * engineer withdraws while it still has options.  RIVET 35, FLAMEY 26,
+ * CINDER 13.
+ */
+#define DIGS_AI_RETREAT_HEALTH_MIN 12U
+#define DIGS_AI_RETREAT_HEALTH_SPAN 36U
+/*
+ * A retreat is time-boxed, not health-boxed.  Nothing in the simulation heals
+ * a living miner -- health is only ever raised at match init and respawn -- so
+ * an exit condition phrased as "health recovered" is unreachable and a bot
+ * that once dropped below its threshold would retreat forever.  It withdraws
+ * for at most MAX ticks, then must fight for LOCK ticks before it may
+ * withdraw again.
+ */
+#define DIGS_AI_RETREAT_MAX_TICKS 120U
+#define DIGS_AI_RETREAT_LOCK_TICKS 180U
+/*
+ * Minimum ticks in a mode before a downgrade is allowed.  Escalations --
+ * anything urgent -- bypass this, so a bot never ignores an enemy that just
+ * appeared or a wound that just landed.  Without it modes flipped on every
+ * deliberation, which read as twitching rather than deciding.
+ */
+#define DIGS_AI_DWELL_ROAMING 24U
+#define DIGS_AI_DWELL_SEARCHING 20U
+#define DIGS_AI_DWELL_ATTACKING 16U
+#define DIGS_AI_DWELL_RETREATING 45U
 /*
  * How far a bot looks for lava, in cells, before and after caution scaling.
  * A cautious miner starts backing away roughly twice as early as a reckless
@@ -1768,6 +1794,7 @@ vox_result vox_digs_match_init(vox_digs_match *match,
         match->bots[i].state_ticks = 0U;
         match->bots[i].roam_direction = (vox_i16)((i & 1U) ? -1 : 1);
         match->bots[i].decision_ticks = (vox_u16)(i * 2U);
+        match->bots[i].retreat_lock_ticks = 0U;
         match->bots[i].last_seen_x_q16 = 0L;
         match->bots[i].last_seen_y_q16 = 0L;
         digs_init_anatomy(match, i);
@@ -3941,6 +3968,60 @@ vox_u16 vox_digs_bot_archetype(const vox_digs_match *match, vox_u16 player)
  * match or a bounded cell probe, so the cost does not scale with the world.
  */
 /*
+ * Health at or below which this miner disengages.  Aggression scales it, so
+ * the same code makes CINDER reckless and RIVET careful.
+ */
+static vox_u16 digs_ai_retreat_threshold(const vox_digs_personality *personality)
+{
+    vox_u32 aggression = personality != 0 ? personality->aggression : 128U;
+    return (vox_u16)(DIGS_AI_RETREAT_HEALTH_MIN +
+                     ((255U - aggression) * DIGS_AI_RETREAT_HEALTH_SPAN) /
+                     255U);
+}
+
+static vox_u16 digs_ai_min_dwell(vox_u16 mode)
+{
+    if (mode == VOX_DIGS_AI_RETREATING) return DIGS_AI_DWELL_RETREATING;
+    if (mode == VOX_DIGS_AI_ATTACKING) return DIGS_AI_DWELL_ATTACKING;
+    if (mode == VOX_DIGS_AI_SEARCHING) return DIGS_AI_DWELL_SEARCHING;
+    return DIGS_AI_DWELL_ROAMING;
+}
+
+/*
+ * How alert a mode is.  Becoming MORE alert is always urgent -- a miner that
+ * hears gunfire or sees an enemy must react on the spot -- so only becoming
+ * LESS alert waits on a dwell timer.  That is the direction where flicker
+ * looks wrong: losing sight for a moment should not reset the hunt, and
+ * giving up should look like a decision rather than a twitch.
+ */
+static vox_u16 digs_ai_alertness(vox_u16 mode)
+{
+    if (mode == VOX_DIGS_AI_ATTACKING) {
+        return 3U;
+    }
+    if (mode == VOX_DIGS_AI_RETREATING) {
+        return 2U;
+    }
+    if (mode == VOX_DIGS_AI_SEARCHING) {
+        return 1U;
+    }
+    return 0U;
+}
+
+static int digs_ai_mode_change_allowed(const vox_digs_ai_state *state,
+                                       vox_u16 want)
+{
+    /* Withdrawing is a survival response and never waits. */
+    if (want == VOX_DIGS_AI_RETREATING) {
+        return 1;
+    }
+    if (digs_ai_alertness(want) > digs_ai_alertness(state->mode)) {
+        return 1;
+    }
+    return state->state_ticks >= digs_ai_min_dwell(state->mode);
+}
+
+/*
  * Ticks a bot waits before deliberating again.  Returns the value to STORE in
  * decision_ticks, which is one less than the true period -- see the constants.
  */
@@ -4101,6 +4182,9 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     if (state->memory_ticks > 0U) {
         state->memory_ticks--;
     }
+    if (state->retreat_lock_ticks > 0U) {
+        state->retreat_lock_ticks--;
+    }
     personality = vox_digs_personality_get(
         vox_digs_bot_archetype(match, player));
     if (personality == 0) {
@@ -4190,15 +4274,33 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
             state->target = VOX_DIGS_NO_PLAYER;
         }
     }
-    if (match->health[player] <= DIGS_AI_RETREAT_HEALTH &&
-        target != VOX_DIGS_NO_PLAYER) {
-        digs_ai_set_mode(match, player, VOX_DIGS_AI_RETREATING);
-    } else if (visible) {
-        digs_ai_set_mode(match, player, VOX_DIGS_AI_ATTACKING);
-    } else if (target != VOX_DIGS_NO_PLAYER) {
-        digs_ai_set_mode(match, player, VOX_DIGS_AI_SEARCHING);
-    } else {
-        digs_ai_set_mode(match, player, VOX_DIGS_AI_ROAMING);
+    {
+        vox_u16 want;
+        vox_u16 threshold = digs_ai_retreat_threshold(personality);
+        int may_retreat = state->retreat_lock_ticks == 0U &&
+                          target != VOX_DIGS_NO_PLAYER;
+        /* Once withdrawing, stay withdrawn until the retreat times out. */
+        int still_retreating = state->mode == VOX_DIGS_AI_RETREATING &&
+                               state->state_ticks < DIGS_AI_RETREAT_MAX_TICKS &&
+                               target != VOX_DIGS_NO_PLAYER;
+        if (still_retreating ||
+            (may_retreat && match->health[player] <= threshold)) {
+            want = VOX_DIGS_AI_RETREATING;
+        } else if (visible) {
+            want = VOX_DIGS_AI_ATTACKING;
+        } else if (target != VOX_DIGS_NO_PLAYER) {
+            want = VOX_DIGS_AI_SEARCHING;
+        } else {
+            want = VOX_DIGS_AI_ROAMING;
+        }
+        if (want != state->mode &&
+            digs_ai_mode_change_allowed(state, want)) {
+            if (state->mode == VOX_DIGS_AI_RETREATING) {
+                /* Earned a breather; now it has to commit to fighting. */
+                state->retreat_lock_ticks = DIGS_AI_RETREAT_LOCK_TICKS;
+            }
+            digs_ai_set_mode(match, player, want);
+        }
     }
     goal_x = digs_q16_to_cell(state->last_seen_x_q16);
     goal_y = digs_q16_to_cell(state->last_seen_y_q16);
@@ -5226,6 +5328,8 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
         hash = digs_hash_mix(hash,
                              (vox_u32)(vox_i32)match->bots[i].roam_direction);
         hash = digs_hash_mix(hash, (vox_u32)match->bots[i].decision_ticks);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->bots[i].retreat_lock_ticks);
         hash = digs_hash_mix(hash,
                              (vox_u32)match->bots[i].last_seen_x_q16);
         hash = digs_hash_mix(hash,

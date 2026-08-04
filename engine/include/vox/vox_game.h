@@ -304,6 +304,13 @@ typedef struct vox_digs_ai_state {
     vox_u16 state_ticks;
     vox_i16 roam_direction;
     vox_u16 decision_ticks;
+    /*
+     * Refractory period after a retreat ends, during which the miner will not
+     * retreat again.  Nothing in the simulation heals a living miner, so
+     * without this a bot that once dropped below its threshold would retreat
+     * for the rest of its life: the entry condition stays true forever.
+     */
+    vox_u16 retreat_lock_ticks;
     vox_i32 last_seen_x_q16;
     vox_i32 last_seen_y_q16;
 } vox_digs_ai_state;

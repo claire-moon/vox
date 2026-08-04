@@ -13,6 +13,8 @@
 #define DIGS_TEST_SMOKER_DAMAGE 40U
 /* Bolt Action is the gated one: below its charge it will not fire. */
 #define DIGS_TEST_MIN_GATED_CHARGE 30U
+/* Past DIGS_AI_RETREAT_MAX_TICKS and every mode dwell. */
+#define DIGS_TEST_RETREAT_EXPIRED_TICKS 200U
 
 /*
  * A match owns the complete fixed-size voxel world, so keeping one fixture per
@@ -990,24 +992,50 @@ static int test_ai_state_machine(void)
         !event_mode_seen(&match, VOX_DIGS_AI_RETREATING)) {
         return 4;
     }
+    /*
+     * A retreat is time-boxed rather than health-boxed, because nothing in the
+     * simulation heals a living miner -- so restoring health here must NOT end
+     * the withdrawal. The bot stays committed until the retreat window expires.
+     */
+    match.health[1] = VOX_DIGS_MAX_HEALTH;
+    match.bots[1].decision_ticks = 0U;
+    if (vox_digs_bot_think(&match, 1U) != VOX_OK ||
+        match.bots[1].mode != VOX_DIGS_AI_RETREATING) {
+        return 6;
+    }
     wall_x = (player_x + (vox_u32)bot_x) / 2U;
     if (!set_test_column(&match.world, wall_x, (vox_u32)bot_y,
                          VOX_MAT_METAL)) {
-        return 5;
+        return 7;
     }
-    match.health[1] = VOX_DIGS_MAX_HEALTH;
+    /* Expire the retreat window; only then may it downgrade. */
+    match.bots[1].state_ticks = DIGS_TEST_RETREAT_EXPIRED_TICKS;
     match.bots[1].decision_ticks = 0U;
     if (vox_digs_bot_think(&match, 1U) != VOX_OK ||
         match.bots[1].mode != VOX_DIGS_AI_SEARCHING ||
         !event_mode_seen(&match, VOX_DIGS_AI_SEARCHING)) {
-        return 6;
+        return 8;
     }
+    /* Leaving a retreat arms a refractory period against retreating again. */
+    if (match.bots[1].retreat_lock_ticks == 0U) {
+        return 9;
+    }
+    /* Even at one health, the lock keeps it fighting rather than fleeing. */
+    match.health[1] = 1U;
+    match.bots[1].state_ticks = DIGS_TEST_RETREAT_EXPIRED_TICKS;
+    match.bots[1].decision_ticks = 0U;
+    if (vox_digs_bot_think(&match, 1U) != VOX_OK ||
+        match.bots[1].mode == VOX_DIGS_AI_RETREATING) {
+        return 10;
+    }
+    match.health[1] = VOX_DIGS_MAX_HEALTH;
     match.bots[1].memory_ticks = 0U;
+    match.bots[1].state_ticks = DIGS_TEST_RETREAT_EXPIRED_TICKS;
     match.bots[1].decision_ticks = 0U;
     if (vox_digs_bot_think(&match, 1U) != VOX_OK ||
         match.bots[1].mode != VOX_DIGS_AI_ROAMING ||
         !event_mode_seen(&match, VOX_DIGS_AI_ROAMING)) {
-        return 7;
+        return 11;
     }
     return 0;
 }
@@ -2031,6 +2059,8 @@ static int test_v003_event_drain_ai_invariance(void)
     v003_match_a.bots[1].memory_ticks = 0U;
     v003_match_a.bots[1].target = VOX_DIGS_NO_PLAYER;
     v003_match_a.bots[1].decision_ticks = 0U;
+    /* Standing down is a drop in alertness, so it waits out the dwell. */
+    v003_match_a.bots[1].state_ticks = DIGS_TEST_RETREAT_EXPIRED_TICKS;
     if (vox_digs_bot_think(&v003_match_a, 1U) != VOX_OK ||
         v003_match_a.bots[1].mode != VOX_DIGS_AI_ROAMING) {
         return 6;
