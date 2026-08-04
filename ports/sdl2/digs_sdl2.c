@@ -49,6 +49,9 @@
 #define DEMO_BOT_BARK_COOLDOWN 720U
 #define DEMO_GLOBAL_BARK_GAP 120U
 #define DEMO_BARK_PHRASE_COUNT 50U
+/* Contexts 0-5 are the ordinary moods; 6 is going into the lava. */
+#define DEMO_BARK_CONTEXT_COUNT 7
+#define DEMO_BARK_CONTEXT_DOOMED 6
 #define DEMO_NAME_GRID_COLUMNS 8
 #define DEMO_NAME_GRID_ITEMS 42
 #define DEMO_FRAME_CAP_COUNT 7
@@ -422,7 +425,8 @@ static const int demo_respawn_delays[5] = {0, 1, 2, 3, 5};
 static const char *demo_respawn_mode_names[2] = {"AUTO", "ON FIRE"};
 static const char demo_name_grid[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
-static const char *demo_bark_phrases[6][DEMO_BARK_PHRASE_COUNT] = {
+static const char *demo_bark_phrases[DEMO_BARK_CONTEXT_COUNT]
+                                   [DEMO_BARK_PHRASE_COUNT] = {
     {
         "BACK TO WORK!", "KEEP DIGGING!", "DIG THAT COAL!",
         "THE SHIFT IS LONG!", "WHERE IS MY TEA?", "GOOD WORK MINER!",
@@ -575,6 +579,38 @@ static const char *demo_bark_phrases[6][DEMO_BARK_PHRASE_COUNT] = {
         "THE LAMP STAYED ON MOSTLY!", "A CLEAN WIN AND DIRTY COAT!",
         "MY PICK DEMANDS AN ENCORE!", "SHIFT WON LUNCH EARNED!",
         "THE LAST COAL IS ON ME!"
+    },
+    {
+        /*
+         * Context 6: the miner is going into the basin. Gallows humour --
+         * a miner meeting the thing the whole job warned them about, and
+         * finding it funnier than tragic.
+         */
+        "GOODBYE CRUEL MINE!", "NO MORE SHIFTS FOR ME!",
+        "TELL THE FOREMAN I QUIT!", "I FOUND THE HOT SEAM!",
+        "CLOCKING OUT PERMANENTLY!", "THIS COUNTS AS OVERTIME!",
+        "THE FLOOR WAS A SUGGESTION!", "I REGRET THE SHORTCUT!",
+        "SEND MY TEA TO THE SURFACE!", "WORST BATH IN THE MINE!",
+        "MY BOOTS ARE BRIEFLY FAMOUS!", "SO THAT IS WHAT ORANGE MEANS!",
+        "THE LAMP WILL NOT HELP HERE!", "I HAVE MADE A CAREER CHOICE!",
+        "DOWNWARD MOBILITY AT LAST!", "THE BASIN SAYS HELLO!",
+        "PUT ME IN THE LEDGER!", "THIS IS NOT THE GOOD KIND OF WARM!",
+        "I SHOULD HAVE READ THE SIGN!", "MY PENSION IS MOLTEN!",
+        "TELL MY CART I LOVED IT!", "A VERY THOROUGH RETIREMENT!",
+        "THE ROCK WINS THIS ROUND!", "I AM BECOMING GEOLOGY!",
+        "SAFETY MEETING CANCELLED!", "REMEMBER ME AS A HARD WORKER!",
+        "THE DEEP SHIFT CLAIMS ANOTHER!", "I BLAME THE LIGHTING!",
+        "MY LAST MISTAKE IS GLOWING!", "SOMEONE LOG THE HOURS!",
+        "THIS SEAM IS TOO RICH!", "I AM OFF TO THE FURNACE YARD!",
+        "NOT THE EXIT I PLANNED!", "THE MOUNTAIN SENDS ITS REGARDS!",
+        "TELL THEM I WENT DOWN DIGGING!", "WORTH IT FOR THE VIEW!",
+        "MY HELMET WAS DECORATIVE!", "A WARM WELCOME INDEED!",
+        "THE COMPANY KEEPS THE DEPOSIT!", "I HAVE STRUCK SOMETHING!",
+        "THIS WAS NOT IN TRAINING!", "GRAVITY REMAINS UNDEFEATED!",
+        "SAVE MY SPOT IN THE LIFT!", "THE FLOOR AND I ARE THROUGH!",
+        "AT LEAST IT IS QUICK!", "MY LUNCH IS UP THERE SOMEWHERE!",
+        "SOMEBODY MOVED THE GROUND!", "I ALWAYS RAN HOT!",
+        "THE SHIFT BELL CAN WAIT!", "GOING WHERE THE COAL WENT!"
     }
 };
 static const vox_u16 demo_arsenal_masks[DEMO_ARSENAL_COUNT] = {
@@ -1040,6 +1076,18 @@ static void demo_copy_text(char *destination, size_t capacity,
 
 static int demo_bark_context(const demo_app *app, int player)
 {
+    /*
+     * Nothing else matters once a miner is going into the basin, so this
+     * outranks every other mood.  It reads the same exact surface line the
+     * simulation uses for lava damage rather than guessing from health.
+     */
+    if (demo_match.alive[player]) {
+        vox_i32 foot = (demo_match.players[player].position_y.value_q16 +
+                        demo_match.players[player].half_height_q16) >> 16;
+        if (foot + 2L >= (vox_i32)demo_match.lava_surface_y) {
+            return DEMO_BARK_CONTEXT_DOOMED;
+        }
+    }
     if (app->miner_hit_ttl[player] > 0U) return 4;
     if (app->victory_bark_ttl[player] > 0U) return 5;
     if (demo_match.health[player] < 35U) return 3;
@@ -1207,7 +1255,7 @@ static void demo_bark(demo_app *app, int player, int context, int bot)
     char generated[64];
     vox_u32 hash;
     if (player < 0 || player >= (int)demo_match.rules.player_count ||
-        !demo_match.alive[player] || context < 0 || context >= 6) return;
+        !demo_match.alive[player] || context < 0 || context >= DEMO_BARK_CONTEXT_COUNT) return;
     if ((required_gap > 0U && app->last_bark_tick[player] != 0U &&
          demo_match.tick < app->last_bark_tick[player] + required_gap) ||
         (app->global_bark_tick != 0U &&
@@ -7577,7 +7625,7 @@ static int demo_bark_self_test(void)
     demo_match.selected_weapon[1] = VOX_DIGS_TOOL_NAIL_GUN;
     strcpy(app.player_names[0], "RIVET");
     strcpy(app.player_names[1], "CINDER");
-    for (context = 0; context < 6; ++context) {
+    for (context = 0; context < DEMO_BARK_CONTEXT_COUNT; ++context) {
         for (phrase = 0; phrase < (int)DEMO_BARK_PHRASE_COUNT; ++phrase) {
             if (demo_bark_phrases[context][phrase] == 0 ||
                 demo_bark_phrases[context][phrase][0] == '\0') {
@@ -7630,7 +7678,8 @@ static int demo_bark_self_test(void)
         return 7;
     }
     printf("DIGS bark self-test passed curated=%u g2p=%u\n",
-           6U * (unsigned int)DEMO_BARK_PHRASE_COUNT,
+           (unsigned int)DEMO_BARK_CONTEXT_COUNT *
+               (unsigned int)DEMO_BARK_PHRASE_COUNT,
            (unsigned int)count);
     return 0;
 }
