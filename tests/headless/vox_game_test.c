@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include <stdio.h>
 #include "vox/vox_game.h"
+#include "digs_lines.h"
 
 #define TEST_MAP_JUMP_ENVELOPE 28U
 #define TEST_MAP_RAIL_MIN_CLEARANCE 36U
@@ -2457,6 +2458,68 @@ static int test_bot_archetypes_and_charge_weapons(void)
  * A wide excavation must cave in, and a narrow tunnel must stay usable --
  * otherwise the digging tools destroy the tunnels they exist to make.
  */
+static int test_every_line_cell_resolves(void)
+{
+    vox_u16 voice;
+    vox_u16 tone;
+    vox_u16 stimulus;
+    vox_u16 total;
+
+    /*
+     * The index is the quality filter.  Every combination a speaker can
+     * actually find itself in must resolve to something written, or the game
+     * shows an empty speech bubble at exactly the moment it had something to
+     * say.  NONE is the one stimulus that is allowed to be silent.
+     */
+    for (voice = 0U; voice < DIGS_VOICE_COUNT; ++voice) {
+        for (tone = 0U; tone < VOX_DIGS_TONE_COUNT; ++tone) {
+            for (stimulus = 1U; stimulus < VOX_DIGS_STIMULUS_COUNT;
+                 ++stimulus) {
+                digs_line_pool pool = digs_lines_pool(voice, tone, stimulus);
+                vox_u16 index;
+                if (pool.count == 0U) return 1;
+                for (index = 0U; index < pool.count; ++index) {
+                    const char *line =
+                        digs_lines_text((vox_u16)(pool.first + index));
+                    if (line == 0 || line[0] == '\0') return 2;
+                }
+            }
+        }
+    }
+    /* NONE stays silent rather than saying something generic. */
+    if (digs_lines_pool(DIGS_VOICE_RIVET, VOX_DIGS_TONE_NEUTRAL,
+                        VOX_DIGS_STIMULUS_NONE).count != 0U) {
+        return 3;
+    }
+    /* Out of range must not read past the tables. */
+    if (digs_lines_pool(99U, 99U, VOX_DIGS_STIMULUS_COUNT).count != 0U) {
+        return 4;
+    }
+    if (digs_lines_text(65535U) == 0) return 5;
+
+    /*
+     * The three opponents must not share a voice.  Falling back to the
+     * generic pool for everything would satisfy the coverage check above
+     * while leaving all three sounding identical, which is the failure this
+     * whole system exists to prevent.
+     */
+    {
+        digs_line_pool rivet = digs_lines_pool(DIGS_VOICE_RIVET,
+            VOX_DIGS_TONE_NEUTRAL, VOX_DIGS_STIMULUS_KILLED_THEM);
+        digs_line_pool cinder = digs_lines_pool(DIGS_VOICE_CINDER,
+            VOX_DIGS_TONE_NEUTRAL, VOX_DIGS_STIMULUS_KILLED_THEM);
+        digs_line_pool flamey = digs_lines_pool(DIGS_VOICE_FLAMEY,
+            VOX_DIGS_TONE_NEUTRAL, VOX_DIGS_STIMULUS_KILLED_THEM);
+        if (rivet.first == cinder.first || cinder.first == flamey.first ||
+            rivet.first == flamey.first) {
+            return 6;
+        }
+    }
+    total = digs_lines_total();
+    if (total < 300U) return 7;      /* the corpus is meant to be large */
+    return 0;
+}
+
 static int test_stimuli_reach_the_contract(void)
 {
     vox_digs_rules rules;
@@ -3466,6 +3529,13 @@ int main(void)
         if (result != 0) {
             fprintf(stderr, "DIGS archetype mismatch (%d)\n", result);
             return 65;
+        }
+    }
+    {
+        int result = test_every_line_cell_resolves();
+        if (result != 0) {
+            fprintf(stderr, "DIGS line index mismatch (%d)\n", result);
+            return 70;
         }
     }
     {

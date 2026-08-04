@@ -113,9 +113,10 @@ target_link_libraries(vox_physics PUBLIC vox_kernel)
 
 add_library(digs_game STATIC
     games/digs/digs_game.c
+    games/digs/digs_lines.c
 )
 target_link_libraries(digs_game PUBLIC vox_kernel vox_physics)
-target_include_directories(digs_game PUBLIC engine/include)
+target_include_directories(digs_game PUBLIC engine/include games/digs)
 set_property(TARGET digs_game PROPERTY C_STANDARD 90)
 set_property(TARGET digs_game PROPERTY C_STANDARD_REQUIRED ON)
 if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
@@ -213,6 +214,7 @@ if (VOX_BUILD_LEGACY_PROFILE)
 
     add_library(digs_legacy_game STATIC
         games/digs/digs_game.c
+        games/digs/digs_lines.c
     )
     target_include_directories(digs_legacy_game PUBLIC engine/include)
     target_compile_definitions(digs_legacy_game PUBLIC
