@@ -1008,7 +1008,9 @@ static void demo_audio_speak_text(demo_app *app, const char *text_value,
     speech.profile = profile;
     speech.priority = priority;
     speech.pan_q15 = pan_q15;
-    speech.gain_q15 = profile == VOX_AUDIO_SPEECH_DEEP ? 15000U : 11000U;
+    speech.gain_q15 = (profile == VOX_AUDIO_SPEECH_DEEP ||
+                       profile == VOX_AUDIO_SPEECH_CINDER) ? 15000U :
+                      profile == VOX_AUDIO_SPEECH_RIVET ? 13000U : 11000U;
     demo_audio_lock(app);
     speech.event_id = ++app->audio_event_id;
     (void)vox_audio_speak(&app->audio, &speech);
@@ -1246,6 +1248,31 @@ static void demo_bark_generate(demo_app *app, int player, int context,
     }
 }
 
+/*
+ * Which voice speaks for this slot.
+ *
+ * The three opponents get their own; a human keeps the deep stock voice so
+ * you can tell yourself apart from them without looking.
+ */
+static vox_u8 demo_speech_profile(int player)
+{
+    if (player < 0 || (vox_u16)player >= demo_match.rules.player_count) {
+        return (vox_u8)VOX_AUDIO_SPEECH_HIGH;
+    }
+    if (!vox_digs_player_is_bot(&demo_match, (vox_u16)player)) {
+        return (vox_u8)VOX_AUDIO_SPEECH_DEEP;
+    }
+    switch (vox_digs_bot_archetype(&demo_match, (vox_u16)player)) {
+    case VOX_DIGS_ARCHETYPE_ENGINEER:
+        return (vox_u8)VOX_AUDIO_SPEECH_RIVET;
+    case VOX_DIGS_ARCHETYPE_BERSERKER:
+        return (vox_u8)VOX_AUDIO_SPEECH_CINDER;
+    default:
+        break;
+    }
+    return (vox_u8)VOX_AUDIO_SPEECH_FLAMEY;
+}
+
 static void demo_bark(demo_app *app, int player, int context, int bot)
 {
     vox_u32 required_gap = bot ? DEMO_BOT_BARK_COOLDOWN :
@@ -1277,7 +1304,7 @@ static void demo_bark(demo_app *app, int player, int context, int bot)
     app->bubbles[player].ttl = DEMO_BUBBLE_TICKS;
     app->last_bark_tick[player] = demo_match.tick;
     app->global_bark_tick = demo_match.tick;
-    demo_audio_speak_text(app, phrase, VOX_AUDIO_SPEECH_HIGH,
+    demo_audio_speak_text(app, phrase, demo_speech_profile(player),
                           bot ? VOX_AUDIO_PRIORITY_BOT_BARK :
                           VOX_AUDIO_PRIORITY_PLAYER_BARK,
                           demo_player_pan((vox_u16)player));

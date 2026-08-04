@@ -97,10 +97,18 @@ typedef enum vox_audio_priority {
     VOX_AUDIO_PRIORITY_ANNOUNCER = 240
 } vox_audio_priority;
 
+/*
+ * Voices.  DEEP and HIGH keep their numbering and their exact parameters so
+ * saved settings and existing callers are unaffected; the three named voices
+ * are what let RIVET, CINDER and FLAMEY stop sounding like one another.
+ */
 typedef enum vox_audio_speech_profile {
     VOX_AUDIO_SPEECH_DEEP = 0,
     VOX_AUDIO_SPEECH_HIGH = 1,
-    VOX_AUDIO_SPEECH_PROFILE_COUNT = 2
+    VOX_AUDIO_SPEECH_RIVET = 2,
+    VOX_AUDIO_SPEECH_CINDER = 3,
+    VOX_AUDIO_SPEECH_FLAMEY = 4,
+    VOX_AUDIO_SPEECH_PROFILE_COUNT = 5
 } vox_audio_speech_profile;
 
 /*
