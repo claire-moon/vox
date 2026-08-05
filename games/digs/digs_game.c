@@ -1850,14 +1850,269 @@ static vox_result digs_validate_rules(const vox_digs_rules *rules)
     return VOX_OK;
 }
 
+
+/*
+ * Identity, not slot.  RIVET is RIVET whichever seat he spawns in, and the
+ * account the miners keep has to follow the person rather than the position
+ * or "they remember you" is a lie the moment the roster shuffles.
+ */
+vox_u16 vox_digs_memory_identity(const vox_digs_match *match, vox_u16 player)
+{
+    vox_u16 archetype;
+    if (match == 0 || !vox_digs_player_is_active(match, player)) {
+        return (vox_u16)VOX_DIGS_IDENTITY_COUNT;
+    }
+    if (!vox_digs_player_is_bot(match, player)) {
+        return (vox_u16)VOX_DIGS_IDENTITY_PLAYER;
+    }
+    archetype = vox_digs_bot_archetype(match, player);
+    switch (archetype) {
+    case VOX_DIGS_ARCHETYPE_ENGINEER:
+        return (vox_u16)VOX_DIGS_IDENTITY_RIVET;
+    case VOX_DIGS_ARCHETYPE_BERSERKER:
+        return (vox_u16)VOX_DIGS_IDENTITY_CINDER;
+    default:
+        break;
+    }
+    return (vox_u16)VOX_DIGS_IDENTITY_FLAMEY;
+}
+
+vox_u16 vox_digs_regard_index(vox_u16 a, vox_u16 b)
+{
+    vox_u16 low;
+    vox_u16 high;
+    if (a == b || a >= VOX_DIGS_IDENTITY_COUNT ||
+        b >= VOX_DIGS_IDENTITY_COUNT) {
+        return (vox_u16)VOX_DIGS_MAX_PAIRS;
+    }
+    low = a < b ? a : b;
+    high = a < b ? b : a;
+    return (vox_u16)((low * (2U * VOX_DIGS_IDENTITY_COUNT - low - 1U)) / 2U +
+                     (high - low - 1U));
+}
+
+void vox_digs_memory_init(vox_digs_bot_memory *memory)
+{
+    vox_u16 i;
+    vox_u16 j;
+    if (memory == 0) {
+        return;
+    }
+    memory->abi_version = VOX_ABI_VERSION;
+    memory->struct_size = (vox_u32)sizeof(*memory);
+    memory->memory_version = VOX_DIGS_MEMORY_VERSION;
+    memory->launch_counter = 0U;
+    memory->elapsed_coarse = 0U;
+    for (i = 0U; i < VOX_DIGS_IDENTITY_COUNT; ++i) {
+        const vox_digs_personality *base =
+            i < VOX_DIGS_ARCHETYPE_COUNT ?
+            vox_digs_personality_get(i) : 0;
+        if (base != 0) {
+            memory->identities[i].traits = *base;
+        } else {
+            /* The player's own miner: middling on every axis. */
+            memory->identities[i].traits.aggression = 128U;
+            memory->identities[i].traits.patience = 128U;
+            memory->identities[i].traits.caution = 128U;
+            memory->identities[i].traits.grudge = 128U;
+            memory->identities[i].traits.sociability = 128U;
+            memory->identities[i].traits.reserved = 0U;
+        }
+        memory->identities[i].matches_played = 0U;
+        memory->identities[i].wins = 0U;
+        memory->identities[i].kills = 0U;
+        memory->identities[i].deaths = 0U;
+        memory->identities[i].reserved = 0U;
+    }
+    for (j = 0U; j < VOX_DIGS_MAX_PAIRS; ++j) {
+        memory->regard[j].tone = (vox_u16)VOX_DIGS_TONE_NEUTRAL;
+        memory->regard[j].valence = 0;
+        memory->regard[j].matches_met = 0U;
+        memory->regard[j].kills_for = 0U;
+        memory->regard[j].kills_against = 0U;
+        memory->regard[j].truces = 0U;
+        memory->regard[j].betrayals = 0U;
+        memory->regard[j].reserved = 0U;
+    }
+    (void)vox_digs_memory_hash(memory);
+}
+
+vox_u32 vox_digs_memory_hash(vox_digs_bot_memory *memory)
+{
+    vox_u32 hash = 2166136261U;
+    vox_u16 i;
+    if (memory == 0) {
+        return 0U;
+    }
+    hash = digs_hash_mix(hash, memory->memory_version);
+    hash = digs_hash_mix(hash, memory->launch_counter);
+    hash = digs_hash_mix(hash, memory->elapsed_coarse);
+    for (i = 0U; i < VOX_DIGS_IDENTITY_COUNT; ++i) {
+        const vox_digs_identity_record *r = &memory->identities[i];
+        hash = digs_hash_mix(hash, (vox_u32)r->traits.aggression);
+        hash = digs_hash_mix(hash, (vox_u32)r->traits.patience);
+        hash = digs_hash_mix(hash, (vox_u32)r->traits.caution);
+        hash = digs_hash_mix(hash, (vox_u32)r->traits.grudge);
+        hash = digs_hash_mix(hash, (vox_u32)r->traits.sociability);
+        hash = digs_hash_mix(hash, (vox_u32)r->matches_played);
+        hash = digs_hash_mix(hash, (vox_u32)r->wins);
+        hash = digs_hash_mix(hash, (vox_u32)r->kills);
+        hash = digs_hash_mix(hash, (vox_u32)r->deaths);
+    }
+    for (i = 0U; i < VOX_DIGS_MAX_PAIRS; ++i) {
+        const vox_digs_regard *g = &memory->regard[i];
+        hash = digs_hash_mix(hash, (vox_u32)g->tone);
+        hash = digs_hash_mix(hash, (vox_u32)(vox_u16)g->valence);
+        hash = digs_hash_mix(hash, (vox_u32)g->matches_met);
+        hash = digs_hash_mix(hash, (vox_u32)g->kills_for);
+        hash = digs_hash_mix(hash, (vox_u32)g->kills_against);
+        hash = digs_hash_mix(hash, (vox_u32)g->truces);
+        hash = digs_hash_mix(hash, (vox_u32)g->betrayals);
+    }
+    memory->memory_hash = hash;
+    return hash;
+}
+
 vox_result vox_digs_match_init(vox_digs_match *match,
                                const vox_digs_rules *rules)
 {
+    return vox_digs_match_init_ex(match, rules, 0);
+}
+
+
+/*
+ * How far a trait may move in one match, per archetype.  RIVET revises
+ * slowly and remembers; CINDER swings and forgets; FLAMEY is unpredictable.
+ * Bounded hard, because a bot that drifts far enough stops being the
+ * character the player learned, which is the opposite of the point.
+ */
+static const vox_u16
+digs_drift_rate[VOX_DIGS_ARCHETYPE_COUNT] = {3U, 9U, 6U};
+#define DIGS_DRIFT_FLOOR 40U
+#define DIGS_DRIFT_CEILING 235U
+
+static vox_u16 digs_drift_trait(vox_u16 value, vox_i32 direction,
+                                vox_u16 rate)
+{
+    vox_i32 moved = (vox_i32)value + direction * (vox_i32)rate;
+    if (moved < (vox_i32)DIGS_DRIFT_FLOOR) {
+        moved = (vox_i32)DIGS_DRIFT_FLOOR;
+    }
+    if (moved > (vox_i32)DIGS_DRIFT_CEILING) {
+        moved = (vox_i32)DIGS_DRIFT_CEILING;
+    }
+    return (vox_u16)moved;
+}
+
+vox_result vox_digs_match_export_memory(const vox_digs_match *match,
+                                        vox_digs_bot_memory *memory)
+{
+    vox_u16 a;
+    vox_u16 b;
+    if (match == 0 || memory == 0) {
+        return VOX_ERR_INVALID;
+    }
+    *memory = match->memory;
+    memory->abi_version = VOX_ABI_VERSION;
+    memory->struct_size = (vox_u32)sizeof(*memory);
+    memory->memory_version = VOX_DIGS_MEMORY_VERSION;
+    for (a = 0U; a < match->rules.player_count; ++a) {
+        vox_u16 identity = vox_digs_memory_identity(match, a);
+        vox_digs_identity_record *record;
+        vox_u16 rate;
+        vox_u16 archetype;
+        if (identity >= VOX_DIGS_IDENTITY_COUNT) {
+            continue;
+        }
+        record = &memory->identities[identity];
+        if (record->matches_played < 65535U) {
+            record->matches_played++;
+        }
+        if (record->kills + match->scores[a] < 65535U) {
+            record->kills = (vox_u16)(record->kills + match->scores[a]);
+        }
+        if (record->deaths + match->deaths[a] < 65535U) {
+            record->deaths = (vox_u16)(record->deaths + match->deaths[a]);
+        }
+        if (match->phase == VOX_DIGS_RESULTS && !match->result_draw &&
+            match->winner_player == a && record->wins < 65535U) {
+            record->wins++;
+        }
+        archetype = vox_digs_bot_archetype(match, a);
+        rate = archetype < VOX_DIGS_ARCHETYPE_COUNT ?
+               digs_drift_rate[archetype] : 4U;
+        /*
+         * Drift follows what the match actually did to them.  A miner who
+         * killed more than they died gets bolder and less careful; one who
+         * spent the match dying gets warier.  Talking a lot makes them more
+         * talkative.  Small steps -- this is a nudge per match, not a
+         * personality transplant.
+         */
+        {
+            vox_i32 fortune = (vox_i32)match->scores[a] -
+                              (vox_i32)match->deaths[a];
+            vox_i32 sign = fortune > 0 ? 1L : (fortune < 0 ? -1L : 0L);
+            record->traits.aggression =
+                digs_drift_trait(record->traits.aggression, sign, rate);
+            record->traits.caution =
+                digs_drift_trait(record->traits.caution, -sign, rate);
+        }
+    }
+    for (a = 0U; a < match->rules.player_count; ++a) {
+        for (b = (vox_u16)(a + 1U); b < match->rules.player_count; ++b) {
+            vox_u16 pair = vox_digs_pair_index(a, b);
+            vox_u16 slot = vox_digs_regard_index(
+                vox_digs_memory_identity(match, a),
+                vox_digs_memory_identity(match, b));
+            const vox_digs_contract *contract;
+            vox_digs_regard *regard;
+            if (pair >= VOX_DIGS_MAX_PAIRS || slot >= VOX_DIGS_MAX_PAIRS) {
+                continue;
+            }
+            contract = &match->contracts[pair];
+            regard = &memory->regard[slot];
+            regard->tone = contract->tone;
+            regard->valence = contract->valence;
+            if (contract->met && regard->matches_met < 65535U) {
+                regard->matches_met++;
+            }
+            if (contract->tone >= VOX_DIGS_TONE_TRUCE &&
+                regard->truces < 65535U) {
+                regard->truces++;
+            }
+            if (contract->last_stimulus == VOX_DIGS_STIMULUS_BETRAYED &&
+                regard->betrayals < 65535U) {
+                regard->betrayals++;
+            }
+        }
+    }
+    (void)vox_digs_memory_hash(memory);
+    return VOX_OK;
+}
+
+vox_result vox_digs_match_init_ex(vox_digs_match *match,
+                                  const vox_digs_rules *rules,
+                                  const vox_digs_bot_memory *memory)
+{
     vox_u16 i;
+    vox_digs_bot_memory canonical;
     vox_result result = digs_validate_rules(rules);
     if (match == 0 || result != VOX_OK) {
         return VOX_ERR_INVALID;
     }
+    /*
+     * A missing or foreign snapshot is not an error, it is a first meeting.
+     * Anything that does not match this build is discarded rather than
+     * reinterpreted -- a snapshot read the wrong way round would produce
+     * plausible traits and a wrong match, which is worse than no memory.
+     */
+    if (memory == 0 || memory->abi_version != VOX_ABI_VERSION ||
+        memory->struct_size < (vox_u32)sizeof(*memory) ||
+        memory->memory_version != VOX_DIGS_MEMORY_VERSION) {
+        vox_digs_memory_init(&canonical);
+        memory = &canonical;
+    }
+    match->memory = *memory;
     match->abi_version = VOX_ABI_VERSION;
     match->struct_size = (vox_u32)sizeof(*match);
     match->rules = *rules;
@@ -1883,6 +2138,33 @@ vox_result vox_digs_match_init(vox_digs_match *match,
             match->contracts[pair].last_stimulus_tick = 0U;
             for (slot = 0U; slot < VOX_DIGS_RECENT_LINES; ++slot) {
                 match->contracts[pair].recent_lines[slot] = 0U;
+            }
+        }
+    }
+    /*
+     * Carry the accounts in.  Two miners who left the last match hating each
+     * other start this one hating each other, which is the entire point of
+     * the exercise -- but the tone dwells from zero, so the first thing that
+     * happens can still move it.
+     */
+    {
+        vox_u16 a;
+        vox_u16 b;
+        for (a = 0U; a < match->rules.player_count; ++a) {
+            for (b = (vox_u16)(a + 1U); b < match->rules.player_count; ++b) {
+                vox_u16 pair = vox_digs_pair_index(a, b);
+                vox_u16 slot = vox_digs_regard_index(
+                    vox_digs_memory_identity(match, a),
+                    vox_digs_memory_identity(match, b));
+                if (pair >= VOX_DIGS_MAX_PAIRS ||
+                    slot >= VOX_DIGS_MAX_PAIRS) {
+                    continue;
+                }
+                match->contracts[pair].tone = match->memory.regard[slot].tone;
+                match->contracts[pair].valence =
+                    match->memory.regard[slot].valence;
+                match->contracts[pair].met =
+                    match->memory.regard[slot].matches_met > 0U ? 1U : 0U;
             }
         }
     }
@@ -2708,14 +2990,29 @@ static vox_u16 digs_stimulus_urgency(vox_u16 stimulus)
  * waits before answering like the rest of them.  Middle of the road on every
  * axis, so the three opponents stay the distinctive ones.
  */
+/*
+ * The traits this miner is actually running on: the drifted ones from the
+ * snapshot, not the archetype table.  A bot that has been through a dozen
+ * matches should not still be reading its factory settings.
+ */
+static const vox_digs_personality *digs_player_traits(
+    const vox_digs_match *match, vox_u16 player)
+{
+    vox_u16 identity = vox_digs_memory_identity(match, player);
+    if (identity < VOX_DIGS_IDENTITY_COUNT) {
+        return &match->memory.identities[identity].traits;
+    }
+    return vox_digs_personality_get(VOX_DIGS_ARCHETYPE_ENGINEER);
+}
+
 static const vox_digs_personality *digs_speaker_personality(
     const vox_digs_match *match, vox_u16 player)
 {
     static const vox_digs_personality miner = {
         128U, 128U, 128U, 128U, 128U, 0U
     };
-    const vox_digs_personality *personality =
-        vox_digs_personality_get(vox_digs_bot_archetype(match, player));
+    const vox_digs_personality *personality = digs_player_traits(match,
+                                                                 player);
     return personality != 0 ? personality : &miner;
 }
 
@@ -5198,7 +5495,13 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
         state->stuck_ticks--;
     }
     archetype = vox_digs_bot_archetype(match, player);
-    personality = vox_digs_personality_get(archetype);
+    /*
+     * Drifted traits, not the archetype table.  A bot twenty matches in
+     * should not still be running its factory settings -- that is what makes
+     * "no longer the same bot the player met at the beginning" true rather
+     * than merely claimed.
+     */
+    personality = digs_player_traits(match, player);
     if (personality == 0) {
         personality = vox_digs_personality_get(VOX_DIGS_ARCHETYPE_ENGINEER);
     }
@@ -6418,6 +6721,7 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
     hash = digs_hash_mix(hash, (vox_u32)match->result_draw);
     hash = digs_hash_mix(hash, (vox_u32)match->winner_player);
     hash = digs_hash_mix(hash, (vox_u32)match->speech_floor_ticks);
+    hash = digs_hash_mix(hash, match->memory.memory_hash);
     hash = digs_hash_mix(hash, match->lava_level_q16);
     hash = digs_hash_mix(hash, (vox_u32)match->lava_surface_y);
     hash = digs_hash_mix(hash, (vox_u32)match->projectile_count);

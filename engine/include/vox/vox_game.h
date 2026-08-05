@@ -469,6 +469,56 @@ typedef struct vox_digs_input {
     vox_u16 reserved;
 } vox_digs_input;
 
+/*
+ * What the miners carry between matches.
+ *
+ * This is a hashed *input*, not part of the match: a match stays reproducible
+ * from (seed + rules + snapshot), and the tests pin a canonical snapshot so
+ * golden hashes do not move every time somebody plays a game.
+ *
+ * Everything here is keyed by identity rather than slot.  RIVET is RIVET
+ * whichever slot he spawns in, and "the bots remember you" only means
+ * anything if the account they keep follows the person and not the seat.
+ */
+#define VOX_DIGS_MEMORY_VERSION 1U
+#define VOX_DIGS_IDENTITY_RIVET 0U
+#define VOX_DIGS_IDENTITY_CINDER 1U
+#define VOX_DIGS_IDENTITY_FLAMEY 2U
+#define VOX_DIGS_IDENTITY_PLAYER 3U
+#define VOX_DIGS_IDENTITY_COUNT 4U
+
+/* How two identities left things last time. */
+typedef struct vox_digs_regard {
+    vox_u16 tone;
+    vox_i16 valence;
+    vox_u16 matches_met;
+    vox_u16 kills_for;      /* the lower identity killed the higher */
+    vox_u16 kills_against;
+    vox_u16 truces;
+    vox_u16 betrayals;
+    vox_u16 reserved;
+} vox_digs_regard;
+
+typedef struct vox_digs_identity_record {
+    vox_digs_personality traits;   /* drifted away from the archetype base */
+    vox_u16 matches_played;
+    vox_u16 wins;
+    vox_u16 kills;
+    vox_u16 deaths;
+    vox_u16 reserved;
+} vox_digs_identity_record;
+
+typedef struct vox_digs_bot_memory {
+    vox_u32 abi_version;
+    vox_u32 struct_size;
+    vox_u32 memory_version;
+    vox_u32 launch_counter;      /* set by the port, never read in the sim */
+    vox_u32 elapsed_coarse;      /* likewise: whole hours since last launch */
+    vox_digs_identity_record identities[VOX_DIGS_IDENTITY_COUNT];
+    vox_digs_regard regard[VOX_DIGS_MAX_PAIRS];
+    vox_u32 memory_hash;
+} vox_digs_bot_memory;
+
 typedef struct vox_digs_match {
     vox_u32 abi_version;
     vox_u32 struct_size;
@@ -537,6 +587,7 @@ typedef struct vox_digs_match {
      * four simultaneous monologues.
      */
     vox_u16 speech_floor_ticks;
+    vox_digs_bot_memory memory;   /* what they walked in remembering */
     vox_digs_contract contracts[VOX_DIGS_MAX_PAIRS];
     vox_u32 lava_level_q16;
     vox_u16 lava_surface_y;
@@ -568,8 +619,28 @@ int vox_digs_player_is_bot(const vox_digs_match *match, vox_u16 player);
 vox_u16 vox_digs_map_landform(vox_u16 map_style, vox_u32 seed);
 vox_result vox_digs_generate_map(vox_world *world, vox_u16 map_style,
                                  vox_u32 seed);
+/* Fill a snapshot with the canonical starting state: no history at all. */
+void vox_digs_memory_init(vox_digs_bot_memory *memory);
+/* Recompute and store memory_hash.  Returns it. */
+vox_u32 vox_digs_memory_hash(vox_digs_bot_memory *memory);
+/* Which identity a slot is playing.  VOX_DIGS_IDENTITY_COUNT if invalid. */
+vox_u16 vox_digs_memory_identity(const vox_digs_match *match, vox_u16 player);
+/* Index into regard[] for two identities; VOX_DIGS_MAX_PAIRS if invalid. */
+vox_u16 vox_digs_regard_index(vox_u16 a, vox_u16 b);
+
 vox_result vox_digs_match_init(vox_digs_match *match,
                                const vox_digs_rules *rules);
+/*
+ * As vox_digs_match_init, but seeded with what the miners remember.  The
+ * plain init delegates here with a canonical snapshot, which is why every
+ * existing caller and the Win32 port needed no change at all.
+ */
+vox_result vox_digs_match_init_ex(vox_digs_match *match,
+                                  const vox_digs_rules *rules,
+                                  const vox_digs_bot_memory *memory);
+/* The snapshot as it stands now, with drift applied.  Safe mid-match. */
+vox_result vox_digs_match_export_memory(const vox_digs_match *match,
+                                        vox_digs_bot_memory *memory);
 vox_result vox_digs_match_step(vox_digs_match *match);
 vox_result vox_digs_request_respawn(vox_digs_match *match,
                                     vox_u16 player);

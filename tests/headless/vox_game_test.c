@@ -2468,6 +2468,109 @@ static int test_bot_archetypes_and_charge_weapons(void)
  * A wide excavation must cave in, and a narrow tunnel must stay usable --
  * otherwise the digging tools destroy the tunnels they exist to make.
  */
+static int test_memory_carries_between_matches(void)
+{
+    vox_digs_rules rules;
+    vox_digs_bot_memory memory;
+    vox_digs_bot_memory second;
+    vox_digs_bot_memory foreign;
+    const vox_digs_contract *contract;
+    vox_u16 slot;
+    vox_u32 tick;
+
+    /* Identity pairs must be symmetric and cover every combination once. */
+    {
+        vox_u16 a;
+        vox_u16 b;
+        vox_u16 seen[VOX_DIGS_MAX_PAIRS];
+        for (a = 0U; a < VOX_DIGS_MAX_PAIRS; ++a) seen[a] = 0U;
+        for (a = 0U; a < VOX_DIGS_IDENTITY_COUNT; ++a) {
+            for (b = 0U; b < VOX_DIGS_IDENTITY_COUNT; ++b) {
+                vox_u16 index = vox_digs_regard_index(a, b);
+                if (a == b) {
+                    if (index != VOX_DIGS_MAX_PAIRS) return 1;
+                    continue;
+                }
+                if (index >= VOX_DIGS_MAX_PAIRS) return 2;
+                if (index != vox_digs_regard_index(b, a)) return 3;
+                seen[index]++;
+            }
+        }
+        for (a = 0U; a < VOX_DIGS_MAX_PAIRS; ++a) {
+            if (seen[a] != 2U) return 4;
+        }
+    }
+
+    vox_digs_memory_init(&memory);
+    if (memory.memory_hash == 0U) return 5;
+    if (memory.regard[0].tone != VOX_DIGS_TONE_NEUTRAL) return 6;
+
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0x0002U;
+    rules.match_ticks = 900U;
+    rules.lava_start_tick = 850U;
+    if (vox_digs_match_init_ex(&match, &rules, &memory) != VOX_OK) return 7;
+    for (slot = 0U; slot < 2U; ++slot) match.spawn_shield_ticks[slot] = 0U;
+
+    /* Make them hate each other, then close the match. */
+    for (tick = 0U; tick < 500U && match.phase == VOX_DIGS_RUNNING; ++tick) {
+        if (match.alive[1]) {
+            (void)vox_digs_apply_hit(&match, 0U, 1U, VOX_DIGS_TOOL_POPPER,
+                                     VOX_DIGS_NO_PART, 20U,
+                                     VOX_DIGS_DAMAGE_BALLISTIC);
+        }
+        if (vox_digs_match_step(&match) != VOX_OK) return 8;
+        if (match.event_count > 0U) {
+            (void)vox_digs_consume_events(&match, match.event_count);
+        }
+    }
+    contract = vox_digs_contract_get(&match, 0U, 1U);
+    if (contract == 0 || contract->tone >= VOX_DIGS_TONE_NEUTRAL) return 9;
+
+    if (vox_digs_match_export_memory(&match, &second) != VOX_OK) return 10;
+    if (second.memory_hash == memory.memory_hash) return 11;
+    {
+        vox_u16 pair = vox_digs_regard_index(VOX_DIGS_IDENTITY_PLAYER,
+                                             VOX_DIGS_IDENTITY_RIVET);
+        if (pair >= VOX_DIGS_MAX_PAIRS) return 12;
+        if (second.regard[pair].tone >= VOX_DIGS_TONE_NEUTRAL) return 13;
+        if (second.regard[pair].matches_met == 0U) return 14;
+        /* Both of them should have played a match now. */
+        if (second.identities[VOX_DIGS_IDENTITY_RIVET].matches_played == 0U) {
+            return 15;
+        }
+    }
+
+    /*
+     * The next match must open where the last one ended.  This is the whole
+     * feature: they walk in already knowing what happened.
+     */
+    if (vox_digs_match_init_ex(&match, &rules, &second) != VOX_OK) return 16;
+    contract = vox_digs_contract_get(&match, 0U, 1U);
+    if (contract == 0) return 17;
+    if (contract->tone >= VOX_DIGS_TONE_NEUTRAL) return 18;
+    if (!contract->met) return 19;
+
+    /*
+     * A snapshot from another build is a first meeting, not a reinterpreted
+     * one.  Reading foreign bytes the wrong way round would produce
+     * plausible traits and a wrong match, which is worse than no memory.
+     */
+    foreign = second;
+    foreign.memory_version = VOX_DIGS_MEMORY_VERSION + 99U;
+    if (vox_digs_match_init_ex(&match, &rules, &foreign) != VOX_OK) return 20;
+    contract = vox_digs_contract_get(&match, 0U, 1U);
+    if (contract == 0 || contract->tone != VOX_DIGS_TONE_NEUTRAL) return 21;
+    if (contract->met) return 22;
+
+    /* And the plain init must still behave exactly like a blank snapshot. */
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 23;
+    contract = vox_digs_contract_get(&match, 0U, 1U);
+    if (contract == 0 || contract->tone != VOX_DIGS_TONE_NEUTRAL) return 24;
+    return 0;
+}
+
 static int test_contracts_steer_targeting(void)
 {
     vox_digs_rules rules;
@@ -3830,6 +3933,13 @@ int main(void)
         if (result != 0) {
             fprintf(stderr, "DIGS archetype mismatch (%d)\n", result);
             return 65;
+        }
+    }
+    {
+        int result = test_memory_carries_between_matches();
+        if (result != 0) {
+            fprintf(stderr, "DIGS memory mismatch (%d)\n", result);
+            return 73;
         }
     }
     {
