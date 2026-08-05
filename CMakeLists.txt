@@ -338,11 +338,20 @@ if (VOX_BUILD_SDL2_DEMO)
     find_package(SDL2 2.0.10 CONFIG REQUIRED)
     add_executable(digs_demo
         ports/sdl2/digs_sdl2.c
+        ports/sdl2/digs_chronicle.c
         ports/sdl2/vox_sdl_ui.c
     )
     target_link_libraries(digs_demo PRIVATE digs_game digs_miner_art vox_audio SDL2::SDL2)
     target_include_directories(digs_demo PRIVATE engine/include ports/sdl2)
     target_compile_definitions(digs_demo PRIVATE SDL_MAIN_HANDLED)
+    # The chronicle is meant to be unrepeatable, so a released build has no
+    # way to erase it.  Refining the feature needs one, so debug builds get
+    # --chronicle-reset and --chronicle-dump and nothing else does.
+    option(VOX_DEBUG_CHRONICLE
+        "Expose --chronicle-reset and --chronicle-dump" OFF)
+    if (VOX_DEBUG_CHRONICLE OR CMAKE_BUILD_TYPE STREQUAL "Debug")
+        target_compile_definitions(digs_demo PRIVATE DIGS_CHRONICLE_DEBUG)
+    endif()
     set_property(TARGET digs_demo PROPERTY C_STANDARD 90)
     set_property(TARGET digs_demo PROPERTY C_STANDARD_REQUIRED ON)
     set_property(TARGET digs_demo PROPERTY C_EXTENSIONS OFF)
@@ -441,6 +450,9 @@ if (VOX_BUILD_TESTS)
         add_test(NAME digs_settings_migration
             COMMAND digs_demo --settings-self-test
                     ${CMAKE_CURRENT_BINARY_DIR}/digs-settings-self-test.cfg)
+        add_test(NAME digs_chronicle_persistence
+            COMMAND digs_demo --chronicle-self-test
+                    ${CMAKE_CURRENT_BINARY_DIR}/digs-chronicle-self-test.dat)
         add_test(NAME digs_camera_bounds
             COMMAND digs_demo --camera-self-test)
         add_test(NAME digs_fixed_step_debt

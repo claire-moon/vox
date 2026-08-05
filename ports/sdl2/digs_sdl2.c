@@ -10,6 +10,7 @@
 #include "vox/vox_audio.h"
 #include "vox/vox_game.h"
 #include "digs_lines.h"
+#include "digs_chronicle.h"
 #include "vox/vox_render.h"
 #include "vox_sdl_ui.h"
 
@@ -387,6 +388,12 @@ static vox_u8 demo_render_touched[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
 static demo_render_patch demo_render_patches[DEMO_RENDER_OVERLAY_CAPACITY];
 static vox_u32 demo_render_patch_count;
 static vox_digs_match demo_match;
+/*
+ * Everything that outlives the process.  Loaded once at startup, written
+ * when a match ends, and never erased from inside a released build.
+ */
+static digs_chronicle demo_chronicle;
+static int demo_chronicle_ready;
 static vox_world demo_title_world;
 static vox_ui_surface demo_ui;
 static vox_software_target demo_target;
@@ -1476,6 +1483,42 @@ static int demo_input_settings_path(char *path, int capacity,
     SDL_free(base);
     return 1;
 }
+
+/*
+ * Where the chronicle lives, next to settings.cfg.  The same override that
+ * lets the tests point settings somewhere harmless points this too, so a
+ * self-test never writes over a real player's history.
+ */
+static int demo_chronicle_path(char *path, int capacity)
+{
+    return demo_input_settings_path(path, capacity, "chronicle.dat");
+}
+
+/*
+ * Take everything this match taught them and put it away.
+ *
+ * Called once when the match ends.  Export first -- the drift and the pair
+ * accounts are computed there -- then write, atomically, so a crash halfway
+ * through leaves the previous history intact rather than half of two.
+ */
+static void demo_chronicle_commit(void)
+{
+    char path[1032];
+    if (!demo_chronicle_ready) {
+        return;
+    }
+    if (vox_digs_match_export_memory(&demo_match,
+                                     &demo_chronicle.memory) != VOX_OK) {
+        return;
+    }
+    if (demo_chronicle.matches_recorded < 65535U) {
+        demo_chronicle.matches_recorded++;
+    }
+    if (demo_chronicle_path(path, (int)sizeof(path))) {
+        (void)digs_chronicle_save(&demo_chronicle, path);
+    }
+}
+
 
 static void demo_validate_input_settings(demo_app *app)
 {
@@ -4374,7 +4417,9 @@ static int demo_start_match(demo_app *app, int foundry)
             (demo_respawn_delays[app->respawn_delay_index] *
              (int)VOX_DIGS_TICKS_PER_SECOND);
     }
-    if (vox_digs_match_init(&demo_match, &rules) != VOX_OK) {
+    if (vox_digs_match_init_ex(&demo_match, &rules,
+                               demo_chronicle_ready ?
+                               &demo_chronicle.memory : 0) != VOX_OK) {
         return 0;
     }
     if (foundry) {
@@ -5334,12 +5379,17 @@ static void demo_process_events(demo_app *app)
         } else if (event->type == VOX_DIGS_EVENT_CRUSH) {
             demo_haptic_world(app, event, DEMO_HAPTIC_CRUMBLE);
         } else if (event->type == VOX_DIGS_EVENT_AI_BARK) {
+            digs_chronicle_log(&demo_chronicle,
+                vox_digs_memory_identity(&demo_match, event->source),
+                vox_digs_memory_identity(&demo_match, event->target),
+                event->variant);
             demo_speak_line(app, (int)event->source,
                             event->target < demo_match.rules.player_count ?
                             (int)event->target : -1, event->variant,
                             vox_digs_player_is_bot(&demo_match,
                                                    event->source));
         } else if (event->type == VOX_DIGS_EVENT_MATCH_END) {
+            demo_chronicle_commit();
             if (demo_match.result_draw) {
                 demo_set_banner(app, "DRAW!", 1);
             } else if (demo_match.winner_player <
@@ -7944,6 +7994,115 @@ static void demo_wait_for_frame(Uint64 frequency, int frame_cap,
     }
 }
 
+/*
+ * Prove the chronicle survives a round trip, repairs a mangled file, and
+ * records that it was mangled.  This is the one part of the save layer that
+ * a player can break from outside the game, so it is the part that has to be
+ * demonstrably safe rather than merely careful.
+ */
+static int digs_chronicle_self_test(const char *path)
+{
+    static digs_chronicle written;
+    static digs_chronicle read;
+    char backup[1032];
+    FILE *file;
+    vox_u16 pair;
+
+    (void)remove(path);
+    if (strlen(path) + 5U >= sizeof(backup)) return 1;
+    sprintf(backup, "%s.bak", path);
+    (void)remove(backup);
+
+    digs_chronicle_reset(&written);
+    /* Nothing there yet: a first launch, and not a tampered one. */
+    if (digs_chronicle_load(&read, path) != 0) return 2;
+    if (read.tampered) return 3;
+
+    pair = vox_digs_regard_index(VOX_DIGS_IDENTITY_PLAYER,
+                                 VOX_DIGS_IDENTITY_RIVET);
+    if (pair >= VOX_DIGS_MAX_PAIRS) return 4;
+    written.memory.regard[pair].tone = (vox_u16)VOX_DIGS_TONE_FEUD;
+    written.memory.regard[pair].valence = -742;
+    written.memory.regard[pair].matches_met = 9U;
+    written.memory.regard[pair].betrayals = 2U;
+    written.memory.identities[VOX_DIGS_IDENTITY_RIVET].traits.aggression =
+        199U;
+    written.memory.identities[VOX_DIGS_IDENTITY_RIVET].matches_played = 12U;
+    written.memory.launch_counter = 37U;
+    written.matches_recorded = 12U;
+    digs_chronicle_log(&written, VOX_DIGS_IDENTITY_RIVET,
+                       VOX_DIGS_IDENTITY_PLAYER, 1234U);
+    digs_chronicle_log(&written, VOX_DIGS_IDENTITY_PLAYER,
+                       VOX_DIGS_IDENTITY_RIVET, 77U);
+    written.inbox[0].from = (vox_u16)VOX_DIGS_IDENTITY_RIVET;
+    written.inbox[0].unread = 1U;
+    written.inbox[0].launch = 36U;
+    written.inbox[0].lines[0] = 501U;
+    written.inbox[0].lines[1] = 502U;
+    written.inbox[0].line_count = 2U;
+    written.inbox_count = 1U;
+
+    if (!digs_chronicle_save(&written, path)) return 5;
+    if (digs_chronicle_load(&read, path) != 1) return 6;
+    if (read.tampered) return 7;
+    if (read.memory.regard[pair].tone != VOX_DIGS_TONE_FEUD) return 8;
+    if (read.memory.regard[pair].valence != -742) return 9;
+    if (read.memory.regard[pair].betrayals != 2U) return 10;
+    if (read.memory.identities[VOX_DIGS_IDENTITY_RIVET].traits.aggression !=
+        199U) {
+        return 11;
+    }
+    if (read.memory.launch_counter != 37U) return 12;
+    if (read.log_count != 2U) return 13;
+    if (digs_chronicle_log_at(&read, 0U)->line != 1234U) return 14;
+    if (digs_chronicle_log_at(&read, 1U)->line != 77U) return 15;
+    if (read.inbox_count != 1U || read.inbox[0].line_count != 2U) return 16;
+    if (read.inbox[0].lines[1] != 502U) return 17;
+    if (digs_chronicle_unread(&read) != 1U) return 18;
+
+    /*
+     * Keep a good copy, then edit the live file by hand the way a player
+     * would: change a value in place and leave the checksum alone.  Appending
+     * after SUM proves nothing -- the reader stops there, so appended junk is
+     * inert rather than tampering.
+     */
+    if (!digs_chronicle_save(&read, backup)) return 19;
+    {
+        static char blob[65536];
+        size_t got;
+        char *hit;
+        file = fopen(path, "rb");
+        if (file == 0) return 20;
+        got = fread(blob, 1U, sizeof(blob) - 1U, file);
+        (void)fclose(file);
+        blob[got] = '\0';
+        hit = strstr(blob, "-742");
+        if (hit == 0) return 27;
+        hit[1] = '1';           /* -742 becomes -142: same length, new value */
+        hit[2] = '4';
+        hit[3] = '2';
+        file = fopen(path, "wb");
+        if (file == 0) return 28;
+        (void)fwrite(blob, 1U, got, file);
+        (void)fclose(file);
+    }
+    if (digs_chronicle_load(&read, path) != 1) return 21;
+    if (!read.tampered) return 22;          /* it must notice */
+    if (read.memory.regard[pair].valence != -742) return 23;  /* and repair */
+
+    /* With no good copy to fall back on, it starts over and says so. */
+    (void)remove(backup);
+    if (digs_chronicle_load(&read, path) != 0) return 24;
+    if (!read.tampered) return 25;
+    if (read.memory.regard[pair].valence != 0) return 26;
+
+    (void)remove(path);
+    printf("DIGS chronicle self-test passed inbox=%u log=%u\n",
+           (unsigned int)DIGS_INBOX_CAPACITY,
+           (unsigned int)DIGS_LOG_CAPACITY);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     demo_app app;
@@ -7985,6 +8144,57 @@ int main(int argc, char **argv)
                            "/tmp/digs-settings-self-test.cfg";
         return demo_settings_self_test(path);
     }
+    if (argc >= 2 && strcmp(argv[1], "--chronicle-self-test") == 0) {
+        const char *path = argc >= 3 ? argv[2] :
+                           "/tmp/digs-chronicle-self-test.dat";
+        return digs_chronicle_self_test(path);
+    }
+#ifdef DIGS_CHRONICLE_DEBUG
+    /*
+     * Debug builds only.  A released game has no way to erase this history:
+     * it is meant to be the player's and unrepeatable, and a reset button
+     * would quietly turn it into a save file.
+     */
+    if (argc >= 2 && strcmp(argv[1], "--chronicle-reset") == 0) {
+        char path[1032];
+        if (!demo_chronicle_path(path, (int)sizeof(path))) return 1;
+        digs_chronicle_reset(&demo_chronicle);
+        return digs_chronicle_save(&demo_chronicle, path) ? 0 : 1;
+    }
+    if (argc >= 2 && strcmp(argv[1], "--chronicle-dump") == 0) {
+        char path[1032];
+        vox_u16 i;
+        if (!demo_chronicle_path(path, (int)sizeof(path))) return 1;
+        (void)digs_chronicle_load(&demo_chronicle, path);
+        printf("chronicle %s tampered=%u matches=%u unread=%u log=%u\n",
+               path, (unsigned int)demo_chronicle.tampered,
+               (unsigned int)demo_chronicle.matches_recorded,
+               (unsigned int)digs_chronicle_unread(&demo_chronicle),
+               (unsigned int)demo_chronicle.log_count);
+        for (i = 0U; i < VOX_DIGS_IDENTITY_COUNT; ++i) {
+            const vox_digs_identity_record *r =
+                &demo_chronicle.memory.identities[i];
+            printf("  identity %u  aggr=%3u pat=%3u caut=%3u grudge=%3u "
+                   "soc=%3u  played=%u w=%u k=%u d=%u\n",
+                   (unsigned int)i, (unsigned int)r->traits.aggression,
+                   (unsigned int)r->traits.patience,
+                   (unsigned int)r->traits.caution,
+                   (unsigned int)r->traits.grudge,
+                   (unsigned int)r->traits.sociability,
+                   (unsigned int)r->matches_played, (unsigned int)r->wins,
+                   (unsigned int)r->kills, (unsigned int)r->deaths);
+        }
+        for (i = 0U; i < VOX_DIGS_MAX_PAIRS; ++i) {
+            const vox_digs_regard *g = &demo_chronicle.memory.regard[i];
+            printf("  regard %u  tone=%-8s valence=%5d met=%u truces=%u "
+                   "betrayals=%u\n", (unsigned int)i,
+                   vox_digs_tone_name(g->tone), (int)g->valence,
+                   (unsigned int)g->matches_met, (unsigned int)g->truces,
+                   (unsigned int)g->betrayals);
+        }
+        return 0;
+    }
+#endif
     if (argc >= 2 && strcmp(argv[1], "--camera-self-test") == 0) {
         return demo_camera_self_test();
     }
