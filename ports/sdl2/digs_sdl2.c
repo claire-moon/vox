@@ -4900,6 +4900,19 @@ static void demo_submit_human_input(demo_app *app)
             input.actions = (vox_u16)(input.actions |
                                       VOX_DIGS_ACTION_STEAM);
         }
+        /*
+         * Speaking goes through the input stream like everything else,
+         * because what gets said moves contract state and therefore the
+         * match hash -- a bark raised straight into the port would make a
+         * replay diverge from the match it was recorded from.
+         *
+         * This has to be set BEFORE the submit.  It was not, so the bit was
+         * written onto an input that had already been handed over and the
+         * bark button did nothing at all.
+         */
+        if (bark && !app->bark_down[player] && demo_match.alive[player]) {
+            input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_BARK);
+        }
         (void)vox_digs_submit_input(&demo_match, &input);
         if (player < (int)DEMO_LOCAL_MAX) {
             if (previous_down && !app->keyboard_previous_down[player]) {
@@ -4910,15 +4923,6 @@ static void demo_submit_human_input(demo_app *app)
             }
             app->keyboard_previous_down[player] = previous_down;
             app->keyboard_next_down[player] = next_down;
-        }
-        if (bark && !app->bark_down[player] && demo_match.alive[player]) {
-            /*
-             * Speaking goes through the input stream like everything else,
-             * because what gets said moves contract state and therefore the
-             * match hash.  A bark raised straight into the port would make a
-             * replay diverge from the match it was recorded from.
-             */
-            input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_BARK);
         }
         app->bark_down[player] = bark;
         if (!demo_match.alive[player] && fire && !app->fire_down[player]) {

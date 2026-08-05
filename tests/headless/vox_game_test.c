@@ -2468,6 +2468,128 @@ static int test_bot_archetypes_and_charge_weapons(void)
  * A wide excavation must cave in, and a narrow tunnel must stay usable --
  * otherwise the digging tools destroy the tunnels they exist to make.
  */
+static int test_contracts_steer_targeting(void)
+{
+    vox_digs_rules rules;
+    vox_digs_contract *near_pair;
+    vox_digs_contract *far_pair;
+    vox_u32 tick;
+    vox_i32 bot_x;
+    vox_i32 bot_y;
+    vox_u16 picked_far = 0U;
+    vox_u16 picked_near = 0U;
+
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 3U;
+    rules.bot_mask = 0x0001U;        /* slot 0 is the bot */
+    rules.match_ticks = 4000U;
+    rules.lava_start_tick = 3900U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 1;
+    for (tick = 0U; tick < 3U; ++tick) match.spawn_shield_ticks[tick] = 0U;
+
+    bot_x = match.players[0].position_x.value_q16 >> 16;
+    bot_y = match.players[0].position_y.value_q16 >> 16;
+    /* Clear air around the three of them so sight lines are not the story. */
+    {
+        vox_u32 x;
+        vox_u32 y;
+        for (x = (vox_u32)(bot_x - 6); x <= (vox_u32)(bot_x + 60); ++x) {
+            for (y = (vox_u32)(bot_y - 8); y <= (vox_u32)(bot_y + 1); ++y) {
+                if (!set_test_column(&match.world, x, y, VOX_MAT_AIR)) {
+                    return 2;
+                }
+            }
+            for (y = (vox_u32)(bot_y + 2); y <= (vox_u32)(bot_y + 5); ++y) {
+                if (!set_test_column(&match.world, x, y, VOX_MAT_SOIL)) {
+                    return 3;
+                }
+            }
+        }
+    }
+    if (vox_world_sleep_all(&match.world) != VOX_OK) return 4;
+    /* Slot 1 stands close.  Slot 2 stands a long way off. */
+    match.players[1].position_x.value_q16 = (vox_i32)((bot_x + 12) << 16);
+    match.players[1].position_y.value_q16 = match.players[0].position_y.value_q16;
+    match.players[2].position_x.value_q16 = (vox_i32)((bot_x + 50) << 16);
+    match.players[2].position_y.value_q16 = match.players[0].position_y.value_q16;
+
+    near_pair = (vox_digs_contract *)vox_digs_contract_get(&match, 0U, 1U);
+    far_pair = (vox_digs_contract *)vox_digs_contract_get(&match, 0U, 2U);
+    if (near_pair == 0 || far_pair == 0) return 5;
+
+    /*
+     * An arrangement with the near one and a blood feud with the far one.
+     * Geometry says shoot the near miner; history must say otherwise.
+     */
+    near_pair->tone = (vox_u16)VOX_DIGS_TONE_TRUCE;
+    near_pair->valence = 400;
+    near_pair->met = 1U;
+    far_pair->tone = (vox_u16)VOX_DIGS_TONE_FEUD;
+    far_pair->valence = -800;
+    far_pair->met = 1U;
+
+    for (tick = 0U; tick < 240U && match.phase == VOX_DIGS_RUNNING; ++tick) {
+        /*
+         * Hold the contracts, the positions and both lives.  Targeting is
+         * what is on trial, and once the feuded miner dies, falling back to
+         * the one you have an arrangement with is correct behaviour rather
+         * than a failure -- counting those ticks measured the wrong thing.
+         */
+        near_pair->tone = (vox_u16)VOX_DIGS_TONE_TRUCE;
+        far_pair->tone = (vox_u16)VOX_DIGS_TONE_FEUD;
+        match.alive[1] = 1U;
+        match.alive[2] = 1U;
+        match.health[1] = VOX_DIGS_MAX_HEALTH;
+        match.health[2] = VOX_DIGS_MAX_HEALTH;
+        match.players[1].position_x.value_q16 = (vox_i32)((bot_x + 12) << 16);
+        match.players[2].position_x.value_q16 = (vox_i32)((bot_x + 50) << 16);
+        match.players[1].position_y.value_q16 =
+            match.players[0].position_y.value_q16;
+        match.players[2].position_y.value_q16 =
+            match.players[0].position_y.value_q16;
+        if (vox_digs_match_step(&match) != VOX_OK) return 6;
+        if (match.event_count > 0U) {
+            (void)vox_digs_consume_events(&match, match.event_count);
+        }
+        if (match.bots[0].target == 2U) picked_far++;
+        else if (match.bots[0].target == 1U) picked_near++;
+    }
+    /* The feud must win over the shorter walk. */
+    if (picked_far == 0U) return 7;
+    if (picked_near > picked_far) return 8;
+
+    /* Now make them both ordinary, and geometry should decide again. */
+    near_pair->tone = (vox_u16)VOX_DIGS_TONE_NEUTRAL;
+    near_pair->valence = 0;
+    far_pair->tone = (vox_u16)VOX_DIGS_TONE_NEUTRAL;
+    far_pair->valence = 0;
+    picked_near = 0U;
+    picked_far = 0U;
+    for (tick = 0U; tick < 240U && match.phase == VOX_DIGS_RUNNING; ++tick) {
+        near_pair->tone = (vox_u16)VOX_DIGS_TONE_NEUTRAL;
+        far_pair->tone = (vox_u16)VOX_DIGS_TONE_NEUTRAL;
+        match.alive[1] = 1U;
+        match.alive[2] = 1U;
+        match.health[1] = VOX_DIGS_MAX_HEALTH;
+        match.health[2] = VOX_DIGS_MAX_HEALTH;
+        match.players[1].position_x.value_q16 = (vox_i32)((bot_x + 12) << 16);
+        match.players[2].position_x.value_q16 = (vox_i32)((bot_x + 50) << 16);
+        match.players[1].position_y.value_q16 =
+            match.players[0].position_y.value_q16;
+        match.players[2].position_y.value_q16 =
+            match.players[0].position_y.value_q16;
+        if (vox_digs_match_step(&match) != VOX_OK) return 9;
+        if (match.event_count > 0U) {
+            (void)vox_digs_consume_events(&match, match.event_count);
+        }
+        if (match.bots[0].target == 2U) picked_far++;
+        else if (match.bots[0].target == 1U) picked_near++;
+    }
+    if (picked_near == 0U) return 10;
+    if (picked_far > picked_near) return 11;
+    return 0;
+}
+
 static int test_speech_is_paced_and_answered(void)
 {
     vox_digs_rules rules;
@@ -3708,6 +3830,13 @@ int main(void)
         if (result != 0) {
             fprintf(stderr, "DIGS archetype mismatch (%d)\n", result);
             return 65;
+        }
+    }
+    {
+        int result = test_contracts_steer_targeting();
+        if (result != 0) {
+            fprintf(stderr, "DIGS contract targeting mismatch (%d)\n", result);
+            return 72;
         }
     }
     {

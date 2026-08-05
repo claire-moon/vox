@@ -2625,6 +2625,18 @@ static void digs_contract_note(vox_digs_match *match, vox_u16 actor,
         return;
     }
     contract = &match->contracts[index];
+    /*
+     * Shooting a miner you have an arrangement with is not an ordinary hit.
+     * It is the arrangement ending, and it costs accordingly -- this is the
+     * only way a truce can be spent, and it has to hurt or a truce would be
+     * free to take and free to break.
+     */
+    if ((stimulus == VOX_DIGS_STIMULUS_HURT_THEM ||
+         stimulus == VOX_DIGS_STIMULUS_KILLED_THEM) &&
+        (contract->tone == VOX_DIGS_TONE_TRUCE ||
+         contract->tone == VOX_DIGS_TONE_BONDED)) {
+        stimulus = (vox_u16)VOX_DIGS_STIMULUS_TRUCE_BROKEN;
+    }
     contract->last_stimulus = stimulus;
     contract->last_actor = actor;
     contract->last_stimulus_tick = match->tick;
@@ -2656,6 +2668,10 @@ static vox_u16 digs_stimulus_mirror(vox_u16 stimulus)
         return (vox_u16)VOX_DIGS_STIMULUS_KILLED_BY;
     case VOX_DIGS_STIMULUS_KILLED_BY:
         return (vox_u16)VOX_DIGS_STIMULUS_KILLED_THEM;
+    case VOX_DIGS_STIMULUS_TRUCE_BROKEN:
+        return (vox_u16)VOX_DIGS_STIMULUS_BETRAYED;
+    case VOX_DIGS_STIMULUS_TRUCE_OFFERED:
+        return (vox_u16)VOX_DIGS_STIMULUS_TRUCE_ACCEPTED;
     case VOX_DIGS_STIMULUS_FIRST_MEETING:
         return (vox_u16)VOX_DIGS_STIMULUS_FIRST_MEETING;
     default:
@@ -2822,11 +2838,21 @@ static void digs_step_speech(vox_digs_match *match)
         if (match->speech_cooldown[player] > 0U) {
             match->speech_cooldown[player]--;
         }
-        if (!vox_digs_player_is_bot(match, player) &&
-            (match->player_actions[player] & VOX_DIGS_ACTION_BARK) != 0U &&
-            match->speech_stimulus[player] == VOX_DIGS_STIMULUS_NONE &&
-            match->alive[player]) {
-            digs_speech_player_context(match, player);
+        /*
+         * The button is the timing.  A press works out the context if there
+         * is none queued, then clears the pause and takes the floor off
+         * whoever is talking -- the press is a single tick, so anything that
+         * defers it loses it, and a bark button that sometimes does nothing
+         * is worse than one that interrupts.
+         */
+        if (!vox_digs_player_is_bot(match, player) && match->alive[player] &&
+            (match->player_actions[player] & VOX_DIGS_ACTION_BARK) != 0U) {
+            if (match->speech_stimulus[player] == VOX_DIGS_STIMULUS_NONE) {
+                digs_speech_player_context(match, player);
+            }
+            match->speech_delay[player] = 0U;
+            match->speech_cooldown[player] = 0U;
+            match->speech_floor_ticks = 0U;
         }
         stimulus = match->speech_stimulus[player];
         if (stimulus == VOX_DIGS_STIMULUS_NONE) {
@@ -2894,10 +2920,14 @@ static void digs_step_speech(vox_digs_match *match)
 /* One tick of drift back toward indifference, plus the dwell clocks. */
 static void digs_step_contracts(vox_digs_match *match)
 {
-    vox_u16 index;
+    vox_u16 a;
+    vox_u16 b;
     int decay = (match->tick % DIGS_CONTRACT_DECAY_TICKS) == 0U;
-    for (index = 0U; index < VOX_DIGS_MAX_PAIRS; ++index) {
+    for (a = 0U; a < VOX_DIGS_MAX_SLOTS; ++a)
+    for (b = (vox_u16)(a + 1U); b < VOX_DIGS_MAX_SLOTS; ++b) {
+        vox_u16 index = vox_digs_pair_index(a, b);
         vox_digs_contract *contract = &match->contracts[index];
+        vox_u16 was = contract->tone;
         if (contract->tone_ticks < 65535U) {
             contract->tone_ticks++;
         }
@@ -2914,6 +2944,30 @@ static void digs_step_contracts(vox_digs_match *match)
                 contract->valence + DIGS_CONTRACT_DECAY_STEP : 0);
         }
         digs_contract_settle(contract);
+        /*
+         * Announce crossings, without moving the account.  A stimulus that
+         * pushed the tone that produced it would be a feedback loop, so this
+         * only gives the pair something to say about where they have got to.
+         */
+        if (contract->tone != was && contract->met) {
+            vox_u16 crossing = (vox_u16)VOX_DIGS_STIMULUS_NONE;
+            if (contract->tone >= VOX_DIGS_TONE_TRUCE &&
+                was < VOX_DIGS_TONE_TRUCE) {
+                crossing = (vox_u16)VOX_DIGS_STIMULUS_TRUCE_ACCEPTED;
+            } else if (was >= VOX_DIGS_TONE_TRUCE &&
+                       contract->tone < VOX_DIGS_TONE_TRUCE) {
+                crossing = (vox_u16)VOX_DIGS_STIMULUS_TRUCE_BROKEN;
+            } else if (contract->tone == VOX_DIGS_TONE_FEUD &&
+                       was != VOX_DIGS_TONE_FEUD) {
+                crossing = (vox_u16)VOX_DIGS_STIMULUS_HUMILIATED;
+            }
+            if (crossing != VOX_DIGS_STIMULUS_NONE) {
+                contract->last_stimulus = crossing;
+                contract->last_stimulus_tick = match->tick;
+                digs_speech_prompt(match, a, b, crossing);
+                digs_speech_prompt(match, b, a, crossing);
+            }
+        }
     }
 }
 
@@ -4476,6 +4530,54 @@ static int digs_ai_is_enemy(const vox_digs_match *match, vox_u16 player,
     return 1;
 }
 
+
+/*
+ * How appealing a target is, as a multiplier on the distance to them.
+ *
+ * Below 100 they feel closer than they are and get picked over someone
+ * nearer; above 100 they feel further away.  This is the whole mechanism
+ * behind "a bunch of aggressive back and forths will create a hostile
+ * environment": who a miner shoots at stops being a question of geometry as
+ * soon as there is any history.
+ *
+ * Scaled by grudge, so RIVET -- who remembers -- swings much further on the
+ * same history than CINDER, who does not.
+ */
+static vox_u32 digs_ai_contract_pull(const vox_digs_match *match,
+                                     vox_u16 player, vox_u16 other,
+                                     vox_u16 grudge)
+{
+    static const vox_i32 pull[VOX_DIGS_TONE_COUNT] = {
+        -60,    /* FEUD     -- hunt them past anyone closer */
+        -30,    /* HOSTILE  */
+        -10,    /* NEEDLING */
+        0,      /* NEUTRAL  */
+        20,     /* WARY     */
+        60,     /* THAWING  */
+        150,    /* TRUCE    */
+        220     /* BONDED   */
+    };
+    const vox_digs_contract *contract = vox_digs_contract_get(match, player,
+                                                              other);
+    vox_i32 bias;
+    if (contract == 0 || contract->tone >= VOX_DIGS_TONE_COUNT) {
+        return 100U;
+    }
+    bias = (pull[contract->tone] * (vox_i32)grudge) / 255L;
+    return (vox_u32)(100L + bias);
+}
+
+/* Nobody shoots at somebody they have an arrangement with -- if there is
+ * anyone else to shoot at. */
+static int digs_ai_under_truce(const vox_digs_match *match, vox_u16 player,
+                               vox_u16 other)
+{
+    const vox_digs_contract *contract = vox_digs_contract_get(match, player,
+                                                              other);
+    return contract != 0 && (contract->tone == VOX_DIGS_TONE_TRUCE ||
+                             contract->tone == VOX_DIGS_TONE_BONDED);
+}
+
 static int digs_ai_line_of_sight(const vox_world *world,
                                  vox_i32 from_x, vox_i32 from_y,
                                  vox_i32 to_x, vox_i32 to_y)
@@ -5053,6 +5155,7 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     vox_digs_ai_state *state;
     vox_u16 target = VOX_DIGS_NO_PLAYER;
     vox_u16 candidate;
+    vox_u16 pass;
     vox_u32 nearest = 0xffffffffU;
     vox_i32 bot_x;
     vox_i32 bot_y;
@@ -5141,24 +5244,46 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     hazard = digs_ai_hazard(match, player, personality->caution, &escape_x);
     bot_x = digs_q16_to_cell(match->players[player].position_x.value_q16);
     bot_y = digs_q16_to_cell(match->players[player].position_y.value_q16);
-    for (candidate = 0U; candidate < match->rules.player_count; ++candidate) {
-        vox_i32 other_x;
-        vox_i32 other_y;
-        vox_u32 distance;
-        if (!digs_ai_is_enemy(match, player, candidate)) {
-            continue;
-        }
-        other_x = digs_q16_to_cell(
-            match->players[candidate].position_x.value_q16);
-        other_y = digs_q16_to_cell(
-            match->players[candidate].position_y.value_q16);
-        distance = digs_abs_i32(other_x - bot_x) +
-                   digs_abs_i32(other_y - bot_y);
-        if (distance < nearest && distance <= 84U &&
-            digs_ai_line_of_sight(&match->world, bot_x, bot_y,
-                                  other_x, other_y)) {
-            nearest = distance;
-            target = candidate;
+    /*
+     * Two passes, because a truce has to be able to lose.  The first ignores
+     * anyone this miner has an arrangement with; only if that finds nobody
+     * does the second consider them, so a truce holds right up until the
+     * moment it is the only thing left in the mine.
+     */
+    for (pass = 0U; pass < 2U && target == VOX_DIGS_NO_PLAYER; ++pass) {
+        nearest = 0xFFFFFFFFUL;
+        for (candidate = 0U; candidate < match->rules.player_count;
+             ++candidate) {
+            vox_i32 other_x;
+            vox_i32 other_y;
+            vox_u32 distance;
+            vox_u32 weighted;
+            if (!digs_ai_is_enemy(match, player, candidate)) {
+                continue;
+            }
+            if (pass == 0U &&
+                digs_ai_under_truce(match, player, candidate)) {
+                continue;
+            }
+            other_x = digs_q16_to_cell(
+                match->players[candidate].position_x.value_q16);
+            other_y = digs_q16_to_cell(
+                match->players[candidate].position_y.value_q16);
+            distance = digs_abs_i32(other_x - bot_x) +
+                       digs_abs_i32(other_y - bot_y);
+            if (distance > 84U ||
+                !digs_ai_line_of_sight(&match->world, bot_x, bot_y,
+                                       other_x, other_y)) {
+                continue;
+            }
+            /* History decides who, sight and range decide whether. */
+            weighted = (distance *
+                        digs_ai_contract_pull(match, player, candidate,
+                                              personality->grudge)) / 100U;
+            if (weighted < nearest) {
+                nearest = weighted;
+                target = candidate;
+            }
         }
     }
     if (target != VOX_DIGS_NO_PLAYER) {
