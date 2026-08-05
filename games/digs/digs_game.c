@@ -249,6 +249,8 @@
 #define DIGS_SPEECH_COOLDOWN_MIN 45U
 #define DIGS_SPEECH_COOLDOWN_SPAN 150U
 #define DIGS_SPEECH_REPLY_WINDOW 240U
+/* Silence between any two lines, from anyone.  One voice at a time. */
+#define DIGS_SPEECH_FLOOR_TICKS 90U
 #define DIGS_MUZZLE_CLEARANCE_Q16 16384L
 
 static const vox_digs_weapon_properties digs_weapons[VOX_DIGS_TOOL_COUNT] = {
@@ -286,6 +288,7 @@ static const vox_digs_weapon_properties digs_weapons[VOX_DIGS_TOOL_COUNT] = {
 static void digs_step_projectiles(vox_digs_match *match);
 static void digs_step_effects(vox_digs_match *match);
 static void digs_step_contracts(vox_digs_match *match);
+static vox_u32 digs_abs_i32(vox_i32 value);
 static void digs_contract_adjust(vox_digs_match *match, vox_u16 a, vox_u16 b,
                                  vox_i32 delta);
 static void digs_contract_note(vox_digs_match *match, vox_u16 actor,
@@ -293,6 +296,59 @@ static void digs_contract_note(vox_digs_match *match, vox_u16 actor,
 static void digs_speech_prompt(vox_digs_match *match, vox_u16 speaker,
                                vox_u16 subject, vox_u16 stimulus);
 static vox_u16 digs_stimulus_mirror(vox_u16 stimulus);
+
+/*
+ * What the miner you are driving would say if you pressed bark right now.
+ *
+ * Whoever last had dealings with you, if it was recent enough to still be on
+ * anyone's mind; otherwise whoever is closest; otherwise the rock.  The point
+ * is that the button is always in context without ever speaking for you.
+ */
+static void digs_speech_player_context(vox_digs_match *match, vox_u16 player)
+{
+    vox_u16 other;
+    vox_u16 best = VOX_DIGS_NO_PLAYER;
+    vox_u32 freshest = 0U;
+    vox_u32 nearest = 0xFFFFFFFFUL;
+    vox_u16 stimulus = (vox_u16)VOX_DIGS_STIMULUS_IDLE;
+    for (other = 0U; other < match->rules.player_count; ++other) {
+        const vox_digs_contract *contract;
+        vox_i32 gap;
+        if (other == player || !vox_digs_player_is_active(match, other)) {
+            continue;
+        }
+        contract = vox_digs_contract_get(match, player, other);
+        if (contract != 0 &&
+            contract->last_stimulus != VOX_DIGS_STIMULUS_NONE &&
+            contract->last_stimulus_tick + DIGS_SPEECH_REPLY_WINDOW >=
+            match->tick &&
+            contract->last_stimulus_tick >= freshest) {
+            freshest = contract->last_stimulus_tick;
+            best = other;
+            /* Answer what was done to you, not what you did. */
+            stimulus = contract->last_actor == player ?
+                       contract->last_stimulus :
+                       digs_stimulus_mirror(contract->last_stimulus);
+            if (stimulus == VOX_DIGS_STIMULUS_NONE) {
+                stimulus = (vox_u16)VOX_DIGS_STIMULUS_TAUNTED;
+            }
+        }
+        if (freshest == 0U && match->alive[other]) {
+            gap = digs_abs_i32(
+                (match->players[other].position_x.value_q16 >> 16) -
+                (match->players[player].position_x.value_q16 >> 16));
+            if ((vox_u32)gap < nearest) {
+                nearest = (vox_u32)gap;
+                best = other;
+                stimulus = (vox_u16)VOX_DIGS_STIMULUS_SPOTTED;
+            }
+        }
+    }
+    match->speech_stimulus[player] = stimulus;
+    match->speech_subject[player] = best;
+    match->speech_delay[player] = 0U;
+}
+
 static void digs_step_speech(vox_digs_match *match);
 static void digs_step_reactions(vox_digs_match *match);
 static void digs_update_lava(vox_digs_match *match);
@@ -1835,6 +1891,7 @@ vox_result vox_digs_match_init(vox_digs_match *match,
     match->result_reason = VOX_DIGS_END_NONE;
     match->result_draw = 0U;
     match->winner_player = VOX_DIGS_NO_PLAYER;
+    match->speech_floor_ticks = 0U;
     match->lava_level_q16 = 0U;
     match->lava_surface_y = (vox_u16)DIGS_LAVA_BASIN_TOP;
     match->projectile_count = 0U;
@@ -2753,6 +2810,9 @@ static vox_u16 digs_speech_choose(vox_digs_match *match, vox_u16 speaker,
 static void digs_step_speech(vox_digs_match *match)
 {
     vox_u16 player;
+    if (match->speech_floor_ticks > 0U) {
+        match->speech_floor_ticks--;
+    }
     for (player = 0U; player < match->rules.player_count; ++player) {
         vox_u16 stimulus;
         vox_u16 subject;
@@ -2761,6 +2821,12 @@ static void digs_step_speech(vox_digs_match *match)
         const vox_digs_personality *personality;
         if (match->speech_cooldown[player] > 0U) {
             match->speech_cooldown[player]--;
+        }
+        if (!vox_digs_player_is_bot(match, player) &&
+            (match->player_actions[player] & VOX_DIGS_ACTION_BARK) != 0U &&
+            match->speech_stimulus[player] == VOX_DIGS_STIMULUS_NONE &&
+            match->alive[player]) {
+            digs_speech_player_context(match, player);
         }
         stimulus = match->speech_stimulus[player];
         if (stimulus == VOX_DIGS_STIMULUS_NONE) {
@@ -2779,6 +2845,19 @@ static void digs_step_speech(vox_digs_match *match)
             match->speech_delay[player]--;
             continue;
         }
+        /*
+         * A miner you are driving does not talk by itself.  The simulation
+         * works out what you would say and holds it; pressing bark is what
+         * says it.  Bots have no button, so they speak when they are ready.
+         */
+        if (!vox_digs_player_is_bot(match, player) &&
+            (match->player_actions[player] & VOX_DIGS_ACTION_BARK) == 0U) {
+            continue;
+        }
+        /* Somebody else is mid-sentence.  Wait. */
+        if (match->speech_floor_ticks > 0U) {
+            continue;
+        }
         subject = match->speech_subject[player];
         match->speech_stimulus[player] = (vox_u16)VOX_DIGS_STIMULUS_NONE;
         line = digs_speech_choose(match, player, subject, stimulus, &tone);
@@ -2786,6 +2865,7 @@ static void digs_step_speech(vox_digs_match *match)
             continue;
         }
         personality = digs_speaker_personality(match, player);
+        match->speech_floor_ticks = DIGS_SPEECH_FLOOR_TICKS;
         match->speech_cooldown[player] = (vox_u16)(DIGS_SPEECH_COOLDOWN_MIN +
             ((255U - (vox_u32)personality->sociability) *
              DIGS_SPEECH_COOLDOWN_SPAN) / 255U);
@@ -6212,6 +6292,7 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
     hash = digs_hash_mix(hash, (vox_u32)match->result_reason);
     hash = digs_hash_mix(hash, (vox_u32)match->result_draw);
     hash = digs_hash_mix(hash, (vox_u32)match->winner_player);
+    hash = digs_hash_mix(hash, (vox_u32)match->speech_floor_ticks);
     hash = digs_hash_mix(hash, match->lava_level_q16);
     hash = digs_hash_mix(hash, (vox_u32)match->lava_surface_y);
     hash = digs_hash_mix(hash, (vox_u32)match->projectile_count);

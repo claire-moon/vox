@@ -956,6 +956,20 @@ static void demo_speak_line(demo_app *app, int player, int target,
         phrase[out++] = source[in++];
     }
     phrase[out] = '\0';
+    /*
+     * One bubble on screen at a time.  Four miners shouting over each other
+     * turned the battlefield into a noticeboard, and the conversation is
+     * easier to follow -- and easier to read at this resolution -- when only
+     * the newest line is up.
+     */
+    {
+        int other;
+        for (other = 0; other < (int)VOX_DIGS_MAX_SLOTS; ++other) {
+            if (other != player) {
+                app->bubbles[other].ttl = 0U;
+            }
+        }
+    }
     demo_copy_text(app->bubbles[player].text,
                    sizeof(app->bubbles[player].text), phrase);
     app->bubbles[player].ttl = DEMO_BUBBLE_TICKS;
@@ -7009,7 +7023,7 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
         } else if (ticks == 600U &&
                    (fired != 43U || explosions != 16U || crushes != 1U ||
                     max_effects != 474U || max_awake != 10754U ||
-                    demo_match.state_hash != (vox_u32)0xED84590CUL)) {
+                    demo_match.state_hash != (vox_u32)0x63599A00UL)) {
             fprintf(stderr,
                     "load self-test: canonical 600-tick activity/hash "
                     "mismatch\n");

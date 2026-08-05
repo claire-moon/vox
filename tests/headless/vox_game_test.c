@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include "vox/vox_game.h"
 #include "digs_lines.h"
+#include <string.h>
 
 #define TEST_MAP_JUMP_ENVELOPE 28U
 #define TEST_MAP_RAIL_MIN_CLEARANCE 36U
@@ -2470,20 +2471,19 @@ static int test_bot_archetypes_and_charge_weapons(void)
 static int test_speech_is_paced_and_answered(void)
 {
     vox_digs_rules rules;
+    vox_digs_input input;
     vox_u32 tick;
-    vox_u32 spoke = 0U;
-    vox_u16 spoke_by[VOX_DIGS_MAX_SLOTS];
-    vox_u16 slot;
-    vox_u16 first_line = 65535U;
-    vox_u16 repeats = 0U;
+    vox_u32 spoke_bot = 0U;
+    vox_u32 spoke_human = 0U;
+    vox_u32 last_spoke_tick = 0U;
+    vox_u32 min_gap = 0xFFFFFFFFUL;
     vox_u16 seen[16];
     vox_u16 seen_count = 0U;
-
-    for (slot = 0U; slot < VOX_DIGS_MAX_SLOTS; ++slot) spoke_by[slot] = 0U;
+    vox_u16 repeats = 0U;
 
     vox_digs_rules_classic(&rules);
     rules.player_count = 2U;
-    rules.bot_mask = 0x0002U;
+    rules.bot_mask = 0x0002U;          /* slot 0 human, slot 1 RIVET */
     rules.match_ticks = 4000U;
     rules.lava_start_tick = 3900U;
     if (vox_digs_match_init(&match, &rules) != VOX_OK) return 1;
@@ -2497,26 +2497,27 @@ static int test_speech_is_paced_and_answered(void)
         return 2;
     }
     if (match.speech_stimulus[0] == VOX_DIGS_STIMULUS_NONE) return 3;
-    if (match.speech_delay[0] == 0U) return 4;
-    if (match.speech_stimulus[1] != VOX_DIGS_STIMULUS_HURT_BY) return 5;
+    if (match.speech_stimulus[1] != VOX_DIGS_STIMULUS_HURT_BY) return 4;
 
-    for (tick = 0U; tick < 1200U && match.phase == VOX_DIGS_RUNNING; ++tick) {
+    for (tick = 0U; tick < 1500U && match.phase == VOX_DIGS_RUNNING; ++tick) {
         vox_u16 index;
-        if (vox_digs_match_step(&match) != VOX_OK) return 6;
+        vox_u32 spoke_this_tick = 0U;
+        if (vox_digs_match_step(&match) != VOX_OK) return 5;
         for (index = 0U; index < match.event_count; ++index) {
             const vox_digs_event *event =
                 &match.events[(match.event_head + index) %
                               VOX_DIGS_MAX_EVENTS];
             if (event->type != VOX_DIGS_EVENT_AI_BARK) continue;
-            spoke++;
-            if (event->source < VOX_DIGS_MAX_SLOTS) {
-                spoke_by[event->source]++;
+            spoke_this_tick++;
+            if (event->source == 1U) spoke_bot++; else spoke_human++;
+            if (digs_lines_text(event->variant)[0] == '\0') return 6;
+            if (event->magnitude >= VOX_DIGS_STIMULUS_COUNT) return 7;
+            if (event->reserved >= VOX_DIGS_TONE_COUNT) return 8;
+            if (last_spoke_tick != 0U &&
+                match.tick - last_spoke_tick < min_gap) {
+                min_gap = match.tick - last_spoke_tick;
             }
-            /* Every spoken line must resolve to real words. */
-            if (digs_lines_text(event->variant)[0] == '\0') return 7;
-            if (event->magnitude >= VOX_DIGS_STIMULUS_COUNT) return 8;
-            if (event->reserved >= VOX_DIGS_TONE_COUNT) return 9;
-            if (first_line == 65535U) first_line = event->variant;
+            last_spoke_tick = match.tick;
             if (seen_count < 16U) {
                 vox_u16 look;
                 for (look = 0U; look < seen_count; ++look) {
@@ -2525,6 +2526,8 @@ static int test_speech_is_paced_and_answered(void)
                 seen[seen_count++] = event->variant;
             }
         }
+        /* Two miners must never talk over each other. */
+        if (spoke_this_tick > 1U) return 9;
         if (match.event_count > 0U) {
             (void)vox_digs_consume_events(&match, match.event_count);
         }
@@ -2534,15 +2537,57 @@ static int test_speech_is_paced_and_answered(void)
                                      VOX_DIGS_DAMAGE_BALLISTIC);
         }
     }
-    if (spoke == 0U) return 10;
-    /* Both sides of a fight get to speak, not just the one throwing punches. */
-    if (spoke_by[0] == 0U || spoke_by[1] == 0U) return 11;
+    if (spoke_bot == 0U) return 10;
     /*
-     * The recent-line ring exists so a pair does not say the same thing twice
-     * running.  Some repetition is fine once a pool is exhausted; wall-to-wall
-     * repetition means the ring is not being consulted.
+     * The miner the player is driving must never speak on its own.  The
+     * simulation works out what it would say and holds it; the button is
+     * what says it.
      */
-    if (seen_count >= 8U && repeats > seen_count / 2U) return 12;
+    if (spoke_human != 0U) return 11;
+    /* And the floor is real: lines are spaced, never stacked. */
+    if (min_gap != 0xFFFFFFFFUL && min_gap < 2U) return 12;
+    if (seen_count >= 8U && repeats > seen_count / 2U) return 13;
+
+    /* Now press bark, and the held line comes out. */
+    if (!match.alive[0]) {
+        match.alive[0] = 1U;
+        match.health[0] = VOX_DIGS_MAX_HEALTH;
+    }
+    match.speech_floor_ticks = 0U;
+    match.speech_cooldown[0] = 0U;
+    for (tick = 0U; tick < 200U && spoke_human == 0U &&
+         match.phase == VOX_DIGS_RUNNING; ++tick) {
+        vox_u16 index;
+        input.abi_version = VOX_ABI_VERSION;
+        input.struct_size = (vox_u32)sizeof(input);
+        input.player = 0U;
+        input.actions = VOX_DIGS_ACTION_BARK;
+        input.move_x_q15 = 0;
+        input.move_y_q15 = 0;
+        input.aim_x = match.aim_x[0];
+        input.aim_y = match.aim_y[0];
+        input.selected_weapon = match.selected_weapon[0];
+        input.reserved = 0U;
+        if (match.alive[0] &&
+            vox_digs_submit_input(&match, &input) != VOX_OK) {
+            return 14;
+        }
+        if (vox_digs_match_step(&match) != VOX_OK) return 15;
+        for (index = 0U; index < match.event_count; ++index) {
+            const vox_digs_event *event =
+                &match.events[(match.event_head + index) %
+                              VOX_DIGS_MAX_EVENTS];
+            if (event->type == VOX_DIGS_EVENT_AI_BARK &&
+                event->source == 0U) {
+                spoke_human++;
+                if (digs_lines_text(event->variant)[0] == '\0') return 16;
+            }
+        }
+        if (match.event_count > 0U) {
+            (void)vox_digs_consume_events(&match, match.event_count);
+        }
+    }
+    if (spoke_human == 0U) return 17;
     return 0;
 }
 
@@ -2603,8 +2648,54 @@ static int test_every_line_cell_resolves(void)
             return 6;
         }
     }
+    /*
+     * The tone layer must actually be reached, and reached correctly.  An
+     * off-by-one in the index table would still resolve to real lines -- just
+     * somebody else's -- so this checks a known cell against known words.
+     */
+    {
+        digs_line_pool feud = digs_lines_pool(DIGS_VOICE_RIVET,
+            VOX_DIGS_TONE_FEUD, VOX_DIGS_STIMULUS_KILLED_THEM);
+        digs_line_pool bonded = digs_lines_pool(DIGS_VOICE_RIVET,
+            VOX_DIGS_TONE_BONDED, VOX_DIGS_STIMULUS_KILLED_THEM);
+        digs_line_pool plain = digs_lines_pool(DIGS_VOICE_RIVET,
+            VOX_DIGS_TONE_NEUTRAL, VOX_DIGS_STIMULUS_KILLED_THEM);
+        vox_u16 look;
+        int found_feud = 0;
+        int found_bonded = 0;
+        if (feud.first == bonded.first || feud.first == plain.first) return 8;
+        for (look = 0U; look < feud.count; ++look) {
+            if (strstr(digs_lines_text((vox_u16)(feud.first + look)),
+                       "LEDGER") != 0) {
+                found_feud = 1;
+            }
+        }
+        for (look = 0U; look < bonded.count; ++look) {
+            if (strstr(digs_lines_text((vox_u16)(bonded.first + look)),
+                       "SORRY") != 0) {
+                found_bonded = 1;
+            }
+        }
+        /* A feud keeps a ledger.  Being bonded means apologising. */
+        if (!found_feud) return 9;
+        if (!found_bonded) return 10;
+    }
+    /* Cinder in a feud and Cinder at a truce must not share words. */
+    if (digs_lines_pool(DIGS_VOICE_CINDER, VOX_DIGS_TONE_FEUD,
+                        VOX_DIGS_STIMULUS_HURT_BY).first ==
+        digs_lines_pool(DIGS_VOICE_CINDER, VOX_DIGS_TONE_TRUCE,
+                        VOX_DIGS_STIMULUS_HURT_BY).first) {
+        return 11;
+    }
+    /*
+     * Line ids pack a set number and a position into one vox_u16.  Overflow
+     * there is silent and vicious: sets past 255 wrapped onto low ones, so a
+     * feud line resolved to the generic idle pool and read one entry past the
+     * end of it.  This is the guard for that.
+     */
+    if (!digs_lines_stride_is_sound()) return 12;
     total = digs_lines_total();
-    if (total < 300U) return 7;      /* the corpus is meant to be large */
+    if (total < 1200U) return 13;    /* the corpus is meant to be large */
     return 0;
 }
 

@@ -49,6 +49,10 @@ digs_line_pool digs_lines_pool(vox_u16 voice, vox_u16 tone, vox_u16 stimulus);
 /* The line itself, by global id.  Never returns null. */
 const char *digs_lines_text(vox_u16 id);
 
+/* Non-zero when the line-id packing still fits: no set larger than the
+ * stride, and no id past a vox_u16. */
+int digs_lines_stride_is_sound(void);
+
 /* How many lines exist in total; ids run from 0 to this minus one. */
 vox_u16 digs_lines_total(void);
 

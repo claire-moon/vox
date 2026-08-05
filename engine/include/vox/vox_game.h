@@ -531,6 +531,12 @@ typedef struct vox_digs_match {
     vox_u16 speech_subject[VOX_DIGS_MAX_SLOTS];
     vox_u16 speech_delay[VOX_DIGS_MAX_SLOTS];
     vox_u16 speech_cooldown[VOX_DIGS_MAX_SLOTS];
+    /*
+     * Nobody talks over anybody.  One miner speaks at a time and the rest
+     * wait their turn, so the battlefield carries a conversation rather than
+     * four simultaneous monologues.
+     */
+    vox_u16 speech_floor_ticks;
     vox_digs_contract contracts[VOX_DIGS_MAX_PAIRS];
     vox_u32 lava_level_q16;
     vox_u16 lava_surface_y;
