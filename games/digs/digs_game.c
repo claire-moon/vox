@@ -288,6 +288,15 @@
  * and CINDER is in at forty per cent.
  */
 #define DIGS_SPEECH_PATIENCE_FLOOR 60U
+/*
+ * How hot an exchange has to get before it escalates, and how cool before it
+ * starts winding down.  Heat moves by one per line, in the direction of what
+ * that line was worth, so it takes a couple of exchanges' worth of agreement
+ * or provocation to swing -- which is what stops a single stray remark
+ * turning a truce into a shouting match.
+ */
+#define DIGS_SPEECH_HEAT_ANGRY (-2)
+#define DIGS_SPEECH_HEAT_CALM 2
 /* How near the crosshair a miner has to be to be the one you are addressing. */
 #define DIGS_SPEECH_AIM_CELLS 14U
 /* How long your own last line stays available as context for your next. */
@@ -2375,6 +2384,7 @@ vox_result vox_digs_match_init_ex(vox_digs_match *match,
     match->speech_dry_ticks = 0U;
     match->speech_exchange_lines = 0U;
     match->speech_last_line = 0U;
+    match->speech_exchange_heat = 0;
     match->lava_level_q16 = 0U;
     match->lava_surface_y = (vox_u16)DIGS_LAVA_BASIN_TOP;
     match->projectile_count = 0U;
@@ -3619,6 +3629,59 @@ static vox_u16 digs_speech_self_next(vox_u16 previous)
     return (vox_u16)VOX_DIGS_STIMULUS_IDLE;
 }
 
+
+/*
+ * Where a reply goes, given how the exchange is running.
+ *
+ * Without this a row was three insults in a queue: every answer was picked
+ * from what was just said and nothing tracked where the whole thing was
+ * heading.  Heat is the memory of that -- an exchange that keeps drawing
+ * blood escalates, one that keeps finding agreement winds down, and the last
+ * line before the cap closes on whichever it turned out to be.
+ */
+static vox_u16 digs_speech_arc(vox_digs_match *match, vox_u16 base,
+                               int closing)
+{
+    int heat = (int)match->speech_exchange_heat;
+    if (closing) {
+        /* Somebody has to have the last word, and it should fit. */
+        if (heat <= DIGS_SPEECH_HEAT_ANGRY) {
+            return (vox_u16)VOX_DIGS_STIMULUS_HUMILIATED;
+        }
+        if (heat >= DIGS_SPEECH_HEAT_CALM) {
+            return (vox_u16)VOX_DIGS_STIMULUS_TRUCE_OFFERED;
+        }
+        return (vox_u16)VOX_DIGS_STIMULUS_MATCH_END;
+    }
+    if (heat <= DIGS_SPEECH_HEAT_ANGRY) {
+        /* It has turned into a row.  Answer in kind. */
+        switch (base) {
+        case VOX_DIGS_STIMULUS_TAUNTED:
+            return (vox_u16)VOX_DIGS_STIMULUS_HUMILIATED;
+        case VOX_DIGS_STIMULUS_HUMILIATED:
+            return (vox_u16)VOX_DIGS_STIMULUS_BETRAYED;
+        case VOX_DIGS_STIMULUS_SPOTTED:
+            return (vox_u16)VOX_DIGS_STIMULUS_TAUNTED;
+        default:
+            break;
+        }
+        return base;
+    }
+    if (heat >= DIGS_SPEECH_HEAT_CALM) {
+        /* It is going somewhere better.  Let it. */
+        switch (base) {
+        case VOX_DIGS_STIMULUS_TAUNTED:
+        case VOX_DIGS_STIMULUS_SPOTTED:
+            return (vox_u16)VOX_DIGS_STIMULUS_TEAMED_UP;
+        case VOX_DIGS_STIMULUS_HUMILIATED:
+            return (vox_u16)VOX_DIGS_STIMULUS_TRUCE_OFFERED;
+        default:
+            break;
+        }
+    }
+    return base;
+}
+
 /*
  * Everybody hears it, and what they make of it depends on who they like.
  *
@@ -3679,9 +3742,12 @@ static void digs_speech_broadcast(vox_digs_match *match, vox_u16 speaker,
         if (digs_speech_roll(match, listener, chance,
                              (vox_u16)(0x7A1BU + listener))) {
             digs_speech_set(match, listener, speaker,
-                            addressed ?
-                            digs_speech_chime_in(stimulus, 1) :
-                            digs_speech_chime_in(stimulus, defends));
+                            digs_speech_arc(match,
+                                addressed ?
+                                digs_speech_chime_in(stimulus, 1) :
+                                digs_speech_chime_in(stimulus, defends),
+                                match->speech_exchange_lines + 1U >=
+                                DIGS_SPEECH_EXCHANGE_MAX));
         }
     }
 }
@@ -3706,6 +3772,7 @@ static void digs_step_speech(vox_digs_match *match)
             match->speech_floor_ticks = DIGS_SPEECH_FLOOR_BETWEEN;
             match->speech_exchange_lines = 0U;
     match->speech_last_line = 0U;
+    match->speech_exchange_heat = 0;
         }
     }
     if (match->speech_dry_ticks < 65535U) {
@@ -3800,11 +3867,20 @@ static void digs_step_speech(vox_digs_match *match)
         if (match->speech_exchange_lines < 65535U) {
             match->speech_exchange_lines++;
         }
+        {
+            vox_i32 worth = (vox_i32)digs_stimulus_valence[stimulus];
+            vox_i32 heat = (vox_i32)match->speech_exchange_heat +
+                           (worth < 0 ? -1L : (worth > 0 ? 1L : 0L));
+            if (heat > 6L) heat = 6L;
+            if (heat < -6L) heat = -6L;
+            match->speech_exchange_heat = (vox_i16)heat;
+        }
         if (match->speech_exchange_lines >= DIGS_SPEECH_EXCHANGE_MAX) {
             /* Enough said.  Close it and buy the silence now. */
             match->speech_answer_ticks = 0U;
             match->speech_exchange_lines = 0U;
     match->speech_last_line = 0U;
+    match->speech_exchange_heat = 0;
             match->speech_floor_ticks = DIGS_SPEECH_FLOOR_BETWEEN;
         } else {
             match->speech_floor_ticks = DIGS_SPEECH_FLOOR_IN_EXCHANGE;
@@ -7393,6 +7469,8 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
     hash = digs_hash_mix(hash,
                          (vox_u32)match->speech_exchange_lines);
     hash = digs_hash_mix(hash, (vox_u32)match->speech_last_line);
+    hash = digs_hash_mix(hash,
+                         (vox_u32)(vox_u16)match->speech_exchange_heat);
     hash = digs_hash_mix(hash, match->memory.memory_hash);
     hash = digs_hash_mix(hash, match->lava_level_q16);
     hash = digs_hash_mix(hash, (vox_u32)match->lava_surface_y);

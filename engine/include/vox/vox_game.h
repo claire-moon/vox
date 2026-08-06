@@ -620,6 +620,9 @@ typedef struct vox_digs_match {
     /* The line just spoken, so a reply can be priced against how long it
      * takes to say rather than answering everything at the same speed. */
     vox_u16 speech_last_line;
+    /* Which way the exchange currently running is going: below zero it is
+     * turning into a row, above zero it is settling down. */
+    vox_i16 speech_exchange_heat;
     /* What each miner last said, so their own words are context for their
      * next ones -- which is what lets somebody alone hold a train of
      * thought instead of firing unrelated remarks. */

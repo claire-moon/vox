@@ -2869,6 +2869,7 @@ static int test_talk_arrives_in_exchanges(void)
     vox_u32 last = 0U;
     vox_u32 self_lines = 0U;
     vox_u32 all_lines = 0U;
+    int hottest = 0;
 
     vox_digs_rules_classic(&rules);
     rules.player_count = 4U;
@@ -2896,6 +2897,9 @@ static int test_talk_arrives_in_exchanges(void)
             last = tick;
             lines++;
         }
+        if ((int)match.speech_exchange_heat < hottest) {
+            hottest = (int)match.speech_exchange_heat;
+        }
         if (match.event_count > 0U) {
             (void)vox_digs_consume_events(&match, match.event_count);
         }
@@ -2911,6 +2915,22 @@ static int test_talk_arrives_in_exchanges(void)
     /* And all three kinds of audience must actually occur. */
     if (self_lines == 0U) return 7;
     if (all_lines == 0U) return 8;
+    /*
+     * Exchanges must develop rather than sitting flat.  Heat is the only
+     * memory an exchange has of where it is heading, and if it never leaves
+     * zero then every reply is being picked from the last line alone --
+     * which is three insults in a queue rather than a row.
+     */
+    if (hottest > -2) return 9;
+    /* And warm words must exist to cool one down with. */
+    {
+        digs_line_pool offered = digs_lines_pool(DIGS_VOICE_RIVET,
+            VOX_DIGS_TONE_THAWING, VOX_DIGS_STIMULUS_TRUCE_OFFERED);
+        digs_line_pool generic = digs_lines_pool(DIGS_VOICE_COUNT,
+            VOX_DIGS_TONE_NEUTRAL, VOX_DIGS_STIMULUS_TRUCE_OFFERED);
+        if (offered.count == 0U) return 10;
+        if (offered.first == generic.first) return 11;
+    }
     return 0;
 }
 

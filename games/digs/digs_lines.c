@@ -2686,6 +2686,262 @@ static const char *const digs_rivet_wary_taunted[] = {
     "MM. NOT FROM YOU."
 };
 
+static const char *const digs_cinder_feud_truce_accepted[] = {
+    "FINE! TRUCE! DON'T TOUCH ME!",
+    "I AM NOT SHAKING YOUR HAND, %T!",
+    "DEAL. I AM STILL ANGRY.",
+    "GOOD! NOW POINT ME AT SOMEBODY ELSE!",
+    "TRUCE! FOR NOW! FOR NOW!"
+};
+
+static const char *const digs_cinder_feud_truce_offered[] = {
+    "RIGHT. I AM BORED OF HATING YOU.",
+    "TRUCE, %T! I SAID TRUCE!",
+    "THIS IS GETTING US NOWHERE! STOP!",
+    "PUT IT DOWN AND SO WILL I!",
+    "I STILL HATE YOU! BUT TRUCE!"
+};
+
+static const char *const digs_cinder_neutral_truce_accepted[] = {
+    "HA! GOOD! COME ON THEN!",
+    "DEAL, %T! NOW KEEP UP!",
+    "TRUCE! I LIKE THIS ALREADY!",
+    "RIGHT! WHO ARE WE HITTING!",
+    "DONE! DON'T MAKE ME REGRET IT!"
+};
+
+static const char *const digs_cinder_neutral_truce_offered[] = {
+    "OI! TRUCE! I WANT THE BIG ONE!",
+    "YOU AND ME, %T? AGAINST THEM?",
+    "SAVE IT! THERE'S BETTER MEAT!",
+    "TRUCE! FOR TEN MINUTES!",
+    "I'LL NOT SWING IF YOU'LL NOT!"
+};
+
+static const char *const digs_cinder_thawing_truce_accepted[] = {
+    "HA! I KNEW YOU'D COME ROUND!",
+    "GOOD LAD, %T! GOOD LAD!",
+    "TRUCE! NOW STAND BEHIND ME!",
+    "DONE! THAT WAS EASY!",
+    "RIGHT! FRIENDS! FOR NOW!"
+};
+
+static const char *const digs_cinder_thawing_truce_offered[] = {
+    "YOU'RE ALL RIGHT, ACTUALLY. TRUCE?",
+    "I'VE STOPPED WANTING TO HIT YOU, %T!",
+    "TRUCE! I MEAN IT THIS TIME!",
+    "COME ON. WE BOTH KNOW IT'S OVER.",
+    "SHAKE ON IT OR I'LL SWING!"
+};
+
+static const char *const digs_cinder_truce_truce_accepted[] = {
+    "THAT'S THE SPIRIT!",
+    "STILL US TWO! HA!",
+    "GOOD! NOW WATCH MY BACK!",
+    "KNEW IT! COME ON!",
+    "DEAL! AGAIN! ALWAYS!"
+};
+
+static const char *const digs_cinder_truce_truce_offered[] = {
+    "STILL US TWO, %T? STILL US TWO.",
+    "KEEP IT GOING! IT'S WORKING!",
+    "NO REASON TO STOP NOW!",
+    "SAME AS BEFORE! YES?",
+    "YOU'RE WITH ME! SAY YOU'RE WITH ME!"
+};
+
+static const char *const digs_flamey_feud_truce_accepted[] = {
+    "OOH! WE'RE FRIENDS NOW! TERRIFYING.",
+    "DON'T STAND TOO CLOSE, %T.",
+    "TRUCE! I'LL HOLD THE MATCHES.",
+    "LOVELY. I'LL BE RIGHT BEHIND YOU.",
+    "AGREED. WATCH YOUR POCKETS."
+};
+
+static const char *const digs_flamey_feud_truce_offered[] = {
+    "TRUCE? SAY NO. GO ON. SAY NO.",
+    "I'M OFFERING, %T. LOOK HOW NICE I AM.",
+    "LET'S STOP. I'M RUNNING LOW ON MATCHES.",
+    "TRUCE. NO TRICKS. PROBABLY NO TRICKS.",
+    "EVEN I'M TIRED OF THIS ONE."
+};
+
+static const char *const digs_flamey_neutral_truce_accepted[] = {
+    "WONDERFUL! THIS WILL END WELL!",
+    "PARTNERS, %T! HOW EXCITING!",
+    "TRUCE! I'VE ALWAYS WANTED ONE!",
+    "DONE! NOW WATCH THIS.",
+    "LOVELY. I'LL BEHAVE. MOSTLY."
+};
+
+static const char *const digs_flamey_neutral_truce_offered[] = {
+    "TRUCE? I'VE GOT A BETTER IDEA ANYWAY.",
+    "YOU AND ME, %T. AGAINST THE WORLD.",
+    "LET'S NOT. LET'S DO SOMETHING FUN.",
+    "I'LL BE GOOD. FOR A WHILE.",
+    "PEACE! WITH CONDITIONS! LOTS OF THEM!"
+};
+
+static const char *const digs_flamey_thawing_truce_accepted[] = {
+    "OH GOOD! I HATED BEING CROSS!",
+    "FRIENDS, %T! I'M KEEPING THAT.",
+    "TRUCE! THIS IS MUCH MORE FUN!",
+    "SEE? I KNEW YOU'D COME ROUND.",
+    "AGREED! NOW LET'S RUIN SOMEBODY'S DAY."
+};
+
+static const char *const digs_flamey_thawing_truce_offered[] = {
+    "I'VE DECIDED I LIKE YOU. TRUCE?",
+    "STOP MAKING IT HARD TO HATE YOU, %T.",
+    "TRUCE. I'M AS SURPRISED AS YOU.",
+    "LET'S BE FRIENDS. IT'LL ANNOY THEM.",
+    "I'LL STOP IF YOU STOP. HONEST."
+};
+
+static const char *const digs_flamey_truce_truce_accepted[] = {
+    "STILL FRIENDS! LOVELY!",
+    "GOOD, %T. I'D HATE TO BURN YOU.",
+    "KEEPING IT! I'M KEEPING IT!",
+    "WONDERFUL. NOW HOLD THIS.",
+    "SEE? EASY. WHY IS EVERYONE ELSE HARD."
+};
+
+static const char *const digs_flamey_truce_truce_offered[] = {
+    "STILL FRIENDS? SAY STILL FRIENDS.",
+    "US AGAINST THE MINE, %T.",
+    "NOTHING'S CHANGED. HAS IT? HAS IT?",
+    "SAME ARRANGEMENT! I LIKE IT!",
+    "DON'T GO ODD ON ME NOW."
+};
+
+static const char *const digs_miner_feud_truce_accepted[] = {
+    "RIGHT. TRUCE.",
+    "I'M NOT FORGETTING IT, %T.",
+    "DONE. DON'T PUSH IT.",
+    "ALL RIGHT. BACK TO WORK.",
+    "FINE. BUT I'M WATCHING YOU."
+};
+
+static const char *const digs_miner_feud_truce_offered[] = {
+    "I'M DONE. ARE YOU DONE?",
+    "THIS ISN'T WORTH IT, %T.",
+    "CALL IT. WE BOTH GO HOME.",
+    "PUT IT DOWN. I WILL TOO.",
+    "I'D RATHER DIG THAN DO THIS AGAIN."
+};
+
+static const char *const digs_miner_neutral_truce_accepted[] = {
+    "RIGHT. TRUCE IT IS.",
+    "SUITS ME, %T.",
+    "GOOD. LESS PAPERWORK.",
+    "DONE. MIND THE ROOF.",
+    "THAT'LL DO."
+};
+
+static const char *const digs_miner_neutral_truce_offered[] = {
+    "TRUCE? THERE'S ENOUGH ROCK.",
+    "NO ARGUMENT HERE, %T.",
+    "I'LL LEAVE YOU BE.",
+    "EASIER FOR BOTH OF US.",
+    "YOU DIG YOURS. I'LL DIG MINE."
+};
+
+static const char *const digs_miner_thawing_truce_accepted[] = {
+    "GOOD. THAT'S A WEIGHT OFF.",
+    "ALL RIGHT THEN, %T.",
+    "TRUCE. ABOUT TIME.",
+    "GLAD THAT'S SORTED.",
+    "RIGHT. LET'S GET ON WITH IT."
+};
+
+static const char *const digs_miner_thawing_truce_offered[] = {
+    "YOU'RE NOT SO BAD. TRUCE?",
+    "LET'S CALL IT, %T.",
+    "I'M TIRED OF BEING ANGRY.",
+    "CLEAN SLATE? WORTH A TRY.",
+    "NO HARD FEELINGS. IF YOU'LL HAVE IT."
+};
+
+static const char *const digs_miner_truce_truce_accepted[] = {
+    "STILL GOOD.",
+    "AYE, %T.",
+    "THAT'S US, THEN.",
+    "GOOD. WATCH YOUR BACK OUT THERE.",
+    "RIGHT. ON WE GO."
+};
+
+static const char *const digs_miner_truce_truce_offered[] = {
+    "STILL GOOD, %T?",
+    "SAME AS BEFORE.",
+    "NO REASON TO CHANGE IT.",
+    "WE'RE ALL RIGHT, YOU AND ME.",
+    "KEEP IT GOING?"
+};
+
+static const char *const digs_rivet_feud_truce_accepted[] = {
+    "TERMS ACCEPTED. AGAINST MY JUDGEMENT.",
+    "THE LEDGER STAYS OPEN, %T. BUT PAUSED.",
+    "AGREED. I AM NOT FORGETTING ANY OF IT.",
+    "FINE. THE EAST FACE IS YOURS.",
+    "RECORDED. DO NOT MAKE ME REVISE IT."
+};
+
+static const char *const digs_rivet_feud_truce_offered[] = {
+    "I AM PROPOSING TERMS. ONCE.",
+    "THIS IS COSTING US BOTH, %T.",
+    "NEITHER OF US IS WINNING THE ARITHMETIC.",
+    "STOP. WE BOTH WALK OUT.",
+    "I WILL PUT DOWN THE RAIL IF YOU DO."
+};
+
+static const char *const digs_rivet_neutral_truce_accepted[] = {
+    "AGREED. TERMS HOLD.",
+    "NOTED, %T. EAST IS YOURS.",
+    "SENSIBLE. BACK TO WORK.",
+    "ACCEPTED. MIND THE SPAN.",
+    "GOOD. THE SURVEY CAN CONTINUE."
+};
+
+static const char *const digs_rivet_neutral_truce_offered[] = {
+    "A PROPOSAL. YOU TAKE EAST, I TAKE WEST.",
+    "NO PROFIT IN THIS, %T. TERMS?",
+    "I HAVE BETTER USES FOR THE CHARGE.",
+    "SAY THE WORD AND I STAND DOWN.",
+    "EFFICIENT OPTION. WE BOTH DIG."
+};
+
+static const char *const digs_rivet_thawing_truce_accepted[] = {
+    "AGREED. AND NOTED PROPERLY.",
+    "THAT WAS OVERDUE, %T.",
+    "ACCEPTED. THE REVISION STANDS.",
+    "GOOD. I HAD RUN THE NUMBERS ALREADY.",
+    "TERMS. I WILL KEEP THEM."
+};
+
+static const char *const digs_rivet_thawing_truce_offered[] = {
+    "I AM REVISING UPWARD. TERMS?",
+    "YOU HAVE BEEN LESS TROUBLE, %T. TERMS.",
+    "THE FIGURES FAVOUR AN ARRANGEMENT.",
+    "I WOULD RATHER NOT SHOOT YOU TODAY.",
+    "CALL IT. I WILL HOLD MY SIDE."
+};
+
+static const char *const digs_rivet_truce_truce_accepted[] = {
+    "RENEWED. GOOD.",
+    "STILL AGREED, THEN, %T.",
+    "THE ARRANGEMENT HOLDS.",
+    "SOUND. BACK TO THE FACE.",
+    "I HAD ASSUMED SO. GOOD."
+};
+
+static const char *const digs_rivet_truce_truce_offered[] = {
+    "THE TERMS EXTEND. SAY IF NOT.",
+    "STILL AGREED, %T?",
+    "I SEE NO REASON TO REOPEN IT.",
+    "WE RENEW ON THE SAME FIGURES.",
+    "NOTHING HAS CHANGED. HAS IT."
+};
+
 /* ---- the registry ---------------------------------------------------- */
 
 typedef struct digs_line_set {
@@ -3043,7 +3299,39 @@ static const digs_line_set digs_line_sets[] = {
     DIGS_SET(digs_rivet_wary_killed_them),
     DIGS_SET(digs_rivet_wary_revenge),
     DIGS_SET(digs_rivet_wary_spotted),
-    DIGS_SET(digs_rivet_wary_taunted)
+    DIGS_SET(digs_rivet_wary_taunted),
+    DIGS_SET(digs_cinder_feud_truce_accepted),
+    DIGS_SET(digs_cinder_feud_truce_offered),
+    DIGS_SET(digs_cinder_neutral_truce_accepted),
+    DIGS_SET(digs_cinder_neutral_truce_offered),
+    DIGS_SET(digs_cinder_thawing_truce_accepted),
+    DIGS_SET(digs_cinder_thawing_truce_offered),
+    DIGS_SET(digs_cinder_truce_truce_accepted),
+    DIGS_SET(digs_cinder_truce_truce_offered),
+    DIGS_SET(digs_flamey_feud_truce_accepted),
+    DIGS_SET(digs_flamey_feud_truce_offered),
+    DIGS_SET(digs_flamey_neutral_truce_accepted),
+    DIGS_SET(digs_flamey_neutral_truce_offered),
+    DIGS_SET(digs_flamey_thawing_truce_accepted),
+    DIGS_SET(digs_flamey_thawing_truce_offered),
+    DIGS_SET(digs_flamey_truce_truce_accepted),
+    DIGS_SET(digs_flamey_truce_truce_offered),
+    DIGS_SET(digs_miner_feud_truce_accepted),
+    DIGS_SET(digs_miner_feud_truce_offered),
+    DIGS_SET(digs_miner_neutral_truce_accepted),
+    DIGS_SET(digs_miner_neutral_truce_offered),
+    DIGS_SET(digs_miner_thawing_truce_accepted),
+    DIGS_SET(digs_miner_thawing_truce_offered),
+    DIGS_SET(digs_miner_truce_truce_accepted),
+    DIGS_SET(digs_miner_truce_truce_offered),
+    DIGS_SET(digs_rivet_feud_truce_accepted),
+    DIGS_SET(digs_rivet_feud_truce_offered),
+    DIGS_SET(digs_rivet_neutral_truce_accepted),
+    DIGS_SET(digs_rivet_neutral_truce_offered),
+    DIGS_SET(digs_rivet_thawing_truce_accepted),
+    DIGS_SET(digs_rivet_thawing_truce_offered),
+    DIGS_SET(digs_rivet_truce_truce_accepted),
+    DIGS_SET(digs_rivet_truce_truce_offered)
 };
 
 #define DIGS_LINE_SET_COUNT \
@@ -3085,7 +3373,8 @@ static const vox_u16 digs_tone_sets[DIGS_VOICE_COUNT][VOX_DIGS_TONE_COUNT]
     {   /* RIVET */
         {   /* FEUD */
             0U, 0U, 287U, 283U, 282U, 0U, 0U, 0U, 285U, 284U, 286U, 281U,
-            0U, 0U, 0U, 0U, 0U, 0U, 0U, 288U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            0U, 0U, 0U, 0U, 362U, 361U, 0U, 288U, 0U, 0U, 0U, 0U, 0U, 0U,
+            0U
         },
         {   /* HOSTILE */
             0U, 0U, 295U, 291U, 290U, 0U, 0U, 0U, 293U, 292U, 294U, 289U,
@@ -3097,7 +3386,8 @@ static const vox_u16 digs_tone_sets[DIGS_VOICE_COUNT][VOX_DIGS_TONE_COUNT]
         },
         {   /* NEUTRAL */
             0U, 0U, 310U, 306U, 305U, 0U, 0U, 0U, 308U, 307U, 0U, 0U, 0U,
-            309U, 311U, 0U, 0U, 0U, 312U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            309U, 311U, 0U, 364U, 363U, 312U, 0U, 0U, 0U, 0U, 0U, 0U, 0U,
+            0U
         },
         {   /* WARY */
             0U, 0U, 335U, 331U, 330U, 0U, 0U, 0U, 333U, 332U, 334U, 329U,
@@ -3105,11 +3395,13 @@ static const vox_u16 digs_tone_sets[DIGS_VOICE_COUNT][VOX_DIGS_TONE_COUNT]
         },
         {   /* THAWING */
             0U, 0U, 318U, 314U, 313U, 0U, 0U, 0U, 316U, 315U, 0U, 0U, 0U,
-            317U, 319U, 0U, 0U, 0U, 320U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            317U, 319U, 0U, 366U, 365U, 320U, 0U, 0U, 0U, 0U, 0U, 0U, 0U,
+            0U
         },
         {   /* TRUCE */
             0U, 0U, 326U, 322U, 321U, 0U, 0U, 0U, 324U, 323U, 0U, 0U, 0U,
-            325U, 327U, 0U, 0U, 0U, 328U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            325U, 327U, 0U, 368U, 367U, 328U, 0U, 0U, 0U, 0U, 0U, 0U, 0U,
+            0U
         },
         {   /* BONDED */
             0U, 0U, 278U, 274U, 273U, 0U, 0U, 0U, 276U, 275U, 0U, 0U, 0U,
@@ -3119,7 +3411,7 @@ static const vox_u16 digs_tone_sets[DIGS_VOICE_COUNT][VOX_DIGS_TONE_COUNT]
     {   /* CINDER */
         {   /* FEUD */
             0U, 0U, 95U, 91U, 90U, 0U, 0U, 0U, 93U, 92U, 94U, 89U, 0U, 0U,
-            0U, 0U, 0U, 0U, 0U, 96U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            0U, 0U, 338U, 337U, 0U, 96U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
         },
         {   /* HOSTILE */
             0U, 0U, 103U, 99U, 98U, 0U, 0U, 0U, 101U, 100U, 102U, 97U, 0U,
@@ -3131,7 +3423,8 @@ static const vox_u16 digs_tone_sets[DIGS_VOICE_COUNT][VOX_DIGS_TONE_COUNT]
         },
         {   /* NEUTRAL */
             0U, 0U, 118U, 114U, 113U, 0U, 0U, 0U, 116U, 115U, 0U, 0U, 0U,
-            117U, 119U, 0U, 0U, 0U, 120U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            117U, 119U, 0U, 340U, 339U, 120U, 0U, 0U, 0U, 0U, 0U, 0U, 0U,
+            0U
         },
         {   /* WARY */
             0U, 0U, 143U, 139U, 138U, 0U, 0U, 0U, 141U, 140U, 142U, 137U,
@@ -3139,11 +3432,13 @@ static const vox_u16 digs_tone_sets[DIGS_VOICE_COUNT][VOX_DIGS_TONE_COUNT]
         },
         {   /* THAWING */
             0U, 0U, 126U, 122U, 121U, 0U, 0U, 0U, 124U, 123U, 0U, 0U, 0U,
-            125U, 127U, 0U, 0U, 0U, 128U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            125U, 127U, 0U, 342U, 341U, 128U, 0U, 0U, 0U, 0U, 0U, 0U, 0U,
+            0U
         },
         {   /* TRUCE */
             0U, 0U, 134U, 130U, 129U, 0U, 0U, 0U, 132U, 131U, 0U, 0U, 0U,
-            133U, 135U, 0U, 0U, 0U, 136U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            133U, 135U, 0U, 344U, 343U, 136U, 0U, 0U, 0U, 0U, 0U, 0U, 0U,
+            0U
         },
         {   /* BONDED */
             0U, 0U, 86U, 82U, 81U, 0U, 0U, 0U, 84U, 83U, 0U, 0U, 0U, 85U,
@@ -3153,7 +3448,8 @@ static const vox_u16 digs_tone_sets[DIGS_VOICE_COUNT][VOX_DIGS_TONE_COUNT]
     {   /* FLAMEY */
         {   /* FEUD */
             0U, 0U, 159U, 155U, 154U, 0U, 0U, 0U, 157U, 156U, 158U, 153U,
-            0U, 0U, 0U, 0U, 0U, 0U, 0U, 160U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            0U, 0U, 0U, 0U, 346U, 345U, 0U, 160U, 0U, 0U, 0U, 0U, 0U, 0U,
+            0U
         },
         {   /* HOSTILE */
             0U, 0U, 167U, 163U, 162U, 0U, 0U, 0U, 165U, 164U, 166U, 161U,
@@ -3165,7 +3461,8 @@ static const vox_u16 digs_tone_sets[DIGS_VOICE_COUNT][VOX_DIGS_TONE_COUNT]
         },
         {   /* NEUTRAL */
             0U, 0U, 182U, 178U, 177U, 0U, 0U, 0U, 180U, 179U, 0U, 0U, 0U,
-            181U, 183U, 0U, 0U, 0U, 184U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            181U, 183U, 0U, 348U, 347U, 184U, 0U, 0U, 0U, 0U, 0U, 0U, 0U,
+            0U
         },
         {   /* WARY */
             0U, 0U, 207U, 203U, 202U, 0U, 0U, 0U, 205U, 204U, 206U, 201U,
@@ -3173,11 +3470,13 @@ static const vox_u16 digs_tone_sets[DIGS_VOICE_COUNT][VOX_DIGS_TONE_COUNT]
         },
         {   /* THAWING */
             0U, 0U, 190U, 186U, 185U, 0U, 0U, 0U, 188U, 187U, 0U, 0U, 0U,
-            189U, 191U, 0U, 0U, 0U, 192U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            189U, 191U, 0U, 350U, 349U, 192U, 0U, 0U, 0U, 0U, 0U, 0U, 0U,
+            0U
         },
         {   /* TRUCE */
             0U, 0U, 198U, 194U, 193U, 0U, 0U, 0U, 196U, 195U, 0U, 0U, 0U,
-            197U, 199U, 0U, 0U, 0U, 200U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            197U, 199U, 0U, 352U, 351U, 200U, 0U, 0U, 0U, 0U, 0U, 0U, 0U,
+            0U
         },
         {   /* BONDED */
             0U, 0U, 150U, 146U, 145U, 0U, 0U, 0U, 148U, 147U, 0U, 0U, 0U,
@@ -3187,7 +3486,8 @@ static const vox_u16 digs_tone_sets[DIGS_VOICE_COUNT][VOX_DIGS_TONE_COUNT]
     {   /* MINER */
         {   /* FEUD */
             0U, 0U, 223U, 219U, 218U, 0U, 0U, 0U, 221U, 220U, 222U, 217U,
-            0U, 0U, 0U, 0U, 0U, 0U, 0U, 224U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            0U, 0U, 0U, 0U, 354U, 353U, 0U, 224U, 0U, 0U, 0U, 0U, 0U, 0U,
+            0U
         },
         {   /* HOSTILE */
             0U, 0U, 231U, 227U, 226U, 0U, 0U, 0U, 229U, 228U, 230U, 225U,
@@ -3199,7 +3499,8 @@ static const vox_u16 digs_tone_sets[DIGS_VOICE_COUNT][VOX_DIGS_TONE_COUNT]
         },
         {   /* NEUTRAL */
             0U, 0U, 246U, 242U, 241U, 0U, 0U, 0U, 244U, 243U, 0U, 0U, 0U,
-            245U, 247U, 0U, 0U, 0U, 248U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            245U, 247U, 0U, 356U, 355U, 248U, 0U, 0U, 0U, 0U, 0U, 0U, 0U,
+            0U
         },
         {   /* WARY */
             0U, 0U, 271U, 267U, 266U, 0U, 0U, 0U, 269U, 268U, 270U, 265U,
@@ -3207,11 +3508,13 @@ static const vox_u16 digs_tone_sets[DIGS_VOICE_COUNT][VOX_DIGS_TONE_COUNT]
         },
         {   /* THAWING */
             0U, 0U, 254U, 250U, 249U, 0U, 0U, 0U, 252U, 251U, 0U, 0U, 0U,
-            253U, 255U, 0U, 0U, 0U, 256U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            253U, 255U, 0U, 358U, 357U, 256U, 0U, 0U, 0U, 0U, 0U, 0U, 0U,
+            0U
         },
         {   /* TRUCE */
             0U, 0U, 262U, 258U, 257U, 0U, 0U, 0U, 260U, 259U, 0U, 0U, 0U,
-            261U, 263U, 0U, 0U, 0U, 264U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+            261U, 263U, 0U, 360U, 359U, 264U, 0U, 0U, 0U, 0U, 0U, 0U, 0U,
+            0U
         },
         {   /* BONDED */
             0U, 0U, 214U, 210U, 209U, 0U, 0U, 0U, 212U, 211U, 0U, 0U, 0U,
@@ -3219,6 +3522,7 @@ static const vox_u16 digs_tone_sets[DIGS_VOICE_COUNT][VOX_DIGS_TONE_COUNT]
         }
     }
 };
+
 
 static digs_line_pool digs_pool_from_set(vox_u16 set)
 {
