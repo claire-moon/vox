@@ -250,7 +250,28 @@
 #define DIGS_SPEECH_COOLDOWN_SPAN 150U
 #define DIGS_SPEECH_REPLY_WINDOW 240U
 /* Silence between any two lines, from anyone.  One voice at a time. */
-#define DIGS_SPEECH_FLOOR_TICKS 150U
+/*
+ * Two floors, because a conversation is not evenly spaced.
+ *
+ * A single 150-tick floor spread every line the same distance apart, which
+ * reads as four people taking turns at a metronome rather than talking.
+ * Inside an exchange the gap is short so an answer lands while the first
+ * line is still hanging in the air; once an exchange dies out, the long
+ * floor buys the silence that makes the next one feel like it started.
+ */
+#define DIGS_SPEECH_FLOOR_IN_EXCHANGE 42U
+#define DIGS_SPEECH_FLOOR_BETWEEN 480U
+/* How long a conversation stays live after the last thing said in it. */
+#define DIGS_SPEECH_EXCHANGE_WINDOW 200U
+/*
+ * Lines in one exchange before it is closed off.
+ *
+ * Without a cap the replies fed each other: four miners all answering each
+ * other's answers ran a single conversation to sixty lines and put the match
+ * back where the playtest complained about.  A remark, an answer, and
+ * somebody chiming in is a conversation; ten of them is a committee.
+ */
+#define DIGS_SPEECH_EXCHANGE_MAX 4U
 
 /*
  * Pacing.
@@ -266,7 +287,7 @@
  */
 #define DIGS_SPEECH_URGE_MIN 300U
 #define DIGS_SPEECH_URGE_SPAN 420U
-#define DIGS_SPEECH_URGE_SCALE 150U
+#define DIGS_SPEECH_URGE_SCALE 22U
 /* After the player speaks, everyone is briefly much likelier to answer. */
 #define DIGS_SPEECH_ANSWER_WINDOW 240U
 #define DIGS_SPEECH_ANSWER_BONUS 450U
@@ -274,12 +295,19 @@
 #define DIGS_SPEECH_ANSWER_SPAN 60U
 /* Answering someone who just spoke to you is easier than starting. */
 #define DIGS_SPEECH_REPLY_BONUS 200U
+/* Speaking up about something aimed at somebody you have feelings about. */
+#define DIGS_SPEECH_CHIME_BONUS 60U
+/* How far a remark carries, and how far a mutter carries. */
+#define DIGS_SPEECH_EARSHOT_CELLS 70U
+#define DIGS_SPEECH_MUTTER_CELLS 14U
+/* What overhearing an attack on somebody is worth.  A fraction of a hit. */
+#define DIGS_SPEECH_OVERHEARD_VALENCE 4L
 /* Silence this long makes the next roll a certainty, so a quiet match still
  * has voices in it without the ordinary roll having to be generous. */
 #define DIGS_SPEECH_DRY_TICKS 1500U
 /* At or above this urgency a thing is said whatever the dice say. */
 #define DIGS_SPEECH_ALWAYS_URGENCY 200U
-#define DIGS_SPEECH_EVENT_SCALE 2U
+#define DIGS_SPEECH_EVENT_SCALE 1U
 /* Re-rolls allowed before taking whatever came up. */
 #define DIGS_SPEECH_PICK_TRIES 8U
 #define DIGS_MUZZLE_CLEARANCE_Q16 16384L
@@ -2255,6 +2283,7 @@ vox_result vox_digs_match_init_ex(vox_digs_match *match,
     match->speech_floor_ticks = 0U;
     match->speech_answer_ticks = 0U;
     match->speech_dry_ticks = 0U;
+    match->speech_exchange_lines = 0U;
     match->lava_level_q16 = 0U;
     match->lava_surface_y = (vox_u16)DIGS_LAVA_BASIN_TOP;
     match->projectile_count = 0U;
@@ -2319,6 +2348,7 @@ vox_result vox_digs_match_init_ex(vox_digs_match *match,
         match->speech_urge_ticks[i] = (vox_u16)(DIGS_SPEECH_URGE_MIN +
             (digs_noise(rules->seed, 0U, i, 0xC1A7U) %
              DIGS_SPEECH_URGE_SPAN));
+        match->speech_audience[i] = (vox_u16)VOX_DIGS_AUDIENCE_ONE;
         match->speech_recent_cursor[i] = 0U;
         {
             vox_u16 slot;
@@ -3070,6 +3100,21 @@ static vox_u16 digs_stimulus_urgency(vox_u16 stimulus)
         stimulus == VOX_DIGS_STIMULUS_LAVA_CLOSE) {
         weight += 220;
     }
+    /*
+     * So are announcements.  Urgency is derived from how far something moves
+     * the account, and meeting somebody for the first time moves it by
+     * nothing at all -- so a first meeting rolled at four in ten thousand
+     * and was never once spoken.  These are rare by construction (a first
+     * meeting happens once per pair, a match starts once) so making them
+     * certain costs almost nothing and they are the lines that place
+     * everyone in the room.
+     */
+    if (stimulus == VOX_DIGS_STIMULUS_FIRST_MEETING ||
+        stimulus == VOX_DIGS_STIMULUS_MATCH_START ||
+        stimulus == VOX_DIGS_STIMULUS_MATCH_END ||
+        stimulus == VOX_DIGS_STIMULUS_STREAK) {
+        weight += 210;
+    }
     return (vox_u16)(weight + 1);
 }
 
@@ -3163,7 +3208,14 @@ static void digs_speech_set(vox_digs_match *match, vox_u16 speaker,
         stimulus >= VOX_DIGS_STIMULUS_COUNT) {
         return;
     }
+    /*
+     * The chatter cooldown exists to stop a miner monologuing across a whole
+     * match.  Inside a live exchange it does the opposite -- it silences the
+     * answer, which is the one line that makes it a conversation.  The floor
+     * still spaces everything, so nobody can run away with it.
+     */
     if (match->speech_cooldown[speaker] != 0U &&
+        match->speech_answer_ticks == 0U &&
         digs_stimulus_urgency(stimulus) < DIGS_SPEECH_ALWAYS_URGENCY) {
         return;
     }
@@ -3204,8 +3256,16 @@ static void digs_speech_prompt(vox_digs_match *match, vox_u16 speaker,
     if (urgency < DIGS_SPEECH_ALWAYS_URGENCY) {
         const vox_digs_personality *personality =
             digs_speaker_personality(match, speaker);
+        /*
+         * Cut hard against the old denominator.  Every kill used to be
+         * worth a remark from both parties, and a violent match has fifty of
+         * them -- which spent the whole budget on isolated event barks and
+         * left nothing for the exchanges they are supposed to start.  Fewer
+         * things get remarked on now, and the ones that do turn into a
+         * conversation.
+         */
         vox_u32 chance = (urgency * DIGS_SPEECH_EVENT_SCALE *
-                          (vox_u32)personality->sociability) / 255U;
+                          (vox_u32)personality->sociability) / 900U;
         if (match->speech_answer_ticks > 0U) {
             chance += DIGS_SPEECH_ANSWER_BONUS;
         }
@@ -3323,6 +3383,151 @@ static vox_u16 digs_speech_choose(vox_digs_match *match, vox_u16 speaker,
     return chosen;
 }
 
+
+/*
+ * Who is this aimed at?
+ *
+ * Muttering is muttering whoever is nearby; an announcement is for the room;
+ * everything else is aimed at somebody.  Deriving it from the stimulus keeps
+ * it in one place -- the alternative is every caller deciding, and callers
+ * disagree.
+ */
+static vox_u16 digs_stimulus_audience(vox_u16 stimulus)
+{
+    switch (stimulus) {
+    case VOX_DIGS_STIMULUS_IDLE:
+    case VOX_DIGS_STIMULUS_BURIED:
+    case VOX_DIGS_STIMULUS_LAVA_CLOSE:
+    case VOX_DIGS_STIMULUS_DOOMED:
+        return (vox_u16)VOX_DIGS_AUDIENCE_SELF;
+    case VOX_DIGS_STIMULUS_MATCH_START:
+    case VOX_DIGS_STIMULUS_MATCH_END:
+    case VOX_DIGS_STIMULUS_FIRST_MEETING:
+    case VOX_DIGS_STIMULUS_TRUCE_OFFERED:
+    case VOX_DIGS_STIMULUS_HUMILIATED:
+    case VOX_DIGS_STIMULUS_STREAK:
+        return (vox_u16)VOX_DIGS_AUDIENCE_ALL;
+    default:
+        break;
+    }
+    return (vox_u16)VOX_DIGS_AUDIENCE_ONE;
+}
+
+/* Can this miner make out what was said, and from how far? */
+static int digs_speech_within_earshot(const vox_digs_match *match,
+                                      vox_u16 listener, vox_u16 speaker,
+                                      vox_u16 audience)
+{
+    vox_i32 gap;
+    vox_u32 reach;
+    if (audience == VOX_DIGS_AUDIENCE_ALL) {
+        return 1;
+    }
+    reach = audience == VOX_DIGS_AUDIENCE_SELF ?
+            DIGS_SPEECH_MUTTER_CELLS : DIGS_SPEECH_EARSHOT_CELLS;
+    gap = digs_abs_i32(
+        (match->players[listener].position_x.value_q16 >> 16) -
+        (match->players[speaker].position_x.value_q16 >> 16)) +
+        digs_abs_i32(
+        (match->players[listener].position_y.value_q16 >> 16) -
+        (match->players[speaker].position_y.value_q16 >> 16));
+    return (vox_u32)gap <= reach;
+}
+
+/*
+ * What a listener says back to something aimed at somebody else.
+ *
+ * Answering "you talked" to everything was what made replies feel like a
+ * reflex rather than a response.  Picking off what was actually heard is
+ * what lets a third miner take a side.
+ */
+static vox_u16 digs_speech_chime_in(vox_u16 heard, int defends)
+{
+    switch (heard) {
+    case VOX_DIGS_STIMULUS_KILLED_THEM:
+    case VOX_DIGS_STIMULUS_REVENGE:
+        return defends ? (vox_u16)VOX_DIGS_STIMULUS_HUMILIATED :
+                         (vox_u16)VOX_DIGS_STIMULUS_TEAMED_UP;
+    case VOX_DIGS_STIMULUS_TRUCE_BROKEN:
+    case VOX_DIGS_STIMULUS_BETRAYED:
+        return (vox_u16)VOX_DIGS_STIMULUS_BETRAYED;
+    case VOX_DIGS_STIMULUS_LIMB_TAKEN:
+    case VOX_DIGS_STIMULUS_HURT_THEM:
+        return defends ? (vox_u16)VOX_DIGS_STIMULUS_TAUNTED :
+                         (vox_u16)VOX_DIGS_STIMULUS_SPOTTED;
+    default:
+        break;
+    }
+    return (vox_u16)VOX_DIGS_STIMULUS_TAUNTED;
+}
+
+/*
+ * Everybody hears it, and what they make of it depends on who they like.
+ *
+ * A listener that hears the speaker go after somebody updates its account
+ * with the *speaker*, signed by how it feels about the *subject*: close to
+ * the subject and it sours on the speaker, already hostile to the subject
+ * and it warms to them slightly.  Kept well below the weight of a direct
+ * hit, so overhearing colours the room without deciding it -- this is what
+ * lets alliances form on their own rather than three private two-way
+ * channels running side by side.
+ */
+static void digs_speech_broadcast(vox_digs_match *match, vox_u16 speaker,
+                                  vox_u16 subject, vox_u16 stimulus,
+                                  vox_u16 audience)
+{
+    vox_u16 listener;
+    for (listener = 0U; listener < match->rules.player_count; ++listener) {
+        const vox_digs_contract *feeling;
+        vox_i32 lean = 0L;
+        int addressed = listener == subject;
+        int defends = 0;
+        vox_u32 chance;
+        if (listener == speaker || !match->alive[listener] ||
+            !vox_digs_player_is_active(match, listener)) {
+            continue;
+        }
+        if (!addressed &&
+            !digs_speech_within_earshot(match, listener, speaker, audience)) {
+            continue;
+        }
+        if (!addressed && subject < match->rules.player_count &&
+            subject != listener) {
+            feeling = vox_digs_contract_get(match, listener, subject);
+            if (feeling != 0 && feeling->met) {
+                if (feeling->tone >= VOX_DIGS_TONE_TRUCE) {
+                    lean = -DIGS_SPEECH_OVERHEARD_VALENCE;
+                    defends = 1;
+                } else if (feeling->tone <= VOX_DIGS_TONE_HOSTILE) {
+                    lean = DIGS_SPEECH_OVERHEARD_VALENCE;
+                }
+            }
+        }
+        if (lean != 0L && digs_stimulus_valence[stimulus] < 0) {
+            digs_contract_adjust(match, listener, speaker, lean);
+        }
+        /*
+         * Anyone may answer, not only whoever it was aimed at.  Feeling
+         * strongly about the subject is what makes a third miner speak up.
+         */
+        chance = digs_speech_chattiness(match, listener);
+        if (addressed) {
+            chance += DIGS_SPEECH_REPLY_BONUS;
+        } else if (lean != 0L) {
+            chance += DIGS_SPEECH_CHIME_BONUS;
+        } else {
+            chance = chance / 2U;
+        }
+        if (digs_speech_roll(match, listener, chance,
+                             (vox_u16)(0x7A1BU + listener))) {
+            digs_speech_set(match, listener, speaker,
+                            addressed ?
+                            digs_speech_chime_in(stimulus, 1) :
+                            digs_speech_chime_in(stimulus, defends));
+        }
+    }
+}
+
 /*
  * Say the queued thing, then decide whether the other one answers.
  *
@@ -3338,6 +3543,11 @@ static void digs_step_speech(vox_digs_match *match)
     }
     if (match->speech_answer_ticks > 0U) {
         match->speech_answer_ticks--;
+        if (match->speech_answer_ticks == 0U) {
+            /* The exchange died out.  Now the mine goes quiet for a while. */
+            match->speech_floor_ticks = DIGS_SPEECH_FLOOR_BETWEEN;
+            match->speech_exchange_lines = 0U;
+        }
     }
     if (match->speech_dry_ticks < 65535U) {
         match->speech_dry_ticks++;
@@ -3347,6 +3557,7 @@ static void digs_step_speech(vox_digs_match *match)
         vox_u16 subject;
         vox_u16 line;
         vox_u16 tone = (vox_u16)VOX_DIGS_TONE_NEUTRAL;
+        vox_u16 audience;
         const vox_digs_personality *personality;
         int pressed;
         if (match->speech_cooldown[player] > 0U) {
@@ -3423,8 +3634,19 @@ static void digs_step_speech(vox_digs_match *match)
             continue;
         }
         personality = digs_speaker_personality(match, player);
-        match->speech_floor_ticks = DIGS_SPEECH_FLOOR_TICKS;
         match->speech_dry_ticks = 0U;
+        if (match->speech_exchange_lines < 65535U) {
+            match->speech_exchange_lines++;
+        }
+        if (match->speech_exchange_lines >= DIGS_SPEECH_EXCHANGE_MAX) {
+            /* Enough said.  Close it and buy the silence now. */
+            match->speech_answer_ticks = 0U;
+            match->speech_exchange_lines = 0U;
+            match->speech_floor_ticks = DIGS_SPEECH_FLOOR_BETWEEN;
+        } else {
+            match->speech_floor_ticks = DIGS_SPEECH_FLOOR_IN_EXCHANGE;
+            match->speech_answer_ticks = DIGS_SPEECH_EXCHANGE_WINDOW;
+        }
         /*
          * When the player speaks, the mine turns to look.  Everyone is
          * briefly likelier to answer, and everyone's clock is pulled in so
@@ -3434,7 +3656,9 @@ static void digs_step_speech(vox_digs_match *match)
          */
         if (!vox_digs_player_is_bot(match, player)) {
             vox_u16 other;
-            match->speech_answer_ticks = DIGS_SPEECH_ANSWER_WINDOW;
+            if (match->speech_answer_ticks < DIGS_SPEECH_ANSWER_WINDOW) {
+                match->speech_answer_ticks = DIGS_SPEECH_ANSWER_WINDOW;
+            }
             for (other = 0U; other < match->rules.player_count; ++other) {
                 vox_u32 spin;
                 vox_u16 soon;
@@ -3453,29 +3677,27 @@ static void digs_step_speech(vox_digs_match *match)
         match->speech_cooldown[player] = (vox_u16)(DIGS_SPEECH_COOLDOWN_MIN +
             ((255U - (vox_u32)personality->sociability) *
              DIGS_SPEECH_COOLDOWN_SPAN) / 255U);
+        /*
+         * The audience rides on `material`, which for speech only ever held
+         * a decorative VOX_MAT_SMOKE that nothing read.  Documented at both
+         * ends so it is a deliberate reuse and not a surprise to the next
+         * person who greps for it.
+         */
+        audience = digs_stimulus_audience(stimulus);
+        match->speech_audience[player] = audience;
         digs_emit_event(match, VOX_DIGS_EVENT_AI_BARK, player, subject,
-                        match->selected_weapon[player], VOX_MAT_SMOKE,
+                        match->selected_weapon[player], audience,
                         match->players[player].position_x.value_q16,
                         match->players[player].position_y.value_q16,
                         stimulus, line);
         match->events[(match->event_head + match->event_count - 1U) %
                       VOX_DIGS_MAX_EVENTS].reserved = tone;
-        /* And now the other one may have something to say back. */
-        if (subject < match->rules.player_count && subject != player &&
-            match->alive[subject]) {
-            /*
-             * Answering someone who just spoke to you is easier than
-             * starting, so the same chattiness gets a bonus rather than a
-             * separate rule -- which means the player's answer window lifts
-             * replies too, without a second knob to keep in step.
-             */
-            if (digs_speech_roll(match, subject,
-                                 digs_speech_chattiness(match, subject) +
-                                 DIGS_SPEECH_REPLY_BONUS, 0x7A1BU)) {
-                digs_speech_set(match, subject, player,
-                                (vox_u16)VOX_DIGS_STIMULUS_TAUNTED);
-            }
-        }
+        /*
+         * And now everybody who could hear it decides what to make of it.
+         * Replies used to be the addressee's alone, which is precisely why
+         * three bots in a room produced three private conversations.
+         */
+        digs_speech_broadcast(match, player, subject, stimulus, audience);
     }
 }
 
@@ -7005,6 +7227,8 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
     hash = digs_hash_mix(hash, (vox_u32)match->speech_floor_ticks);
     hash = digs_hash_mix(hash, (vox_u32)match->speech_answer_ticks);
     hash = digs_hash_mix(hash, (vox_u32)match->speech_dry_ticks);
+    hash = digs_hash_mix(hash,
+                         (vox_u32)match->speech_exchange_lines);
     hash = digs_hash_mix(hash, match->memory.memory_hash);
     hash = digs_hash_mix(hash, match->lava_level_q16);
     hash = digs_hash_mix(hash, (vox_u32)match->lava_surface_y);
@@ -7061,6 +7285,7 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
         hash = digs_hash_mix(hash, (vox_u32)match->speech_delay[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->speech_cooldown[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->speech_urge_ticks[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->speech_audience[i]);
         hash = digs_hash_mix(hash,
                              (vox_u32)match->speech_recent_cursor[i]);
         {

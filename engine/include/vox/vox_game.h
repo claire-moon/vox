@@ -247,6 +247,20 @@ typedef enum vox_digs_stimulus {
     VOX_DIGS_STIMULUS_COUNT = 27
 } vox_digs_stimulus;
 
+/*
+ * Who a line is aimed at.
+ *
+ * Without this every remark was addressed to exactly one miner, so three
+ * bots muttering near each other produced three private conversations and
+ * none of them acknowledged the others -- the "everyone in their own little
+ * world" the playtest reported.
+ */
+typedef enum vox_digs_audience {
+    VOX_DIGS_AUDIENCE_SELF = 0,   /* muttering; only close miners overhear */
+    VOX_DIGS_AUDIENCE_ONE = 1,    /* aimed at the subject */
+    VOX_DIGS_AUDIENCE_ALL = 2     /* said to the whole mine */
+} vox_digs_audience;
+
 /* Four slots choose two. */
 #define VOX_DIGS_MAX_PAIRS 6U
 /* How many lines a pair remembers, so it does not repeat itself immediately. */
@@ -592,6 +606,7 @@ typedef struct vox_digs_match {
      * sociability is what makes one of them chattier than the others.
      */
     vox_u16 speech_urge_ticks[VOX_DIGS_MAX_SLOTS];
+    vox_u16 speech_audience[VOX_DIGS_MAX_SLOTS];
     /* What this speaker has said lately, regardless of who it was said to. */
     vox_u16 speech_recent[VOX_DIGS_MAX_SLOTS][VOX_DIGS_SPEAKER_RECENT];
     vox_u16 speech_recent_cursor[VOX_DIGS_MAX_SLOTS];
@@ -599,6 +614,9 @@ typedef struct vox_digs_match {
     vox_u16 speech_answer_ticks;
     /* How long the mine has been silent, so it cannot stay silent forever. */
     vox_u16 speech_dry_ticks;
+    /* Lines in the exchange currently running, so it can be brought to a
+     * close rather than running until everybody happens to shut up. */
+    vox_u16 speech_exchange_lines;
     /*
      * Nobody talks over anybody.  One miner speaks at a time and the rest
      * wait their turn, so the battlefield carries a conversation rather than

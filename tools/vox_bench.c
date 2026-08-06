@@ -53,6 +53,14 @@ typedef struct bench_counters {
      */
     unsigned long speech_lines;
     unsigned long speech_repeats;
+    /*
+     * Lines that arrived while the previous one was still hanging in the
+     * air.  Conversation is the same words arriving in bunches, so this is
+     * the number that tells clustering apart from merely talking more --
+     * without it "it feels more conversational" cannot be contradicted.
+     */
+    unsigned long speech_in_exchange;
+    unsigned long speech_last_tick;
     unsigned long unattributed_deaths;
     unsigned long hazard_damage;
 } bench_counters;
@@ -129,6 +137,12 @@ static void bench_drain_events(vox_digs_match *match, bench_counters *counters)
                 }
                 recent[cursor] = event->variant;
                 cursor = (cursor + 1U) % 12U;
+                if (counters->speech_lines != 0UL &&
+                    event->tick >= counters->speech_last_tick &&
+                    event->tick - counters->speech_last_tick <= 240UL) {
+                    counters->speech_in_exchange++;
+                }
+                counters->speech_last_tick = event->tick;
                 counters->speech_lines++;
             }
             break;
@@ -299,6 +313,7 @@ int main(int argc, char **argv)
     printf("rope_events=%lu\n", counters.rope_events);
     printf("speech_lines=%lu\n", counters.speech_lines);
     printf("speech_repeats=%lu\n", counters.speech_repeats);
+    printf("speech_in_exchange=%lu\n", counters.speech_in_exchange);
     printf("ai_state_changes=%lu\n", counters.ai_state_changes);
     printf("unattributed_deaths=%lu\n", counters.unattributed_deaths);
     printf("hazard_damage=%lu\n", counters.hazard_damage);

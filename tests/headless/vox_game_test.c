@@ -2610,6 +2610,138 @@ static int test_traits_drift_but_stay_recognisable(void)
     return 0;
 }
 
+static vox_i16 test_overhear_run(vox_u16 bystander_tone)
+{
+    vox_digs_rules rules;
+    vox_digs_contract *to_speaker;
+    vox_digs_contract *to_victim;
+    vox_digs_contract *pair;
+    vox_u32 tick;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 3U;
+    rules.bot_mask = 0x0006U;      /* slot 0 human, 1 RIVET, 2 CINDER */
+    rules.match_ticks = 3000U;
+    rules.lava_start_tick = 2900U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 0;
+    for (tick = 0U; tick < 3U; ++tick) match.spawn_shield_ticks[tick] = 0U;
+    to_speaker = (vox_digs_contract *)vox_digs_contract_get(&match, 0U, 2U);
+    to_victim = (vox_digs_contract *)vox_digs_contract_get(&match, 0U, 1U);
+    pair = (vox_digs_contract *)vox_digs_contract_get(&match, 2U, 1U);
+    if (to_speaker == 0 || to_victim == 0 || pair == 0) return 0;
+    to_victim->valence = bystander_tone >= VOX_DIGS_TONE_TRUCE ? 700 : -700;
+    to_victim->met = 1U;
+    for (tick = 0U; tick < 420U && match.phase == VOX_DIGS_RUNNING; ++tick) {
+        to_victim->tone = bystander_tone;
+        /*
+         * The other two are at a truce, so every hit reads as a betrayal --
+         * loud enough to be spoken unconditionally.  An ordinary hit is
+         * rolled for at well under one percent, so a test driven by those
+         * would be measuring the dice rather than the mechanism.
+         */
+        pair->tone = (vox_u16)VOX_DIGS_TONE_TRUCE;
+        pair->met = 1U;
+        /*
+         * The bystander is the human slot, parked in earshot and left
+         * permanently shielded.  It never acts without input and cannot be
+         * hit, so the only thing that can move its opinion of the speaker is
+         * what it overhears.  Earlier cuts of this had the bystander in its
+         * own firefight, which saturated the account at the clamp and hid
+         * the signal completely.
+         */
+        match.players[0].position_x.value_q16 =
+            match.players[2].position_x.value_q16 + (24L << 16);
+        match.players[0].position_y.value_q16 =
+            match.players[2].position_y.value_q16;
+        match.alive[0] = 1U;
+        match.health[0] = VOX_DIGS_MAX_HEALTH;
+        match.spawn_shield_ticks[0] = 600U;
+        if (match.alive[1] && (tick % 120U) == 0U) {
+            (void)vox_digs_apply_hit(&match, 2U, 1U, VOX_DIGS_TOOL_POPPER,
+                                     VOX_DIGS_NO_PART, 25U,
+                                     VOX_DIGS_DAMAGE_BALLISTIC);
+        }
+        if (vox_digs_match_step(&match) != VOX_OK) return 0;
+        if (match.event_count > 0U) {
+            (void)vox_digs_consume_events(&match, match.event_count);
+        }
+    }
+    return to_speaker->valence;
+}
+
+static int test_overhearing_takes_sides(void)
+{
+    /*
+     * CINDER breaks a truce with RIVET while somebody watches.  What the
+     * watcher makes of CINDER has to depend on how they felt about RIVET --
+     * that is the whole difference between a room of people and three
+     * private two-way channels running side by side.
+     *
+     * Measured as the difference between two otherwise identical runs.  An
+     * absolute check against the starting value fails for a boring reason:
+     * the watcher hears the betrayal itself as well, so both runs move.
+     * Only the gap between them is the taking of sides.
+     */
+    vox_i16 defends = test_overhear_run((vox_u16)VOX_DIGS_TONE_BONDED);
+    vox_i16 indifferent = test_overhear_run((vox_u16)VOX_DIGS_TONE_FEUD);
+    if (defends >= indifferent) return 1;
+    return 0;
+}
+
+static int test_talk_arrives_in_exchanges(void)
+{
+    vox_digs_rules rules;
+    vox_u32 tick;
+    vox_u32 lines = 0U;
+    vox_u32 clustered = 0U;
+    vox_u32 last = 0U;
+    vox_u32 self_lines = 0U;
+    vox_u32 all_lines = 0U;
+
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 4U;
+    rules.bot_mask = 0x000EU;
+    rules.match_ticks = 11400U;
+    rules.lava_start_tick = 10800U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 1;
+
+    for (tick = 0U; tick < 10800U && match.phase == VOX_DIGS_RUNNING;
+         ++tick) {
+        vox_u16 index;
+        if (vox_digs_match_step(&match) != VOX_OK) return 2;
+        for (index = 0U; index < match.event_count; ++index) {
+            const vox_digs_event *event =
+                &match.events[(match.event_head + index) %
+                              VOX_DIGS_MAX_EVENTS];
+            if (event->type != VOX_DIGS_EVENT_AI_BARK) continue;
+            if (event->material > VOX_DIGS_AUDIENCE_ALL) return 3;
+            if (event->material == VOX_DIGS_AUDIENCE_SELF) self_lines++;
+            if (event->material == VOX_DIGS_AUDIENCE_ALL) all_lines++;
+            if (lines != 0U && tick >= last && tick - last <= 240U) {
+                clustered++;
+            }
+            last = tick;
+            lines++;
+        }
+        if (match.event_count > 0U) {
+            (void)vox_digs_consume_events(&match, match.event_count);
+        }
+    }
+    if (lines < 4U) return 4;
+    if (lines > 45U) return 5;
+    /*
+     * The point of the exercise: talk arrives in bunches.  A third of the
+     * lines landing while the previous one was still up is the difference
+     * between a conversation and four people on timers.
+     */
+    if (clustered * 3U < lines) return 6;
+    /* And all three kinds of audience must actually occur. */
+    if (self_lines == 0U) return 7;
+    if (all_lines == 0U) return 8;
+    return 0;
+}
+
 static int test_bark_pacing_and_variance(void)
 {
     vox_digs_rules rules;
@@ -4222,6 +4354,20 @@ int main(void)
         if (result != 0) {
             fprintf(stderr, "DIGS drift mismatch (%d)\n", result);
             return 75;
+        }
+    }
+    {
+        int result = test_overhearing_takes_sides();
+        if (result != 0) {
+            fprintf(stderr, "DIGS overhearing mismatch (%d)\n", result);
+            return 77;
+        }
+    }
+    {
+        int result = test_talk_arrives_in_exchanges();
+        if (result != 0) {
+            fprintf(stderr, "DIGS exchange mismatch (%d)\n", result);
+            return 78;
         }
     }
     {
