@@ -617,6 +617,14 @@ typedef struct vox_digs_match {
     /* Lines in the exchange currently running, so it can be brought to a
      * close rather than running until everybody happens to shut up. */
     vox_u16 speech_exchange_lines;
+    /* The line just spoken, so a reply can be priced against how long it
+     * takes to say rather than answering everything at the same speed. */
+    vox_u16 speech_last_line;
+    /* What each miner last said, so their own words are context for their
+     * next ones -- which is what lets somebody alone hold a train of
+     * thought instead of firing unrelated remarks. */
+    vox_u16 speech_self_stimulus[VOX_DIGS_MAX_SLOTS];
+    vox_u32 speech_self_tick[VOX_DIGS_MAX_SLOTS];
     /*
      * Nobody talks over anybody.  One miner speaks at a time and the rest
      * wait their turn, so the battlefield carries a conversation rather than
@@ -688,6 +696,14 @@ const vox_digs_contract *vox_digs_contract_get(const vox_digs_match *match,
                                                vox_u16 a, vox_u16 b);
 const char *vox_digs_tone_name(vox_u16 tone);
 const char *vox_digs_stimulus_name(vox_u16 stimulus);
+/*
+ * How long a line occupies the room: the time to say it plus a margin to
+ * read it by.  The simulation prices replies against this and the port shows
+ * the bubble for exactly this, so "they cut me off" means the same thing to
+ * both of them.  Two copies of the arithmetic would drift on the first
+ * tuning pass.
+ */
+vox_u16 vox_digs_speech_duration(vox_u16 line_id);
 vox_result vox_digs_submit_input(vox_digs_match *match,
                                  const vox_digs_input *input);
 vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,

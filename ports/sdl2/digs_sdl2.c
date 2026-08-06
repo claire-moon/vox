@@ -45,7 +45,15 @@
 #define DEMO_BANNER_TICKS 90U
 #define DEMO_HIT_MARKER_TICKS 12U
 #define DEMO_MINER_HIT_TICKS 8U
-#define DEMO_BUBBLE_TICKS 150U
+/*
+ * A bubble lasts as long as vox_digs_speech_duration says the line does.
+ *
+ * It used to be a flat 150 ticks whatever the line, so "HA!" sat there for
+ * two and a half seconds and a forty-character sentence got no longer -- and
+ * every reply looked like an interruption, because the simulation was
+ * pricing answers against a duration the picture did not share.
+ */
+#define DEMO_BUBBLE_TICKS_MAX 264U
 #define DEMO_BUBBLE_MAX_LINES 3
 #define DEMO_MULTIKILL_WINDOW 180U
 #define DEMO_BARK_COOLDOWN 180U
@@ -1041,7 +1049,9 @@ static void demo_speak_line(demo_app *app, int player, int target,
     }
     demo_copy_text(app->bubbles[player].text,
                    sizeof(app->bubbles[player].text), phrase);
-    app->bubbles[player].ttl = DEMO_BUBBLE_TICKS;
+    /* The simulation owns how long a line occupies the room; the bubble
+     * shows it for exactly that, so both agree on what interrupting means. */
+    app->bubbles[player].ttl = vox_digs_speech_duration(line_id);
     app->last_bark_tick[player] = demo_match.tick;
     app->global_bark_tick = demo_match.tick;
     demo_audio_speak_text(app, phrase, demo_speech_profile(player),
@@ -7810,7 +7820,7 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
         } else if (ticks == 600U &&
                    (fired != 43U || explosions != 16U || crushes != 1U ||
                     max_effects != 474U || max_awake != 10754U ||
-                    demo_match.state_hash != (vox_u32)0xE49FF3CBUL)) {
+                    demo_match.state_hash != (vox_u32)0x89F9C847UL)) {
             fprintf(stderr,
                     "load self-test: canonical 600-tick activity/hash "
                     "mismatch\n");
@@ -9028,7 +9038,7 @@ static int demo_screenshot(const char *screen_name, const char *path)
          */
         strcpy(app.bubbles[1].text,
                "ONE OF THESE TIMES I'M THE ONE STANDING.");
-        app.bubbles[1].ttl = DEMO_BUBBLE_TICKS;
+        app.bubbles[1].ttl = DEMO_BUBBLE_TICKS_MAX;
     }
     app.screen = (demo_screen)screen;
     demo_prepare_targets();

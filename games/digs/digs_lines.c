@@ -3281,6 +3281,28 @@ int digs_lines_stride_is_sound(void)
     return (DIGS_LINE_SET_COUNT * DIGS_LINE_SET_STRIDE) <= 65535U;
 }
 
+int digs_lines_addresses(vox_u16 id)
+{
+    const char *text = digs_lines_text(id);
+    vox_u16 i;
+    for (i = 0U; text[i] != '\0' && i < 255U; ++i) {
+        if (text[i] == '%' && text[i + 1] == 'T') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+vox_u16 digs_lines_length(vox_u16 id)
+{
+    const char *text = digs_lines_text(id);
+    vox_u16 count = 0U;
+    while (text[count] != '\0' && count < 255U) {
+        count++;
+    }
+    return count;
+}
+
 vox_u16 digs_lines_total(void)
 {
     vox_u16 set;

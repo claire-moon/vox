@@ -2669,6 +2669,178 @@ static vox_i16 test_overhear_run(vox_u16 bystander_tone)
     return to_speaker->valence;
 }
 
+static int test_alone_you_talk_to_yourself(void)
+{
+    vox_digs_rules rules;
+    vox_digs_input input;
+    vox_u32 tick;
+    vox_u16 seen[8];
+    vox_u16 seen_count = 0U;
+    vox_u16 distinct = 0U;
+    vox_u16 lines = 0U;
+
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0x0002U;
+    rules.match_ticks = 4000U;
+    rules.lava_start_tick = 3900U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 1;
+    match.spawn_shield_ticks[0] = 0U;
+
+    for (tick = 0U; tick < 1600U && match.phase == VOX_DIGS_RUNNING;
+         ++tick) {
+        vox_u16 index;
+        /* Park the bot far out of earshot: this is genuinely solo. */
+        match.players[1].position_x.value_q16 = 500L << 16;
+        match.alive[1] = 1U;
+        match.spawn_shield_ticks[1] = 600U;
+        if ((tick % 120U) == 60U && match.alive[0]) {
+            input.abi_version = VOX_ABI_VERSION;
+            input.struct_size = (vox_u32)sizeof(input);
+            input.player = 0U;
+            input.actions = VOX_DIGS_ACTION_BARK;
+            input.move_x_q15 = 0;
+            input.move_y_q15 = 0;
+            input.aim_x = match.aim_x[0];
+            input.aim_y = match.aim_y[0];
+            input.selected_weapon = match.selected_weapon[0];
+            input.reserved = 0U;
+            (void)vox_digs_submit_input(&match, &input);
+        }
+        if (vox_digs_match_step(&match) != VOX_OK) return 2;
+        for (index = 0U; index < match.event_count; ++index) {
+            const vox_digs_event *event =
+                &match.events[(match.event_head + index) %
+                              VOX_DIGS_MAX_EVENTS];
+            vox_u16 look;
+            int already = 0;
+            if (event->type != VOX_DIGS_EVENT_AI_BARK ||
+                event->source != 0U) {
+                continue;
+            }
+            lines++;
+            /*
+             * Nobody is here to be named, so nothing may name anybody.  A
+             * line with %T in it comes out as "SOMEBODY. COULD BE WORSE."
+             * which is exactly how this read before.
+             */
+            if (digs_lines_addresses(event->variant)) return 3;
+            for (look = 0U; look < seen_count; ++look) {
+                if (seen[look] == event->magnitude) already = 1;
+            }
+            if (!already && seen_count < 8U) {
+                seen[seen_count++] = event->magnitude;
+                distinct++;
+            }
+        }
+        if (match.event_count > 0U) {
+            (void)vox_digs_consume_events(&match, match.event_count);
+        }
+    }
+    if (lines < 6U) return 4;
+    /*
+     * A train of thought, not one pool on repeat.  Feeding a miner's own
+     * last line back through the reply mapping collapsed onto a single
+     * stimulus, which is what this catches.
+     */
+    if (distinct < 3U) return 5;
+    return 0;
+}
+
+static int test_patience_decides_who_interrupts(void)
+{
+    vox_digs_rules rules;
+    vox_digs_input input;
+    vox_u32 tick;
+    vox_u32 spoke_at = 0U;
+    vox_u32 duration = 0U;
+    vox_u32 replies[VOX_DIGS_MAX_SLOTS];
+    vox_u32 cuts[VOX_DIGS_MAX_SLOTS];
+    vox_u32 total_cuts = 0U;
+    vox_u32 total_replies = 0U;
+    vox_u16 slot;
+    int waiting = 0;
+
+    /* A line has a length, and how long it holds the room follows from it. */
+    {
+        digs_line_pool pool = digs_lines_pool(DIGS_VOICE_RIVET,
+            VOX_DIGS_TONE_NEUTRAL, VOX_DIGS_STIMULUS_KILLED_THEM);
+        if (pool.count == 0U) return 1;
+        if (digs_lines_length(pool.first) == 0U) return 2;
+        if (vox_digs_speech_duration(pool.first) < 96U) return 3;
+        if (vox_digs_speech_duration(pool.first) > 264U) return 4;
+    }
+
+    for (slot = 0U; slot < VOX_DIGS_MAX_SLOTS; ++slot) {
+        replies[slot] = 0U;
+        cuts[slot] = 0U;
+    }
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 4U;
+    rules.bot_mask = 0x000EU;      /* 1 RIVET, 2 CINDER, 3 FLAMEY */
+    rules.match_ticks = 12000U;
+    rules.lava_start_tick = 11900U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 5;
+
+    for (tick = 0U; tick < 10800U && match.phase == VOX_DIGS_RUNNING;
+         ++tick) {
+        vox_u16 index;
+        if ((tick % 300U) == 150U && match.alive[0]) {
+            input.abi_version = VOX_ABI_VERSION;
+            input.struct_size = (vox_u32)sizeof(input);
+            input.player = 0U;
+            input.actions = VOX_DIGS_ACTION_BARK;
+            input.move_x_q15 = 0;
+            input.move_y_q15 = 0;
+            input.aim_x = match.aim_x[0];
+            input.aim_y = match.aim_y[0];
+            input.selected_weapon = match.selected_weapon[0];
+            input.reserved = 0U;
+            (void)vox_digs_submit_input(&match, &input);
+        }
+        if (vox_digs_match_step(&match) != VOX_OK) return 6;
+        for (index = 0U; index < match.event_count; ++index) {
+            const vox_digs_event *event =
+                &match.events[(match.event_head + index) %
+                              VOX_DIGS_MAX_EVENTS];
+            if (event->type != VOX_DIGS_EVENT_AI_BARK) continue;
+            if (event->source == 0U) {
+                spoke_at = tick;
+                duration = vox_digs_speech_duration(event->variant);
+                waiting = 1;
+            } else if (waiting && event->target == 0U &&
+                       event->source < VOX_DIGS_MAX_SLOTS) {
+                /* Only a line aimed back at us counts as an answer. */
+                replies[event->source]++;
+                total_replies++;
+                if (tick - spoke_at < duration) {
+                    cuts[event->source]++;
+                    total_cuts++;
+                }
+                waiting = 0;
+            }
+        }
+        if (match.event_count > 0U) {
+            (void)vox_digs_consume_events(&match, match.event_count);
+        }
+    }
+    if (total_replies < 6U) return 7;
+    /*
+     * Somebody has to be capable of cutting in, or the timing is just a long
+     * pause and the personalities are indistinguishable the other way.
+     */
+    if (total_cuts == 0U) return 8;
+    /*
+     * And RIVET, who is the patient one, must mostly sit through what you
+     * said.  Before the reply was priced against the line it answers, every
+     * bot cut in on nearly every line regardless of temperament.
+     */
+    if (replies[1] > 0U && cuts[1] * 3U > replies[1]) return 9;
+    return 0;
+}
+
 static int test_overhearing_takes_sides(void)
 {
     /*
@@ -4354,6 +4526,20 @@ int main(void)
         if (result != 0) {
             fprintf(stderr, "DIGS drift mismatch (%d)\n", result);
             return 75;
+        }
+    }
+    {
+        int result = test_alone_you_talk_to_yourself();
+        if (result != 0) {
+            fprintf(stderr, "DIGS solo talk mismatch (%d)\n", result);
+            return 79;
+        }
+    }
+    {
+        int result = test_patience_decides_who_interrupts();
+        if (result != 0) {
+            fprintf(stderr, "DIGS interrupt mismatch (%d)\n", result);
+            return 80;
         }
     }
     {

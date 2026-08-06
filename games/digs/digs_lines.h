@@ -53,6 +53,20 @@ const char *digs_lines_text(vox_u16 id);
  * stride, and no id past a vox_u16. */
 int digs_lines_stride_is_sound(void);
 
+/*
+ * Does this line name somebody?  A line with %T in it reads as nonsense when
+ * there is nobody to name -- "SOMEBODY. COULD BE WORSE." -- so a miner
+ * talking to itself needs to be able to avoid them.
+ */
+int digs_lines_addresses(vox_u16 id);
+
+/*
+ * Characters in a line.  The simulation prices a reply against how long the
+ * line it is answering takes to say, and doing that with strlen would drag
+ * string.h into a translation unit that is deliberately free of it.
+ */
+vox_u16 digs_lines_length(vox_u16 id);
+
 /* How many lines exist in total; ids run from 0 to this minus one. */
 vox_u16 digs_lines_total(void);
 
