@@ -276,7 +276,8 @@ typedef struct demo_app {
     demo_screen screen;
     int selection;
     int inbox_open;      /* -1 while listing, else the message open */
-    int log_scroll;
+    int scroll;          /* the active window's scroll, in pixels */
+    demo_screen scroll_screen;  /* which screen that scroll is for */
     int bots;
     int map_style;
     int arsenal;
@@ -2713,6 +2714,132 @@ static void demo_dark_panel(int x, int y, int width, int height)
     vox_ui_frame(&demo_ui, x, y, width, height, DEMO_VGA_BROWN);
 }
 
+
+/*
+ * One window, used by every screen.
+ *
+ * Screens used to place each row at a hand-picked y inside a hand-placed
+ * panel.  That works until a screen grows a row, and then it draws straight
+ * through its own footer -- which is what CUSTOMIZE was doing.  Rows are laid
+ * out by a cursor now, anything past the bottom of the content region is
+ * scrolled to rather than drawn over, and a bar appears when there is more
+ * than fits.
+ *
+ * The row registry keeps working unchanged: rows register where they are
+ * actually drawn, so the mouse follows the scroll for free.
+ */
+#define DEMO_WINDOW_ROW 14
+#define DEMO_WINDOW_VALUE_ROW 13
+
+typedef struct demo_window {
+    int x;
+    int y;
+    int width;
+    int height;
+    int content_top;      /* first pixel of the scrolling region */
+    int content_bottom;   /* one past the last usable pixel */
+    int cursor;           /* next row position, in content space */
+    int scroll;           /* how far the content is pushed up */
+    int selected_top;     /* where the selected row landed, content space */
+    int selected_height;
+} demo_window;
+
+static demo_window demo_win;
+
+static void demo_window_begin(int x, int y, int width, int height,
+                              const char *title, int scroll)
+{
+    demo_win.x = x;
+    demo_win.y = y;
+    demo_win.width = width;
+    demo_win.height = height;
+    demo_win.content_top = y + (title != 0 ? 26 : 10);
+    demo_win.content_bottom = y + height - 20;
+    demo_win.cursor = 0;
+    demo_win.scroll = scroll < 0 ? 0 : scroll;
+    demo_win.selected_top = -1;
+    demo_win.selected_height = 0;
+    demo_dark_panel(x, y, width, height);
+    if (title != 0) {
+        vox_ui_text_center_shadow(&demo_ui, x + width / 2, y + 8, 1, title,
+                                  DEMO_VGA_YELLOW);
+    }
+}
+
+/* Reserve the next row and return its screen y, or -1 when it is scrolled
+ * out of sight.  Callers skip drawing on -1; nothing else changes. */
+static int demo_window_row(int height, int selected)
+{
+    int screen_y = demo_win.content_top + demo_win.cursor - demo_win.scroll;
+    if (selected) {
+        demo_win.selected_top = demo_win.cursor;
+        demo_win.selected_height = height;
+    }
+    demo_win.cursor += height;
+    if (screen_y < demo_win.content_top ||
+        screen_y + height > demo_win.content_bottom) {
+        return -1;
+    }
+    return screen_y;
+}
+
+static void demo_window_gap(int pixels)
+{
+    demo_win.cursor += pixels;
+}
+
+/*
+ * Close the window: draw the bar if the content overflows, the footer, and
+ * report the scroll the caller should hold next frame so the selected row
+ * stays on screen.  Returning it rather than writing through a pointer keeps
+ * every screen's call site to one line.
+ */
+static int demo_window_end(const char *footer)
+{
+    int region = demo_win.content_bottom - demo_win.content_top;
+    int scroll = demo_win.scroll;
+    int overflow = demo_win.cursor - region;
+    if (overflow < 0) {
+        overflow = 0;
+    }
+    /* Follow the selection rather than leaving it off screen. */
+    if (demo_win.selected_top >= 0) {
+        if (demo_win.selected_top < scroll) {
+            scroll = demo_win.selected_top;
+        } else if (demo_win.selected_top + demo_win.selected_height >
+                   scroll + region) {
+            scroll = demo_win.selected_top + demo_win.selected_height - region;
+        }
+    }
+    if (scroll > overflow) {
+        scroll = overflow;
+    }
+    if (scroll < 0) {
+        scroll = 0;
+    }
+    if (overflow > 0) {
+        int track_x = demo_win.x + demo_win.width - 6;
+        int track_h = region;
+        int grip_h = (region * region) / (region + overflow);
+        int grip_y;
+        if (grip_h < 8) {
+            grip_h = 8;
+        }
+        grip_y = demo_win.content_top +
+                 ((track_h - grip_h) * scroll) / overflow;
+        vox_ui_rect(&demo_ui, track_x, demo_win.content_top, 2, track_h,
+                    DEMO_VGA_DARK_GRAY);
+        vox_ui_rect(&demo_ui, track_x, grip_y, 2, grip_h,
+                    DEMO_VGA_LIGHT_CYAN);
+    }
+    if (footer != 0) {
+        vox_ui_text_center(&demo_ui, demo_win.x + demo_win.width / 2,
+                           demo_win.y + demo_win.height - 12, 1, footer,
+                           DEMO_VGA_DARK_GRAY);
+    }
+    return scroll;
+}
+
 /*
  * Where the rows a screen just drew actually are.
  *
@@ -2871,28 +2998,52 @@ static void demo_value_line(int y, const char *label, const char *value,
                 selected ? 85U : 170U);
 }
 
+
+/* The two row kinds, laid out by the window instead of by hand. */
+static void demo_window_item(const char *label, int index, int selection)
+{
+    int y = demo_window_row(DEMO_WINDOW_ROW, index == selection);
+    if (y >= 0) {
+        demo_menu_item(y + 2, label, index, selection);
+    }
+}
+
+static void demo_window_value(const char *label, const char *value,
+                              int index, int selection)
+{
+    int y = demo_window_row(DEMO_WINDOW_VALUE_ROW, index == selection);
+    if (y >= 0) {
+        demo_value_line(y + 2, label, value, index, selection);
+    }
+}
+
 static void demo_draw_miner(demo_app *app)
 {
     char value[24];
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
-    demo_dark_panel(28, 8, 264, 184);
-    vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "MY MINER",
-                              DEMO_VGA_YELLOW);
-    vox_ui_text_center(&demo_ui, 160, 32, 1, app->player_names[0],
-                       DEMO_VGA_LIGHT_CYAN);
+    demo_window_begin(28, 8, 264, 184, "MY MINER", app->scroll);
+    {
+        int y = demo_window_row(16, 0);
+        if (y >= 0) {
+            vox_ui_text_center(&demo_ui, 160, y + 4, 1,
+                               app->player_names[0][0] != '\0' ?
+                               app->player_names[0] : "MINER",
+                               DEMO_VGA_LIGHT_CYAN);
+        }
+    }
     sprintf(value, "%d HZ", app->voice_pitch);
-    demo_value_line(56, "VOICE PITCH", value, 0, app->selection);
+    demo_window_value("VOICE PITCH", value, 0, app->selection);
     sprintf(value, "%d%%", app->voice_tone);
-    demo_value_line(72, "VOICE TONE", value, 1, app->selection);
+    demo_window_value("VOICE TONE", value, 1, app->selection);
     sprintf(value, "%d%%", app->voice_speed);
-    demo_value_line(88, "VOICE SPEED", value, 2, app->selection);
-    demo_menu_item(112, "HEAR IT", 3, app->selection);
-    demo_menu_item(130, "RESTORE DEFAULTS", 4, app->selection);
-    demo_menu_item(148, "BACK", 5, app->selection);
-    vox_ui_text_center(&demo_ui, 160, 174, 1,
-                       "ARROWS CHANGE  ENTER SELECTS", DEMO_VGA_DARK_GRAY);
+    demo_window_value("VOICE SPEED", value, 2, app->selection);
+    demo_window_gap(8);
+    demo_window_item("HEAR IT", 3, app->selection);
+    demo_window_item("RESTORE DEFAULTS", 4, app->selection);
+    demo_window_item("BACK", 5, app->selection);
+    app->scroll = demo_window_end("ARROWS CHANGE  ENTER SELECTS");
 }
 
 static void demo_handle_miner_key(demo_app *app, SDL_Keycode key)
@@ -2948,14 +3099,14 @@ static void demo_draw_inbox(demo_app *app)
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
-    demo_dark_panel(28, 8, 264, 184);
-    vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "INBOX",
-                              DEMO_VGA_YELLOW);
+    demo_window_begin(28, 8, 264, 184, "INBOX", app->scroll);
     if (count == 0U) {
-        vox_ui_text_center(&demo_ui, 160, 96, 1, "NO MAIL TODAY!",
-                           DEMO_VGA_LIGHT_GRAY);
-        vox_ui_text_center(&demo_ui, 160, 174, 1, "ESC  BACK",
-                           DEMO_VGA_DARK_GRAY);
+        int y = demo_window_row(60, 0);
+        if (y >= 0) {
+            vox_ui_text_center(&demo_ui, 160, y + 26, 1, "NO MAIL TODAY!",
+                               DEMO_VGA_LIGHT_GRAY);
+        }
+        app->scroll = demo_window_end("ESC  BACK");
         return;
     }
     if (app->inbox_open < 0) {
@@ -2965,38 +3116,44 @@ static void demo_draw_inbox(demo_app *app)
             char row[48];
             sprintf(row, "%s%s", demo_identity_name(app, message->from),
                     message->unread ? "   NEW" : "");
-            demo_menu_item(34 + (int)i * 14, row, (int)i,
-                           app->selection);
+            demo_window_item(row, (int)i, app->selection);
         }
-        vox_ui_text_center(&demo_ui, 160, 174, 1,
-                           "UP DOWN  ENTER READ  ESC BACK",
-                           DEMO_VGA_DARK_GRAY);
-    } else {
+        app->scroll = demo_window_end("UP DOWN  ENTER READ  ESC BACK");
+        return;
+    }
+    {
         const digs_inbox_message *message =
             &demo_chronicle.inbox[app->inbox_open];
-        const char *you = demo_identity_name(app,
-                                             (vox_u16)VOX_DIGS_IDENTITY_PLAYER);
-        int y = 44;
+        const char *you =
+            demo_identity_name(app, (vox_u16)VOX_DIGS_IDENTITY_PLAYER);
         vox_u16 i;
-        char header[48];
         vox_u8 red;
         vox_u8 green;
         vox_u8 blue;
+        char header[48];
+        int y;
         demo_identity_colour(message->from, &red, &green, &blue);
         sprintf(header, "FROM %s", demo_identity_name(app, message->from));
-        vox_ui_text(&demo_ui, 40, 30, 1, header, red, green, blue);
-        vox_ui_rect(&demo_ui, 40, 40, 240, 1, DEMO_VGA_DARK_GRAY);
+        y = demo_window_row(16, 0);
+        if (y >= 0) {
+            vox_ui_text(&demo_ui, 40, y, 1, header, red, green, blue);
+            vox_ui_rect(&demo_ui, 40, y + 10, 224, 1, DEMO_VGA_DARK_GRAY);
+        }
         for (i = 0U; i < message->line_count && i < DIGS_INBOX_LINES; ++i) {
             char text[128];
+            int lines;
             demo_expand_line(message->lines[i], you, text, sizeof(text));
-            /* The wrap returns lines, not pixels.  Adding it raw put each
-             * sentence seven pixels below the last instead of fourteen. */
-            y += vox_ui_text_wrap(&demo_ui, 40, y, 240, 3, 1, text,
-                                  red, green, blue) *
-                 VOX_UI_DOS_LINE_HEIGHT + 6;
+            lines = vox_ui_text_wrap_lines(224, 3, 1, text);
+            if (lines < 1) {
+                lines = 1;
+            }
+            y = demo_window_row(lines * VOX_UI_DOS_LINE_HEIGHT + 6, 0);
+            if (y >= 0) {
+                (void)vox_ui_text_wrap(&demo_ui, 40, y, 224, 3, 1, text,
+                                       DEMO_VGA_LIGHT_GRAY);
+            }
         }
-        vox_ui_text_center(&demo_ui, 160, 174, 1, "ESC  BACK TO INBOX",
-                           DEMO_VGA_DARK_GRAY);
+        app->scroll = demo_window_end("ESC  BACK TO INBOX");
     }
 }
 
@@ -3008,66 +3165,62 @@ static void demo_draw_inbox(demo_app *app)
  */
 static void demo_draw_log(demo_app *app)
 {
+    /*
+     * Entries wrap rather than being cut.  The speaker's name is written
+     * once and the sentence continues indented under it, which reads like a
+     * transcript and keeps the colour column scannable.
+     *
+     * Because an entry is now one, two or three rows tall, the scroll has to
+     * move in pixels rather than in entries -- which is what the window does
+     * anyway, so the log just measures each entry and asks for that height.
+     */
+    const int name_indent = 54;
+    const int body_width = 200;
     vox_u16 total = demo_chronicle.log_count;
-    const char *you =
-        demo_identity_name(app, (vox_u16)VOX_DIGS_IDENTITY_PLAYER);
-    int rows = 13;
-    int i;
-    vox_u8 red;
-    vox_u8 green;
-    vox_u8 blue;
+    vox_u16 index;
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
-    demo_dark_panel(20, 8, 280, 184);
-    vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "LOG", DEMO_VGA_YELLOW);
+    demo_window_begin(20, 8, 280, 184, "LOG", app->scroll);
     if (total == 0U) {
-        vox_ui_text_center(&demo_ui, 160, 96, 1, "NOTHING SAID YET",
-                           DEMO_VGA_DARK_GRAY);
-        vox_ui_text_center(&demo_ui, 160, 174, 1, "ESC  BACK",
-                           DEMO_VGA_DARK_GRAY);
+        int y = demo_window_row(20, 0);
+        if (y >= 0) {
+            vox_ui_text_center(&demo_ui, 160, y + 6, 1, "NOTHING SAID YET",
+                               DEMO_VGA_DARK_GRAY);
+        }
+        app->scroll = demo_window_end("ESC  BACK");
         return;
     }
-    if (app->log_scroll > (int)total - rows) {
-        app->log_scroll = (int)total - rows;
-    }
-    if (app->log_scroll < 0) {
-        app->log_scroll = 0;
-    }
-    for (i = 0; i < rows; ++i) {
-        int index = app->log_scroll + i;
-        const digs_log_entry *entry;
+    for (index = 0U; index < total; ++index) {
+        const digs_log_entry *entry = digs_chronicle_log_at(&demo_chronicle,
+                                                            index);
         char text[128];
-        char row[160];
-        if (index >= (int)total) {
-            break;
-        }
-        entry = digs_chronicle_log_at(&demo_chronicle, (vox_u16)index);
+        char name[32];
+        vox_u8 red;
+        vox_u8 green;
+        vox_u8 blue;
+        int lines;
+        int y;
         if (entry == 0) {
             continue;
         }
-        demo_expand_line(entry->line,
-                         demo_identity_name(app, entry->target), text,
-                         sizeof(text));
-        demo_identity_colour(entry->speaker, &red, &green, &blue);
-        sprintf(row, "%s: %s", demo_identity_name(app, entry->speaker), text);
-        /* Derived, not guessed: the panel is 280 wide from x=26. */
-        if ((int)strlen(row) > (320 - 26 - 20) / VOX_UI_DOS_ADVANCE) {
-            row[(320 - 26 - 20) / VOX_UI_DOS_ADVANCE] = '\0';
+        demo_expand_line(entry->line, demo_identity_name(app, entry->target),
+                         text, sizeof(text));
+        lines = vox_ui_text_wrap_lines(body_width, 3, 1, text);
+        if (lines < 1) {
+            lines = 1;
         }
-        vox_ui_text(&demo_ui, 26, 30 + i * 10, 1, row, red, green, blue);
+        y = demo_window_row(lines * VOX_UI_DOS_LINE_HEIGHT + 3, 0);
+        if (y < 0) {
+            continue;
+        }
+        demo_identity_colour(entry->speaker, &red, &green, &blue);
+        sprintf(name, "%s:", demo_identity_name(app, entry->speaker));
+        vox_ui_text(&demo_ui, 26, y, 1, name, red, green, blue);
+        (void)vox_ui_text_wrap(&demo_ui, 26 + name_indent, y, body_width, 3,
+                               1, text, red, green, blue);
     }
-    (void)you;
-    {
-        char footer[64];
-        sprintf(footer, "UP DOWN SCROLL   %d-%d OF %u   ESC BACK",
-                app->log_scroll + 1,
-                app->log_scroll + rows < (int)total ?
-                app->log_scroll + rows : (int)total,
-                (unsigned int)total);
-        vox_ui_text_center(&demo_ui, 160, 174, 1, footer,
-                           DEMO_VGA_DARK_GRAY);
-    }
+    app->scroll = demo_window_end("UP DOWN SCROLL   ESC BACK");
 }
 
 static void demo_handle_inbox_key(demo_app *app, SDL_Keycode key)
@@ -3117,15 +3270,18 @@ static void demo_handle_log_key(demo_app *app, SDL_Keycode key)
         app->selection = 2;
         demo_audio_play(app, DEMO_SOUND_SELECT);
     } else if (key == SDLK_UP) {
-        app->log_scroll--;
+        app->scroll -= VOX_UI_DOS_LINE_HEIGHT + 3;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->log_scroll++;
+        app->scroll += VOX_UI_DOS_LINE_HEIGHT + 3;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_PAGEUP) {
-        app->log_scroll -= 13;
+        app->scroll -= 130;
     } else if (key == SDLK_PAGEDOWN) {
-        app->log_scroll += 13;
+        app->scroll += 130;
+    }
+    if (app->scroll < 0) {
+        app->scroll = 0;
     }
 }
 
@@ -3160,63 +3316,63 @@ static void demo_draw_title(demo_app *app)
 
 static void demo_draw_setup(demo_app *app)
 {
-    char value[64];
+    char value[24];
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
-    demo_dark_panel(28, 8, 264, 184);
-    vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "MATCH SETUP",
-                              DEMO_VGA_YELLOW);
+    demo_window_begin(28, 8, 264, 184, "MATCH SETUP", app->scroll);
     sprintf(value, "%d", app->local_players);
-    demo_value_line(43, "LOCAL PLAYERS", value, 0, app->selection);
+    demo_window_value("LOCAL PLAYERS", value, 0, app->selection);
     sprintf(value, "%d", app->bots);
-    demo_value_line(57, "BOTS", value, 1, app->selection);
-    demo_value_line(71, "MAP", demo_map_names[app->map_style], 2, app->selection);
+    demo_window_value("BOTS", value, 1, app->selection);
+    demo_window_value("MAP", demo_map_names[app->map_style], 2,
+                      app->selection);
     sprintf(value, "%08lX", (unsigned long)app->seed);
-    demo_value_line(85, "SEED", value, 3, app->selection);
-    demo_value_line(99, "ARSENAL", demo_arsenal_names[app->arsenal], 4, app->selection);
-    demo_menu_item(117, "CUSTOMIZE GAME", 5, app->selection);
-    demo_menu_item(131, "START MATCH", 6, app->selection);
-    demo_menu_item(145, "BACK", 7, app->selection);
-    vox_ui_text_center(&demo_ui, 160, 180, 1,
-                       "ARROWS CHANGE  ENTER SELECTS", DEMO_VGA_DARK_GRAY);
+    demo_window_value("SEED", value, 3, app->selection);
+    demo_window_value("ARSENAL", demo_arsenal_names[app->arsenal], 4,
+                      app->selection);
+    demo_window_gap(8);
+    demo_window_item("CUSTOMIZE GAME", 5, app->selection);
+    demo_window_item("START MATCH", 6, app->selection);
+    demo_window_item("BACK", 7, app->selection);
+    app->scroll = demo_window_end("ARROWS CHANGE  ENTER SELECTS");
 }
 
 static void demo_draw_customize(demo_app *app)
 {
-    char value[32];
+    char value[24];
     int player;
     int active_players = app->local_players + app->bots;
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
-    demo_dark_panel(28, 8, 264, 184);
-    vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "CUSTOMIZE GAME",
-                              DEMO_VGA_YELLOW);
+    demo_window_begin(28, 8, 264, 184, "CUSTOMIZE GAME", app->scroll);
     for (player = 0; player < (int)VOX_DIGS_MAX_SLOTS; ++player) {
         char label[12];
         sprintf(label, "PLAYER %d", player + 1);
-        demo_value_line(30 + player * 12, label,
-                        player < active_players ?
-                        app->player_names[player] : "EMPTY", player, app->selection);
+        demo_window_value(label,
+                          player < active_players ?
+                          app->player_names[player] : "EMPTY",
+                          player, app->selection);
     }
-    demo_value_line(82, "TIME LIMIT",
-                    demo_time_limit_names[app->time_limit_index], 4, app->selection);
-    demo_value_line(95, "LAVA RISES",
-                    demo_lava_names[app->lava_index], 5, app->selection);
-    demo_value_line(108, "SCORE LIMIT",
-                    demo_score_limit_names[app->score_limit_index], 6, app->selection);
-    demo_value_line(121, "RESPAWN",
-                    demo_respawn_mode_names[app->respawn_mode], 7, app->selection);
-    sprintf(value, "%d SEC",
-            demo_respawn_delays[app->respawn_delay_index]);
-    demo_value_line(134, "SPAWN DELAY", value, 8, app->selection);
-    demo_menu_item(149, "MY MINER", 9, app->selection);
-    demo_menu_item(163, "RESTORE DEFAULTS", 10, app->selection);
-    demo_menu_item(177, "BACK", 11, app->selection);
-    vox_ui_text_center(&demo_ui, 160, 180, 1,
-                       "ENTER EDITS NAMES  ARROWS CHANGE",
-                       DEMO_VGA_DARK_GRAY);
+    demo_window_gap(6);
+    demo_window_value("TIME LIMIT",
+                      demo_time_limit_names[app->time_limit_index], 4,
+                      app->selection);
+    demo_window_value("LAVA RISES", demo_lava_names[app->lava_index], 5,
+                      app->selection);
+    demo_window_value("SCORE LIMIT",
+                      demo_score_limit_names[app->score_limit_index], 6,
+                      app->selection);
+    demo_window_value("RESPAWN", demo_respawn_mode_names[app->respawn_mode],
+                      7, app->selection);
+    sprintf(value, "%d SEC", demo_respawn_delays[app->respawn_delay_index]);
+    demo_window_value("SPAWN DELAY", value, 8, app->selection);
+    demo_window_gap(6);
+    demo_window_item("MY MINER", 9, app->selection);
+    demo_window_item("RESTORE DEFAULTS", 10, app->selection);
+    demo_window_item("BACK", 11, app->selection);
+    app->scroll = demo_window_end("ENTER EDITS NAMES  ARROWS CHANGE");
 }
 
 static const char *demo_name_grid_label(int item, char *label)
@@ -3275,66 +3431,67 @@ static void demo_draw_options(demo_app *app)
 {
     char volume[16];
     char cap_value[32];
-    int page;
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
-    demo_dark_panel(28, 8, 264, 184);
-    vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "OPTIONS",
-                              DEMO_VGA_YELLOW);
+    demo_window_begin(28, 8, 264, 184, "OPTIONS", app->scroll);
     sprintf(volume, "%d%%", app->options.master_volume * 10);
     if ((app->cap_supported_mask & ((vox_u32)1U <<
          app->options.frame_cap_index)) == 0U) {
-        /*
-         * "UNSUPPORTED" spelled out ran past the panel once the glyph
-         * advance widened.  The value column has 19 characters at x=170
-         * before it reaches the frame.
-         */
         sprintf(cap_value, "%s N/A",
                 demo_frame_names[app->options.frame_cap_index]);
-    } else sprintf(cap_value, "%s",
-                   demo_frame_names[app->options.frame_cap_index]);
-    page = app->selection < 8 ? 0 : 1;
-    if (page == 0) {
-        demo_value_line(36, "FRAME CAP", cap_value, 0, app->selection);
-        demo_value_line(51, "LIGHTFIELD",
-                        demo_gi_names[app->options.gi_quality], 1, app->selection);
-        demo_value_line(66, "MASTER VOLUME", volume, 2, app->selection);
-        demo_value_line(81, "LAPTOP MODE",
-                        demo_toggle_names[app->options.laptop_mode], 3, app->selection);
-        demo_value_line(96, "HAPTICS",
-                        demo_haptic_names[app->options.haptic_level], 4, app->selection);
-        demo_value_line(111, "FX PROFILE",
-                        demo_fx_names[app->options.fx_profile], 5, app->selection);
-        demo_value_line(126, "FLASHES",
-                        demo_flash_names[app->options.flash_mode], 6, app->selection);
-        demo_value_line(141, "GORE",
-                        demo_gore_names[app->options.gore_level], 7, app->selection);
-        vox_ui_text_center(&demo_ui, 160, 174, 1,
-                           "UP DOWN  PAGE 1/2", DEMO_VGA_DARK_GRAY);
     } else {
-        demo_value_line(36, "CAMERA SHAKE",
-                        demo_toggle_names[app->options.camera_shake], 8, app->selection);
-        demo_value_line(51, "DAMAGE NUMBERS",
-                        demo_toggle_names[app->options.damage_numbers], 9, app->selection);
-        demo_value_line(66, "NUMBER SIZE",
-                        app->options.damage_number_size ? "LARGE" : "SMALL", 10, app->selection);
-        demo_value_line(81, "NUMBER COLOR",
-                        demo_number_color_names[
-                            app->options.damage_number_color], 11, app->selection);
-        demo_value_line(96, "FULLSCREEN",
-                        demo_toggle_names[app->options.fullscreen], 12, app->selection);
-        demo_value_line(111, "DUMMY MODE",
-                        demo_toggle_names[app->options.dummy_mode], 13, app->selection);
-        demo_menu_item(126, demo_chronicle_reset_armed ?
-                       "PRESS AGAIN TO ERASE" :
-                       "RESET MINER MEMORY", 14, app->selection);
-        demo_menu_item(140, "INPUT & CONTROLLER", 15, app->selection);
-        demo_menu_item(154, "BACK", 16, app->selection);
-        vox_ui_text_center(&demo_ui, 160, 174, 1,
-                           "UP DOWN  PAGE 2/2  F8 CAPS",
-                           DEMO_VGA_DARK_GRAY);
+        sprintf(cap_value, "%s",
+                demo_frame_names[app->options.frame_cap_index]);
     }
+    /*
+     * One scrolling list instead of two hand-split pages.  The paging
+     * existed because the rows did not fit; the window scrolls, so it does
+     * not need to exist, and nobody has to remember which page a setting
+     * was on.
+     */
+    demo_window_value("FRAME CAP", cap_value, 0, app->selection);
+    demo_window_value("LIGHTFIELD", demo_gi_names[app->options.gi_quality],
+                      1, app->selection);
+    demo_window_value("MASTER VOLUME", volume, 2, app->selection);
+    demo_window_value("LAPTOP MODE",
+                      demo_toggle_names[app->options.laptop_mode], 3,
+                      app->selection);
+    demo_window_value("HAPTICS",
+                      demo_haptic_names[app->options.haptic_level], 4,
+                      app->selection);
+    demo_window_value("FX PROFILE", demo_fx_names[app->options.fx_profile],
+                      5, app->selection);
+    demo_window_value("FLASHES", demo_flash_names[app->options.flash_mode],
+                      6, app->selection);
+    demo_window_value("GORE", demo_gore_names[app->options.gore_level], 7,
+                      app->selection);
+    demo_window_value("CAMERA SHAKE",
+                      demo_toggle_names[app->options.camera_shake], 8,
+                      app->selection);
+    demo_window_value("DAMAGE NUMBERS",
+                      demo_toggle_names[app->options.damage_numbers], 9,
+                      app->selection);
+    demo_window_value("NUMBER SIZE",
+                      app->options.damage_number_size ? "LARGE" : "SMALL",
+                      10, app->selection);
+    demo_window_value("NUMBER COLOR",
+                      demo_number_color_names[
+                          app->options.damage_number_color], 11,
+                      app->selection);
+    demo_window_value("FULLSCREEN",
+                      demo_toggle_names[app->options.fullscreen], 12,
+                      app->selection);
+    demo_window_value("DUMMY MODE",
+                      demo_toggle_names[app->options.dummy_mode], 13,
+                      app->selection);
+    demo_window_gap(6);
+    demo_window_item(demo_chronicle_reset_armed ?
+                     "PRESS AGAIN TO ERASE" : "RESET MINER MEMORY", 14,
+                     app->selection);
+    demo_window_item("INPUT & CONTROLLER", 15, app->selection);
+    demo_window_item("BACK", 16, app->selection);
+    app->scroll = demo_window_end("UP DOWN  F8 RE-TEST CAPS");
 }
 
 static void demo_input_mode_value(demo_app *app, int player,
@@ -4745,6 +4902,11 @@ static void demo_draw_results(demo_app *app)
 
 static void demo_render(demo_app *app)
 {
+    /* A screen never inherits another screen's scroll position. */
+    if (app->screen != app->scroll_screen) {
+        app->scroll = 0;
+        app->scroll_screen = app->screen;
+    }
     /*
      * Rebuilt every frame from what actually gets drawn, so the registry can
      * never describe a layout that is no longer on screen.
@@ -6157,7 +6319,7 @@ static void demo_handle_title_key(demo_app *app, SDL_Keycode key)
         } else if (app->selection == 2) {
             app->screen = DEMO_LOG;
             app->selection = 0;
-            app->log_scroll = 0;
+            app->scroll = 0;
         } else if (app->selection == 3) {
             (void)demo_start_match(app, 1);
         } else if (app->selection == 4) {
@@ -8804,6 +8966,10 @@ static int demo_screenshot(const char *screen_name, const char *path)
     } else if (strcmp(screen_name, "log") == 0) screen = DEMO_LOG;
     else if (strcmp(screen_name, "controls") == 0) screen = DEMO_CONTROLS;
     else if (strcmp(screen_name, "customize") == 0) screen = DEMO_CUSTOMIZE;
+    else if (strcmp(screen_name, "customize2") == 0) {
+        screen = DEMO_CUSTOMIZE;
+        app.selection = 11;
+    }
     else if (strcmp(screen_name, "miner") == 0) screen = DEMO_MINER;
     else if (strcmp(screen_name, "bubble") == 0) screen = DEMO_PLAY;
     if (screen < 0) {
@@ -8867,6 +9033,9 @@ static int demo_screenshot(const char *screen_name, const char *path)
     app.screen = (demo_screen)screen;
     demo_prepare_targets();
     demo_build_title_world();
+    demo_render(&app);
+    /* The window reports the scroll it wants at the end of a frame, so a
+     * still needs a second pass to show where the selection actually is. */
     demo_render(&app);
     if (!demo_write_ppm(path)) {
         fprintf(stderr, "could not write %s\n", path);
