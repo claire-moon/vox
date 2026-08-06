@@ -46,6 +46,7 @@
 #define DEMO_HIT_MARKER_TICKS 12U
 #define DEMO_MINER_HIT_TICKS 8U
 #define DEMO_BUBBLE_TICKS 150U
+#define DEMO_BUBBLE_MAX_LINES 3
 #define DEMO_MULTIKILL_WINDOW 180U
 #define DEMO_BARK_COOLDOWN 180U
 #define DEMO_BOT_BARK_COOLDOWN 720U
@@ -245,7 +246,9 @@ typedef struct demo_banner_line {
 } demo_banner_line;
 
 typedef struct demo_speech_bubble {
-    char text[64];
+    /* demo_expand_line builds up to 96, and a name substitution can push a
+     * forty-six character line past sixty-four before it is ever wrapped. */
+    char text[96];
     vox_u16 ttl;
 } demo_speech_bubble;
 
@@ -2770,6 +2773,33 @@ static const demo_menu_row *demo_row_at(int x, int y)
     return 0;
 }
 
+/*
+ * One colour per miner, everywhere they appear.
+ *
+ * The lead's note: each NPC differentiated in gameplay, in the log and in
+ * the inbox, "with the player characters being the only white text".  A
+ * single helper is what keeps a miner the same colour in all four places --
+ * three separate colour choices would drift the first time one moved.
+ */
+static void demo_identity_colour(vox_u16 identity, vox_u8 *red,
+                                 vox_u8 *green, vox_u8 *blue)
+{
+    vox_u8 r = 255U;
+    vox_u8 g = 255U;
+    vox_u8 b = 255U;
+    if (identity == VOX_DIGS_IDENTITY_RIVET) {
+        r = 85U; g = 255U; b = 255U;        /* cold, technical */
+    } else if (identity == VOX_DIGS_IDENTITY_CINDER) {
+        r = 255U; g = 85U; b = 85U;         /* loud, hot */
+    } else if (identity == VOX_DIGS_IDENTITY_FLAMEY) {
+        r = 255U; g = 255U; b = 85U;        /* matches, mischief */
+    }
+    /* Anyone else -- the player, or an unknown slot -- stays white. */
+    *red = r;
+    *green = g;
+    *blue = b;
+}
+
 static void demo_menu_item(int y, const char *label, int index,
                            int selection)
 {
@@ -2922,11 +2952,8 @@ static void demo_draw_inbox(demo_app *app)
     vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "INBOX",
                               DEMO_VGA_YELLOW);
     if (count == 0U) {
-        vox_ui_text_center(&demo_ui, 160, 92, 1, "NOTHING WAITING",
-                           DEMO_VGA_DARK_GRAY);
-        vox_ui_text_center(&demo_ui, 160, 106, 1,
-                           "THEY WRITE WHEN THEY HAVE SOMETHING TO SAY",
-                           DEMO_VGA_DARK_GRAY);
+        vox_ui_text_center(&demo_ui, 160, 96, 1, "NO MAIL TODAY!",
+                           DEMO_VGA_LIGHT_GRAY);
         vox_ui_text_center(&demo_ui, 160, 174, 1, "ESC  BACK",
                            DEMO_VGA_DARK_GRAY);
         return;
@@ -2952,14 +2979,21 @@ static void demo_draw_inbox(demo_app *app)
         int y = 44;
         vox_u16 i;
         char header[48];
+        vox_u8 red;
+        vox_u8 green;
+        vox_u8 blue;
+        demo_identity_colour(message->from, &red, &green, &blue);
         sprintf(header, "FROM %s", demo_identity_name(app, message->from));
-        vox_ui_text(&demo_ui, 40, 30, 1, header, DEMO_VGA_LIGHT_CYAN);
+        vox_ui_text(&demo_ui, 40, 30, 1, header, red, green, blue);
         vox_ui_rect(&demo_ui, 40, 40, 240, 1, DEMO_VGA_DARK_GRAY);
         for (i = 0U; i < message->line_count && i < DIGS_INBOX_LINES; ++i) {
             char text[128];
             demo_expand_line(message->lines[i], you, text, sizeof(text));
+            /* The wrap returns lines, not pixels.  Adding it raw put each
+             * sentence seven pixels below the last instead of fourteen. */
             y += vox_ui_text_wrap(&demo_ui, 40, y, 240, 3, 1, text,
-                                  DEMO_VGA_LIGHT_GRAY) + 6;
+                                  red, green, blue) *
+                 VOX_UI_DOS_LINE_HEIGHT + 6;
         }
         vox_ui_text_center(&demo_ui, 160, 174, 1, "ESC  BACK TO INBOX",
                            DEMO_VGA_DARK_GRAY);
@@ -2979,6 +3013,9 @@ static void demo_draw_log(demo_app *app)
         demo_identity_name(app, (vox_u16)VOX_DIGS_IDENTITY_PLAYER);
     int rows = 13;
     int i;
+    vox_u8 red;
+    vox_u8 green;
+    vox_u8 blue;
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
@@ -3012,18 +3049,13 @@ static void demo_draw_log(demo_app *app)
         demo_expand_line(entry->line,
                          demo_identity_name(app, entry->target), text,
                          sizeof(text));
+        demo_identity_colour(entry->speaker, &red, &green, &blue);
         sprintf(row, "%s: %s", demo_identity_name(app, entry->speaker), text);
         /* Derived, not guessed: the panel is 280 wide from x=26. */
         if ((int)strlen(row) > (320 - 26 - 20) / VOX_UI_DOS_ADVANCE) {
             row[(320 - 26 - 20) / VOX_UI_DOS_ADVANCE] = '\0';
         }
-        vox_ui_text(&demo_ui, 26, 30 + i * 10, 1, row,
-                    entry->speaker == VOX_DIGS_IDENTITY_PLAYER ?
-                    255U : 170U,
-                    entry->speaker == VOX_DIGS_IDENTITY_PLAYER ?
-                    255U : 170U,
-                    entry->speaker == VOX_DIGS_IDENTITY_PLAYER ?
-                    255U : 170U);
+        vox_ui_text(&demo_ui, 26, 30 + i * 10, 1, row, red, green, blue);
     }
     (void)you;
     {
@@ -3115,10 +3147,10 @@ static void demo_draw_title(demo_app *app)
         } else {
             strcpy(inbox_label, "INBOX");
         }
-        demo_menu_item(73, "START MATCH", 0, app->selection);
+        demo_menu_item(73, "BEGIN", 0, app->selection);
         demo_menu_item(87, inbox_label, 1, app->selection);
         demo_menu_item(101, "LOG", 2, app->selection);
-        demo_menu_item(115, "FOUNDRY LAB", 3, app->selection);
+        demo_menu_item(115, "PRACTICE", 3, app->selection);
         demo_menu_item(129, "CONTROLS", 4, app->selection);
         demo_menu_item(143, "OPTIONS", 5, app->selection);
         demo_menu_item(157, "QUIT", 6, app->selection);
@@ -4453,26 +4485,66 @@ static void demo_draw_world_feedback(demo_app *app)
                                       255U : 255U);
         }
         if (!hide_bubbles && app->bubbles[player].ttl > 0U) {
-            int bubble_x = x - 49;
-            int bubble_y = y < 130 ? y + 13 : y - 41;
-            int bubble_min_y = app->local_players > 1 ? 110 : 98;
-            int bubble_max_y = app->options.debug ? 132 : 156;
+            /*
+             * The box is sized to the line, not the other way round.
+             *
+             * It used to be a fixed 100 by 18 with a two-line cap, which at
+             * six pixels per glyph is thirty characters -- and the authored
+             * lines run to forty-six, so most of them were cut mid-sentence.
+             * The same call started the text three pixels down and drew two
+             * eight-pixel lines into an eighteen-pixel box, which is where
+             * the glyph bottoms landed on the frame.
+             */
+            const int pad_x = 5;
+            const int pad_top = 4;
+            const int pad_bottom = 5;
+            const int text_width = 140;
+            int lines = vox_ui_text_wrap_lines(text_width,
+                                               DEMO_BUBBLE_MAX_LINES, 1,
+                                               app->bubbles[player].text);
+            int box_h;
+            int box_w;
+            int bubble_x;
+            int bubble_y;
+            int bubble_min_y;
+            int bubble_max_y;
+            vox_u8 red;
+            vox_u8 green;
+            vox_u8 blue;
+            if (lines < 1) {
+                lines = 1;
+            }
+            box_h = pad_top + lines * VOX_UI_DOS_LINE_HEIGHT + pad_bottom;
+            box_w = text_width + pad_x * 2;
+            /* Shrink to the widest line so a short remark is not a banner. */
+            if (lines == 1) {
+                int measured = vox_ui_text_width(app->bubbles[player].text, 1);
+                if (measured > 0 && measured < text_width) {
+                    box_w = measured + pad_x * 2;
+                }
+            }
+            bubble_x = x - box_w / 2;
+            bubble_y = y < 130 ? y + 13 : y - (box_h + 23);
+            bubble_min_y = app->local_players > 1 ? 110 : 98;
+            bubble_max_y = (app->options.debug ? 150 : 174) - box_h;
             if (bubble_x < 2) bubble_x = 2;
-            if (bubble_x > (int)DEMO_WIDTH - 102) {
-                bubble_x = (int)DEMO_WIDTH - 102;
+            if (bubble_x > (int)DEMO_WIDTH - box_w - 2) {
+                bubble_x = (int)DEMO_WIDTH - box_w - 2;
             }
             if (bubble_y < bubble_min_y) bubble_y = bubble_min_y;
-            if (bubble_y > bubble_max_y) {
-                bubble_y = bubble_max_y;
-            }
-            vox_ui_rect(&demo_ui, bubble_x, bubble_y, 100, 18,
+            if (bubble_y > bubble_max_y) bubble_y = bubble_max_y;
+            demo_identity_colour(vox_digs_memory_identity(&demo_match,
+                                                          (vox_u16)player),
+                                 &red, &green, &blue);
+            vox_ui_rect(&demo_ui, bubble_x, bubble_y, box_w, box_h,
                         DEMO_VGA_BLACK);
-            vox_ui_frame(&demo_ui, bubble_x, bubble_y, 100, 18,
+            vox_ui_frame(&demo_ui, bubble_x, bubble_y, box_w, box_h,
                          DEMO_VGA_LIGHT_GRAY);
-            (void)vox_ui_text_wrap(&demo_ui, bubble_x + 4,
-                                   bubble_y + 3, 92, 2, 1,
+            (void)vox_ui_text_wrap(&demo_ui, bubble_x + pad_x,
+                                   bubble_y + pad_top, box_w - pad_x * 2,
+                                   DEMO_BUBBLE_MAX_LINES, 1,
                                    app->bubbles[player].text,
-                                   255U, 255U, 255U);
+                                   red, green, blue);
         }
         if (app->options.debug) {
             /*
@@ -8733,6 +8805,7 @@ static int demo_screenshot(const char *screen_name, const char *path)
     else if (strcmp(screen_name, "controls") == 0) screen = DEMO_CONTROLS;
     else if (strcmp(screen_name, "customize") == 0) screen = DEMO_CUSTOMIZE;
     else if (strcmp(screen_name, "miner") == 0) screen = DEMO_MINER;
+    else if (strcmp(screen_name, "bubble") == 0) screen = DEMO_PLAY;
     if (screen < 0) {
         fprintf(stderr, "unknown screen: %s\n", screen_name);
         return 2;
@@ -8767,6 +8840,29 @@ static int demo_screenshot(const char *screen_name, const char *path)
                                (vox_u16)(pool.first + (pair % pool.count)));
         }
         demo_chronicle_ready = 1;
+    }
+    if (screen == DEMO_PLAY) {
+        /*
+         * A real match with the longest lines in the corpus in the boxes, so
+         * the bubble geometry can be looked at rather than reasoned about.
+         */
+        vox_u16 slot;
+        if (!demo_start_match(&app, 0)) {
+            fprintf(stderr, "could not start a match for the shot\n");
+            return 3;
+        }
+        for (slot = 0U; slot < demo_match.rules.player_count; ++slot) {
+            demo_match.spawn_shield_ticks[slot] = 0U;
+        }
+        /*
+         * One bubble, because that is all the game ever shows -- the speech
+         * floor lets one miner hold the room and demo_speak_line clears the
+         * rest.  Forcing three here would be testing a layout that cannot
+         * happen.
+         */
+        strcpy(app.bubbles[1].text,
+               "ONE OF THESE TIMES I'M THE ONE STANDING.");
+        app.bubbles[1].ttl = DEMO_BUBBLE_TICKS;
     }
     app.screen = (demo_screen)screen;
     demo_prepare_targets();

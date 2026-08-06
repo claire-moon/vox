@@ -47,8 +47,20 @@ void vox_ui_text_center_shadow(vox_ui_surface *surface, int center_x, int y,
                                int scale, const char *text, vox_u8 red,
                                vox_u8 green, vox_u8 blue);
 int vox_ui_text_width(const char *text, int scale);
+/*
+ * Draws wrapped text and returns the number of LINES used -- not pixels.
+ * Multiply by VOX_UI_DOS_LINE_HEIGHT * scale for a height.
+ *
+ * A null surface measures without drawing, which is the only supported way
+ * to ask how tall something will be: a separate measuring routine would
+ * eventually disagree with this one about where a word breaks.
+ */
 int vox_ui_text_wrap(vox_ui_surface *surface, int x, int y, int width,
                      int max_lines, int scale, const char *text,
                      vox_u8 red, vox_u8 green, vox_u8 blue);
+
+/* Lines this text would take. Same code path as drawing it. */
+int vox_ui_text_wrap_lines(int width, int max_lines, int scale,
+                           const char *text);
 
 #endif
