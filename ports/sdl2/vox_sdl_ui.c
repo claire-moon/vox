@@ -87,7 +87,12 @@ static vox_u8 vox_ui_glyph_row(char character, int row)
                 row == 3 ? 4U : row == 5 ? 4U : 0U);
     }
     if (character == '/') {
-        return (vox_u8)(1U << (row < 5 ? (4 - row) : 0));
+        /*
+         * Bit 4 is the leftmost column, so shifting by (4 - row) puts the
+         * top of the stroke on the left and drew a backslash.  Every "PAGE
+         * 1/2" in the game has been reading "PAGE 1\\2".
+         */
+        return (vox_u8)(row < 5 ? (1U << row) : 0U);
     }
     if (character == '+') {
         return row == 3 ? 14U : (row == 1 || row == 2 || row == 4 ||

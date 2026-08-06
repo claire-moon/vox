@@ -19,7 +19,14 @@ typedef struct vox_ui_surface {
  */
 #define VOX_UI_DOS_GLYPH_WIDTH 5
 #define VOX_UI_DOS_GLYPH_HEIGHT 7
-#define VOX_UI_DOS_ADVANCE 5
+/*
+ * One pixel of air between glyphs.  The face is five wide, and advancing by
+ * five put every letter against its neighbour -- legible, but it read as one
+ * continuous smear at this resolution.  Six is the whole change, and it
+ * widens every string in the game, so layouts that were already at the edge
+ * of their panel are now over it.
+ */
+#define VOX_UI_DOS_ADVANCE 6
 #define VOX_UI_DOS_LINE_HEIGHT 8
 
 void vox_ui_fill(vox_ui_surface *surface, vox_u8 red, vox_u8 green,

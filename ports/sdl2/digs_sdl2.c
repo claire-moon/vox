@@ -414,7 +414,7 @@ static const int demo_frame_caps[DEMO_FRAME_CAP_COUNT] = {
     15, 30, 60, 90, 120, 144, 0
 };
 static const char *demo_frame_names[DEMO_FRAME_CAP_COUNT] = {
-    "15 LOW FPS", "30", "60", "90", "120", "144", "UNLIMITED"
+    "15 LOW", "30", "60", "90", "120", "144", "UNLIMITED"
 };
 static const char *demo_map_names[3] = {"COAL RIDGE", "DEEPWORKS", "FURNACE YARD"};
 static const char *demo_gi_names[3] = {"COMPATIBILITY", "BALANCED", "SHOWCASE"};
@@ -2766,7 +2766,10 @@ static void demo_draw_log(demo_app *app)
                          demo_identity_name(app, entry->target), text,
                          sizeof(text));
         sprintf(row, "%s: %s", demo_identity_name(app, entry->speaker), text);
-        row[52] = '\0';
+        /* Derived, not guessed: the panel is 280 wide from x=26. */
+        if ((int)strlen(row) > (320 - 26 - 20) / VOX_UI_DOS_ADVANCE) {
+            row[(320 - 26 - 20) / VOX_UI_DOS_ADVANCE] = '\0';
+        }
         vox_ui_text(&demo_ui, 26, 30 + i * 10, 1, row,
                     entry->speaker == VOX_DIGS_IDENTITY_PLAYER ?
                     255U : 170U,
@@ -3018,7 +3021,12 @@ static void demo_draw_options(demo_app *app)
     sprintf(volume, "%d%%", app->options.master_volume * 10);
     if ((app->cap_supported_mask & ((vox_u32)1U <<
          app->options.frame_cap_index)) == 0U) {
-        sprintf(cap_value, "%s UNSUPPORTED",
+        /*
+         * "UNSUPPORTED" spelled out ran past the panel once the glyph
+         * advance widened.  The value column has 19 characters at x=170
+         * before it reaches the frame.
+         */
+        sprintf(cap_value, "%s N/A",
                 demo_frame_names[app->options.frame_cap_index]);
     } else sprintf(cap_value, "%s",
                    demo_frame_names[app->options.frame_cap_index]);
@@ -3068,7 +3076,7 @@ static void demo_draw_options(demo_app *app)
                         demo_toggle_names[app->options.dummy_mode],
                         app->selection == 13);
         demo_menu_item(126, demo_chronicle_reset_armed ?
-                       "ERASE HISTORY - AGAIN TO CONFIRM" :
+                       "PRESS AGAIN TO ERASE" :
                        "RESET MINER MEMORY", app->selection == 14);
         demo_menu_item(140, "INPUT & CONTROLLER", app->selection == 15);
         demo_menu_item(154, "BACK", app->selection == 16);
