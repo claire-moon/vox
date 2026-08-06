@@ -451,6 +451,8 @@ if (VOX_BUILD_TESTS)
         add_test(NAME digs_settings_migration
             COMMAND digs_demo --settings-self-test
                     ${CMAKE_CURRENT_BINARY_DIR}/digs-settings-self-test.cfg)
+        add_test(NAME digs_menu_screens
+            COMMAND digs_demo --menu-self-test)
         add_test(NAME digs_chronicle_persistence
             COMMAND digs_demo --chronicle-self-test
                     ${CMAKE_CURRENT_BINARY_DIR}/digs-chronicle-self-test.dat)

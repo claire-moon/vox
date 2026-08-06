@@ -97,8 +97,8 @@ typedef enum demo_screen {
     DEMO_PLAY = 3,
     DEMO_PAUSE = 4,
     DEMO_RESULTS = 5,
-    DEMO_FEEDBACK = 6,
-    DEMO_HOW_TO = 7,
+    DEMO_INBOX = 6,
+    DEMO_LOG = 7,
     DEMO_CONTROLS = 9,
     DEMO_INPUT_OPTIONS = 11,
     DEMO_CUSTOMIZE = 12,
@@ -271,6 +271,8 @@ typedef struct demo_app {
     int running;
     demo_screen screen;
     int selection;
+    int inbox_open;      /* -1 while listing, else the message open */
+    int log_scroll;
     int bots;
     int map_style;
     int arsenal;
@@ -2646,6 +2648,205 @@ static void demo_menu_item(int y, const char *label, int selected)
     }
 }
 
+/* Whose name goes on a message, by identity rather than by slot. */
+static const char *demo_identity_name(const demo_app *app, vox_u16 identity)
+{
+    if (identity == VOX_DIGS_IDENTITY_PLAYER) {
+        return app->player_names[0][0] != '\0' ? app->player_names[0] : "YOU";
+    }
+    if (identity < (vox_u16)VOX_DIGS_MAX_BOTS) {
+        return app->bot_names[identity];
+    }
+    return "THE MINE";
+}
+
+/*
+ * INBOX: what the miners wrote while you were away.
+ *
+ * A list until you open one, then the message itself.  There is no reply --
+ * the point is that they have been getting on with it without you.
+ */
+static void demo_draw_inbox(demo_app *app)
+{
+    vox_u16 count = demo_chronicle.inbox_count;
+    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
+    (void)vox_software_render_ex(&demo_title_world, &demo_target,
+                                 &demo_render_config);
+    demo_dark_panel(28, 8, 264, 184);
+    vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "INBOX",
+                              DEMO_VGA_YELLOW);
+    if (count == 0U) {
+        vox_ui_text_center(&demo_ui, 160, 92, 1, "NOTHING WAITING",
+                           DEMO_VGA_DARK_GRAY);
+        vox_ui_text_center(&demo_ui, 160, 106, 1,
+                           "THEY WRITE WHEN THEY HAVE SOMETHING TO SAY",
+                           DEMO_VGA_DARK_GRAY);
+        vox_ui_text_center(&demo_ui, 160, 174, 1, "ESC  BACK",
+                           DEMO_VGA_DARK_GRAY);
+        return;
+    }
+    if (app->inbox_open < 0) {
+        vox_u16 i;
+        for (i = 0U; i < count && i < DIGS_INBOX_CAPACITY; ++i) {
+            const digs_inbox_message *message = &demo_chronicle.inbox[i];
+            char row[48];
+            sprintf(row, "%s%s", demo_identity_name(app, message->from),
+                    message->unread ? "   NEW" : "");
+            demo_menu_item(34 + (int)i * 14, row, app->selection == (int)i);
+        }
+        vox_ui_text_center(&demo_ui, 160, 174, 1,
+                           "UP DOWN  ENTER READ  ESC BACK",
+                           DEMO_VGA_DARK_GRAY);
+    } else {
+        const digs_inbox_message *message =
+            &demo_chronicle.inbox[app->inbox_open];
+        const char *you = demo_identity_name(app,
+                                             (vox_u16)VOX_DIGS_IDENTITY_PLAYER);
+        int y = 44;
+        vox_u16 i;
+        char header[48];
+        sprintf(header, "FROM %s", demo_identity_name(app, message->from));
+        vox_ui_text(&demo_ui, 40, 30, 1, header, DEMO_VGA_LIGHT_CYAN);
+        vox_ui_rect(&demo_ui, 40, 40, 240, 1, DEMO_VGA_DARK_GRAY);
+        for (i = 0U; i < message->line_count && i < DIGS_INBOX_LINES; ++i) {
+            char text[128];
+            demo_expand_line(message->lines[i], you, text, sizeof(text));
+            y += vox_ui_text_wrap(&demo_ui, 40, y, 240, 3, 1, text,
+                                  DEMO_VGA_LIGHT_GRAY) + 6;
+        }
+        vox_ui_text_center(&demo_ui, 160, 174, 1, "ESC  BACK TO INBOX",
+                           DEMO_VGA_DARK_GRAY);
+    }
+}
+
+/*
+ * LOG: everything anyone has said, oldest first.
+ *
+ * No filtering and no summary -- it is a record, and the value of a record
+ * is that it is complete and you can scroll back through it.
+ */
+static void demo_draw_log(demo_app *app)
+{
+    vox_u16 total = demo_chronicle.log_count;
+    const char *you =
+        demo_identity_name(app, (vox_u16)VOX_DIGS_IDENTITY_PLAYER);
+    int rows = 13;
+    int i;
+    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
+    (void)vox_software_render_ex(&demo_title_world, &demo_target,
+                                 &demo_render_config);
+    demo_dark_panel(20, 8, 280, 184);
+    vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "LOG", DEMO_VGA_YELLOW);
+    if (total == 0U) {
+        vox_ui_text_center(&demo_ui, 160, 96, 1, "NOTHING SAID YET",
+                           DEMO_VGA_DARK_GRAY);
+        vox_ui_text_center(&demo_ui, 160, 174, 1, "ESC  BACK",
+                           DEMO_VGA_DARK_GRAY);
+        return;
+    }
+    if (app->log_scroll > (int)total - rows) {
+        app->log_scroll = (int)total - rows;
+    }
+    if (app->log_scroll < 0) {
+        app->log_scroll = 0;
+    }
+    for (i = 0; i < rows; ++i) {
+        int index = app->log_scroll + i;
+        const digs_log_entry *entry;
+        char text[128];
+        char row[160];
+        if (index >= (int)total) {
+            break;
+        }
+        entry = digs_chronicle_log_at(&demo_chronicle, (vox_u16)index);
+        if (entry == 0) {
+            continue;
+        }
+        demo_expand_line(entry->line,
+                         demo_identity_name(app, entry->target), text,
+                         sizeof(text));
+        sprintf(row, "%s: %s", demo_identity_name(app, entry->speaker), text);
+        row[52] = '\0';
+        vox_ui_text(&demo_ui, 26, 30 + i * 10, 1, row,
+                    entry->speaker == VOX_DIGS_IDENTITY_PLAYER ?
+                    255U : 170U,
+                    entry->speaker == VOX_DIGS_IDENTITY_PLAYER ?
+                    255U : 170U,
+                    entry->speaker == VOX_DIGS_IDENTITY_PLAYER ?
+                    255U : 170U);
+    }
+    (void)you;
+    {
+        char footer[64];
+        sprintf(footer, "UP DOWN SCROLL   %d-%d OF %u   ESC BACK",
+                app->log_scroll + 1,
+                app->log_scroll + rows < (int)total ?
+                app->log_scroll + rows : (int)total,
+                (unsigned int)total);
+        vox_ui_text_center(&demo_ui, 160, 174, 1, footer,
+                           DEMO_VGA_DARK_GRAY);
+    }
+}
+
+static void demo_handle_inbox_key(demo_app *app, SDL_Keycode key)
+{
+    vox_u16 count = demo_chronicle.inbox_count;
+    if (key == SDLK_ESCAPE) {
+        if (app->inbox_open >= 0) {
+            app->inbox_open = -1;
+        } else {
+            app->screen = DEMO_TITLE;
+            app->selection = 1;
+        }
+        demo_audio_play(app, DEMO_SOUND_SELECT);
+        return;
+    }
+    if (app->inbox_open >= 0 || count == 0U) {
+        return;
+    }
+    if (key == SDLK_UP) {
+        app->selection = (app->selection + (int)count - 1) % (int)count;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_DOWN) {
+        app->selection = (app->selection + 1) % (int)count;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+        app->inbox_open = app->selection;
+        /*
+         * Reading it is what marks it read, and the count on the title
+         * follows immediately -- so the chronicle is written now rather than
+         * at some later checkpoint that a crash could eat.
+         */
+        if (digs_chronicle_mark_read(&demo_chronicle,
+                                     (vox_u16)app->selection)) {
+            char path[1032];
+            if (demo_chronicle_path(path, (int)sizeof(path))) {
+                (void)digs_chronicle_save(&demo_chronicle, path);
+            }
+        }
+        demo_audio_play(app, DEMO_SOUND_SELECT);
+    }
+}
+
+static void demo_handle_log_key(demo_app *app, SDL_Keycode key)
+{
+    if (key == SDLK_ESCAPE) {
+        app->screen = DEMO_TITLE;
+        app->selection = 2;
+        demo_audio_play(app, DEMO_SOUND_SELECT);
+    } else if (key == SDLK_UP) {
+        app->log_scroll--;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_DOWN) {
+        app->log_scroll++;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_PAGEUP) {
+        app->log_scroll -= 13;
+    } else if (key == SDLK_PAGEDOWN) {
+        app->log_scroll += 13;
+    }
+}
+
 static void demo_draw_title(demo_app *app)
 {
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
@@ -2656,16 +2857,22 @@ static void demo_draw_title(demo_app *app)
                               DEMO_VGA_YELLOW);
     vox_ui_rect(&demo_ui, 82, 65, 156, 1, DEMO_VGA_DARK_GRAY);
     vox_ui_rect(&demo_ui, 82, 66, 156, 1, DEMO_VGA_BROWN);
-    demo_menu_item(73, "START MATCH", app->selection == 0);
-    demo_menu_item(87, "FOUNDRY LAB", app->selection == 1);
-    demo_menu_item(101, "HOW TO PLAY", app->selection == 2);
-    demo_menu_item(115, "CONTROLS", app->selection == 3);
-    demo_menu_item(129, "OPTIONS", app->selection == 4);
-    demo_menu_item(143, "QA FEEDBACK", app->selection == 5);
-    demo_menu_item(157, "QUIT", app->selection == 6);
-    vox_ui_text_center(&demo_ui, 160, 181, 1,
-                       "GPL-3.0-OR-LATER  V0.0.3",
-                       DEMO_VGA_DARK_GRAY);
+    {
+        char inbox_label[24];
+        vox_u16 unread = digs_chronicle_unread(&demo_chronicle);
+        if (unread > 0U) {
+            sprintf(inbox_label, "INBOX (%u)", (unsigned int)unread);
+        } else {
+            strcpy(inbox_label, "INBOX");
+        }
+        demo_menu_item(73, "START MATCH", app->selection == 0);
+        demo_menu_item(87, inbox_label, app->selection == 1);
+        demo_menu_item(101, "LOG", app->selection == 2);
+        demo_menu_item(115, "FOUNDRY LAB", app->selection == 3);
+        demo_menu_item(129, "CONTROLS", app->selection == 4);
+        demo_menu_item(143, "OPTIONS", app->selection == 5);
+        demo_menu_item(157, "QUIT", app->selection == 6);
+    }
 }
 
 static void demo_value_line(int y, const char *label, const char *value,
@@ -2957,28 +3164,6 @@ static void demo_draw_input_options(demo_app *app)
     }
 }
 
-static void demo_draw_feedback(demo_app *app)
-{
-    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
-    (void)vox_software_render_ex(&demo_title_world, &demo_target,
-                                 &demo_render_config);
-    demo_dark_panel(24, 18, 272, 166);
-    vox_ui_text_center_shadow(&demo_ui, 160, 28, 1, "QA FEEDBACK",
-                              DEMO_VGA_YELLOW);
-    vox_ui_text(&demo_ui, 39, 62, 1,
-                "1 OPEN QA/VOX_QA_FEEDBACK.XLSX", DEMO_VGA_LIGHT_GRAY);
-    vox_ui_text(&demo_ui, 39, 78, 1,
-                "2 RECORD STEPS EXPECTED ACTUAL", DEMO_VGA_LIGHT_GRAY);
-    vox_ui_text(&demo_ui, 39, 94, 1,
-                "3 RUN TOOLS/VOX-TEST-COCKPIT.SH", DEMO_VGA_LIGHT_GRAY);
-    vox_ui_text(&demo_ui, 39, 110, 1,
-                "4 ATTACH PACKET TO GITHUB ISSUE", DEMO_VGA_LIGHT_GRAY);
-    vox_ui_text_center(&demo_ui, 160, 134, 1,
-                       "CLAIRE-MOON/VOX  DEMO FEEDBACK",
-                       DEMO_VGA_LIGHT_CYAN);
-    vox_ui_text_center(&demo_ui, 160, 158, 1,
-                       "ENTER OR ESC RETURNS", DEMO_VGA_YELLOW);
-}
 
 static void demo_short_label(char *destination, int capacity,
                              const char *source, int max_characters)
@@ -3000,46 +3185,6 @@ static void demo_short_label(char *destination, int capacity,
     destination[length] = '\0';
 }
 
-static void demo_draw_how_to(demo_app *app)
-{
-    char prompt[80];
-    int family = demo_prompt_family(app);
-    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
-    (void)vox_software_render_ex(&demo_title_world, &demo_target,
-                                 &demo_render_config);
-    demo_dark_panel(10, 8, 300, 184);
-    vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "HOW TO PLAY",
-                              DEMO_VGA_YELLOW);
-    vox_ui_text(&demo_ui, 20, 40, 1, "MOVE", DEMO_VGA_LIGHT_CYAN);
-    vox_ui_text(&demo_ui, 72, 40, 1, "A D OR LEFT STICK", DEMO_VGA_WHITE);
-    vox_ui_text(&demo_ui, 20, 52, 1, "JUMP", DEMO_VGA_LIGHT_CYAN);
-    sprintf(prompt, "SPACE OR [%s]",
-            demo_pad_button_label(family, app->bindings.pad_jump));
-    vox_ui_text(&demo_ui, 72, 52, 1, prompt, DEMO_VGA_WHITE);
-    vox_ui_text(&demo_ui, 20, 64, 1, "ROPE", DEMO_VGA_LIGHT_CYAN);
-    sprintf(prompt, "MMB / OR [%s]  HOLD/TOGGLE IN OPTIONS",
-            demo_pad_button_label(family, app->bindings.pad_rope));
-    vox_ui_text(&demo_ui, 72, 64, 1, prompt, DEMO_VGA_WHITE);
-    vox_ui_text(&demo_ui, 20, 76, 1, "AIM", DEMO_VGA_LIGHT_CYAN);
-    vox_ui_text(&demo_ui, 72, 76, 1, "MOUSE ARROWS OR R-STICK",
-                DEMO_VGA_WHITE);
-    vox_ui_text(&demo_ui, 20, 88, 1, "FIRE", DEMO_VGA_LIGHT_CYAN);
-    sprintf(prompt, "LMB E RCTRL OR [%s]",
-            demo_pad_button_label(family, app->bindings.pad_fire));
-    vox_ui_text(&demo_ui, 72, 88, 1, prompt, DEMO_VGA_WHITE);
-    vox_ui_text(&demo_ui, 20, 100, 1, "STEAM", DEMO_VGA_LIGHT_CYAN);
-    sprintf(prompt, "SHIFT RMB RSHIFT OR [%s]",
-            demo_pad_button_label(family, app->bindings.pad_steam));
-    vox_ui_text(&demo_ui, 72, 100, 1, prompt, DEMO_VGA_WHITE);
-    vox_ui_text_wrap(&demo_ui, 20, 119, 280, 5, 1,
-        "DESTROY TERRAIN OUTSMART RIVALS AND STAY ABOVE THE RISING LAVA. "
-        "SPAWNS HAVE A FIVE SECOND SHIELD THAT ENDS WHEN YOU ATTACK. "
-        "ROPE TO SOLID BEAMS OR ROCK AND USE TOOLS TO BUILD YOUR OWN ROUTE.",
-        170U, 170U, 170U);
-    sprintf(prompt, "ESC OR [%s] RETURNS",
-            demo_pad_button_label(family, demo_pad_back_button(family)));
-    vox_ui_text_center(&demo_ui, 160, 178, 1, prompt, DEMO_VGA_YELLOW);
-}
 
 static const char *demo_scancode_label(SDL_Scancode code)
 {
@@ -4323,10 +4468,10 @@ static void demo_render(demo_app *app)
         demo_draw_name_editor(app);
     } else if (app->screen == DEMO_OPTIONS) {
         demo_draw_options(app);
-    } else if (app->screen == DEMO_FEEDBACK) {
-        demo_draw_feedback(app);
-    } else if (app->screen == DEMO_HOW_TO) {
-        demo_draw_how_to(app);
+    } else if (app->screen == DEMO_INBOX) {
+        demo_draw_inbox(app);
+    } else if (app->screen == DEMO_LOG) {
+        demo_draw_log(app);
     } else if (app->screen == DEMO_CONTROLS) {
         demo_draw_controls(app);
     } else if (app->screen == DEMO_INPUT_OPTIONS) {
@@ -5687,18 +5832,20 @@ static void demo_handle_title_key(demo_app *app, SDL_Keycode key)
             app->screen = DEMO_SETUP;
             app->selection = 0;
         } else if (app->selection == 1) {
-            (void)demo_start_match(app, 1);
-        } else if (app->selection == 2) {
-            app->screen = DEMO_HOW_TO;
+            app->screen = DEMO_INBOX;
             app->selection = 0;
+            app->inbox_open = -1;
+        } else if (app->selection == 2) {
+            app->screen = DEMO_LOG;
+            app->selection = 0;
+            app->log_scroll = 0;
         } else if (app->selection == 3) {
+            (void)demo_start_match(app, 1);
+        } else if (app->selection == 4) {
             app->screen = DEMO_CONTROLS;
             app->selection = 0;
-        } else if (app->selection == 4) {
-            app->screen = DEMO_OPTIONS;
-            app->selection = 0;
         } else if (app->selection == 5) {
-            app->screen = DEMO_FEEDBACK;
+            app->screen = DEMO_OPTIONS;
             app->selection = 0;
         } else {
             app->running = 0;
@@ -6151,13 +6298,10 @@ static void demo_handle_key(demo_app *app, SDL_Keycode key,
         demo_handle_input_options_key(app, key);
     } else if (app->screen == DEMO_CONTROLS) {
         demo_handle_controls_key(app, key, scancode);
-    } else if ((app->screen == DEMO_HOW_TO ||
-                app->screen == DEMO_FEEDBACK) &&
-               (key == SDLK_RETURN || key == SDLK_KP_ENTER ||
-                key == SDLK_ESCAPE)) {
-        app->screen = DEMO_TITLE;
-        app->selection = 0;
-        demo_audio_play(app, DEMO_SOUND_SELECT);
+    } else if (app->screen == DEMO_INBOX) {
+        demo_handle_inbox_key(app, key);
+    } else if (app->screen == DEMO_LOG) {
+        demo_handle_log_key(app, key);
     } else if (app->screen == DEMO_PLAY && key == SDLK_ESCAPE) {
         app->screen = DEMO_PAUSE;
         app->selection = 0;
@@ -8212,6 +8356,137 @@ static int digs_chronicle_self_test(const char *path)
     return 0;
 }
 
+/*
+ * Render one menu screen to a PPM without opening a window.
+ *
+ * Layout work on a 320x200 field is guesswork otherwise -- rows overlap, text
+ * runs past a panel edge, and none of it shows up in a test.  This is the
+ * cheapest way to actually look at what shipped.
+ */
+static int demo_screenshot(const char *screen_name, const char *path)
+{
+    static demo_app app;
+    int screen = -1;
+    memset(&app, 0, sizeof(app));
+    app.running = 1;
+    app.bots = 3;
+    app.local_players = 1;
+    app.map_style = VOX_DIGS_MAP_COAL_RIDGE;
+    app.arsenal = DEMO_ARSENAL_FULL;
+    app.seed = 0x564F5831U;
+    app.match_minutes = 3;
+    app.inbox_open = -1;
+    app.options.gi_quality = 1;
+    strcpy(app.bot_names[0], "RIVET");
+    strcpy(app.bot_names[1], "CINDER");
+    strcpy(app.bot_names[2], "FLAMEY");
+    strcpy(app.player_names[0], "MINER");
+    demo_refresh_roster(&app);
+    if (strcmp(screen_name, "title") == 0) screen = DEMO_TITLE;
+    else if (strcmp(screen_name, "setup") == 0) screen = DEMO_SETUP;
+    else if (strcmp(screen_name, "options") == 0) screen = DEMO_OPTIONS;
+    else if (strcmp(screen_name, "options2") == 0) {
+        screen = DEMO_OPTIONS;
+        app.selection = 14;
+    } else if (strcmp(screen_name, "inbox") == 0) screen = DEMO_INBOX;
+    else if (strcmp(screen_name, "inbox-read") == 0) {
+        screen = DEMO_INBOX;
+        app.inbox_open = 0;
+    } else if (strcmp(screen_name, "log") == 0) screen = DEMO_LOG;
+    else if (strcmp(screen_name, "controls") == 0) screen = DEMO_CONTROLS;
+    else if (strcmp(screen_name, "customize") == 0) screen = DEMO_CUSTOMIZE;
+    if (screen < 0) {
+        fprintf(stderr, "unknown screen: %s\n", screen_name);
+        return 2;
+    }
+    /* Some plausible history, so the readers have something to show. */
+    if (screen == DEMO_INBOX || screen == DEMO_LOG ||
+        screen == DEMO_TITLE) {
+        vox_u16 pair;
+        digs_chronicle_reset(&demo_chronicle);
+        for (pair = 0U; pair < VOX_DIGS_MAX_PAIRS; ++pair) {
+            demo_chronicle.memory.regard[pair].matches_met = 5U;
+        }
+        pair = vox_digs_regard_index(VOX_DIGS_IDENTITY_PLAYER,
+                                     VOX_DIGS_IDENTITY_FLAMEY);
+        demo_chronicle.memory.regard[pair].tone = (vox_u16)VOX_DIGS_TONE_FEUD;
+        demo_chronicle.memory.regard[pair].betrayals = 2U;
+        pair = vox_digs_regard_index(VOX_DIGS_IDENTITY_PLAYER,
+                                     VOX_DIGS_IDENTITY_RIVET);
+        demo_chronicle.memory.regard[pair].tone =
+            (vox_u16)VOX_DIGS_TONE_BONDED;
+        digs_chronicle_open(&demo_chronicle, 1700000000UL);
+        digs_chronicle_open(&demo_chronicle, 1700200000UL);
+        for (pair = 0U; pair < 40U; ++pair) {
+            digs_line_pool pool = digs_lines_pool(
+                (vox_u16)(pair % DIGS_VOICE_COUNT),
+                (vox_u16)VOX_DIGS_TONE_NEUTRAL,
+                (vox_u16)(VOX_DIGS_STIMULUS_KILLED_THEM + (pair % 3U)));
+            digs_chronicle_log(&demo_chronicle,
+                               (vox_u16)(pair % VOX_DIGS_IDENTITY_COUNT),
+                               (vox_u16)((pair + 1U) %
+                                         VOX_DIGS_IDENTITY_COUNT),
+                               (vox_u16)(pool.first + (pair % pool.count)));
+        }
+        demo_chronicle_ready = 1;
+    }
+    app.screen = (demo_screen)screen;
+    demo_prepare_targets();
+    demo_build_title_world();
+    demo_render(&app);
+    if (!demo_write_ppm(path)) {
+        fprintf(stderr, "could not write %s\n", path);
+        return 1;
+    }
+    printf("DIGS screenshot %s -> %s\n", screen_name, path);
+    return 0;
+}
+
+/*
+ * Every menu screen must draw something.  A screen that throws, or that
+ * renders a flat panel because a helper returned early, looks exactly like a
+ * screen that is fine until somebody opens it.
+ */
+static int demo_menu_self_test(void)
+{
+    static const char *screens[9] = {
+        "title", "setup", "options", "options2", "inbox", "inbox-read",
+        "log", "controls", "customize"
+    };
+    const char *path = "/tmp/digs-menu-self-test.ppm";
+    int i;
+    for (i = 0; i < 9; ++i) {
+        vox_u32 x;
+        vox_u32 distinct = 0U;
+        vox_u8 seen[8];
+        int result = demo_screenshot(screens[i], path);
+        if (result != 0) {
+            fprintf(stderr, "menu self-test: %s did not render\n",
+                    screens[i]);
+            return 1;
+        }
+        for (x = 0U; x < 8U; ++x) {
+            seen[x] = 0U;
+        }
+        /* A screen with fewer than three distinct colours drew nothing. */
+        for (x = 0U; x < sizeof(demo_pixels); x += 3U) {
+            vox_u8 bucket = (vox_u8)(demo_pixels[x] >> 5);
+            if (bucket < 8U && !seen[bucket]) {
+                seen[bucket] = 1U;
+                distinct++;
+            }
+        }
+        if (distinct < 3U) {
+            fprintf(stderr, "menu self-test: %s looks blank (%lu tones)\n",
+                    screens[i], (unsigned long)distinct);
+            return 2;
+        }
+    }
+    (void)remove(path);
+    printf("DIGS menu self-test passed screens=9\n");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     demo_app app;
@@ -8310,6 +8585,14 @@ int main(int argc, char **argv)
     if (argc >= 2 && strcmp(argv[1], "--fixed-step-self-test") == 0) {
         return demo_fixed_step_self_test();
     }
+    if (argc >= 2 && strcmp(argv[1], "--menu-self-test") == 0) {
+        demo_prepare_targets();
+        return demo_menu_self_test();
+    }
+    if (argc >= 4 && strcmp(argv[1], "--shot") == 0) {
+        demo_prepare_targets();
+        return demo_screenshot(argv[2], argv[3]);
+    }
     if (argc >= 4 && strcmp(argv[1], "--capture") == 0) {
         vox_u32 frames = argc >= 5 ? (vox_u32)strtoul(argv[4], 0, 10) : 24U;
         vox_u32 interval = argc >= 6 ? (vox_u32)strtoul(argv[5], 0, 10) : 6U;
@@ -8357,6 +8640,16 @@ int main(int argc, char **argv)
         }
         return demo_performance_self_test(ticks, qualify_named_bench);
     }
+    /*
+     * The licence notice used to sit on the title screen.  The menu is meant
+     * to be minimal now, but GPL-3.0 requires the notice be conveyed, so it
+     * moves rather than vanishes: here on every start, and in START-HERE.txt
+     * beside the binary.
+     */
+    printf("DIGS -- Copyright (C) Pinnacle Point Development\n");
+    printf("Free software under GPL-3.0-or-later, with ABSOLUTELY NO "
+           "WARRANTY.\n");
+    printf("See LICENSE and START-HERE.txt for the terms and the source.\n");
     memset(&app, 0, sizeof(app));
     /*
      * Open the chronicle before anything else touches it.  This is where the
