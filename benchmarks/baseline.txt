@@ -4,7 +4,7 @@ seed=50303033
 ticks_requested=1800
 ticks_run=1800
 # deterministic work counters -- enforced
-state_hash=f1207b28
+state_hash=3c7e2c80
 world_hash=e1c06fab
 awake_peak=7797
 awake_mean=1308
@@ -18,6 +18,8 @@ kills=10
 crushes=4
 limb_severs=128
 rope_events=91
+speech_lines=1
+speech_repeats=0
 ai_state_changes=17
 unattributed_deaths=6
 hazard_damage=80

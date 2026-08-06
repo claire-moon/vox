@@ -250,7 +250,11 @@ typedef enum vox_digs_stimulus {
 /* Four slots choose two. */
 #define VOX_DIGS_MAX_PAIRS 6U
 /* How many lines a pair remembers, so it does not repeat itself immediately. */
-#define VOX_DIGS_RECENT_LINES 4U
+/* How many lines a pair remembers, and how many a speaker remembers of its
+ * own.  The pair ring alone let RIVET say the same thing to CINDER and then
+ * to the player, with neither of them any the wiser. */
+#define VOX_DIGS_RECENT_LINES 8U
+#define VOX_DIGS_SPEAKER_RECENT 8U
 
 typedef struct vox_digs_contract {
     vox_u16 tone;
@@ -581,6 +585,20 @@ typedef struct vox_digs_match {
     vox_u16 speech_subject[VOX_DIGS_MAX_SLOTS];
     vox_u16 speech_delay[VOX_DIGS_MAX_SLOTS];
     vox_u16 speech_cooldown[VOX_DIGS_MAX_SLOTS];
+    /*
+     * The urge to say something: a clock that always runs down, and a dice
+     * roll when it lands.  Replacing the old fixed metronome is what makes
+     * the talking irregular rather than clockwork, and scaling the roll by
+     * sociability is what makes one of them chattier than the others.
+     */
+    vox_u16 speech_urge_ticks[VOX_DIGS_MAX_SLOTS];
+    /* What this speaker has said lately, regardless of who it was said to. */
+    vox_u16 speech_recent[VOX_DIGS_MAX_SLOTS][VOX_DIGS_SPEAKER_RECENT];
+    vox_u16 speech_recent_cursor[VOX_DIGS_MAX_SLOTS];
+    /* Open briefly after the player speaks: everyone is likelier to answer. */
+    vox_u16 speech_answer_ticks;
+    /* How long the mine has been silent, so it cannot stay silent forever. */
+    vox_u16 speech_dry_ticks;
     /*
      * Nobody talks over anybody.  One miner speaks at a time and the rest
      * wait their turn, so the battlefield carries a conversation rather than

@@ -2468,6 +2468,123 @@ static int test_bot_archetypes_and_charge_weapons(void)
  * A wide excavation must cave in, and a narrow tunnel must stay usable --
  * otherwise the digging tools destroy the tunnels they exist to make.
  */
+static int test_bark_pacing_and_variance(void)
+{
+    vox_digs_rules rules;
+    vox_digs_input input;
+    vox_u32 tick;
+    vox_u32 lines = 0U;
+    vox_u32 repeats = 0U;
+    vox_u32 bot_lines[VOX_DIGS_MAX_SLOTS];
+    vox_u16 window[12];
+    vox_u16 window_count = 0U;
+    vox_u16 slot;
+    vox_u32 presses = 0U;
+    vox_u32 answered = 0U;
+    vox_u32 since = 0xFFFFFFFFUL;
+
+    for (slot = 0U; slot < VOX_DIGS_MAX_SLOTS; ++slot) bot_lines[slot] = 0U;
+    for (slot = 0U; slot < 12U; ++slot) window[slot] = 0U;
+
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 4U;
+    rules.bot_mask = 0x000EU;          /* one human, RIVET, CINDER, FLAMEY */
+    rules.match_ticks = 11400U;
+    rules.lava_start_tick = 10800U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 1;
+
+    /*
+     * A full match with the player never pressing bark.  This is the case
+     * the pacing target is written against: enough voices that the mine is
+     * inhabited, few enough that it is not a commentary.
+     */
+    for (tick = 0U; tick < 10800U && match.phase == VOX_DIGS_RUNNING;
+         ++tick) {
+        vox_u16 index;
+        vox_u32 spoke_this_tick = 0U;
+        if (vox_digs_match_step(&match) != VOX_OK) return 2;
+        for (index = 0U; index < match.event_count; ++index) {
+            const vox_digs_event *event =
+                &match.events[(match.event_head + index) %
+                              VOX_DIGS_MAX_EVENTS];
+            vox_u16 look;
+            if (event->type != VOX_DIGS_EVENT_AI_BARK) continue;
+            spoke_this_tick++;
+            lines++;
+            if (event->source < VOX_DIGS_MAX_SLOTS) {
+                bot_lines[event->source]++;
+            }
+            if (event->source == 0U) return 3;   /* the human never speaks */
+            for (look = 0U; look < window_count; ++look) {
+                if (window[look] == event->variant) repeats++;
+            }
+            window[window_count % 12U] = event->variant;
+            if (window_count < 12U) window_count++;
+        }
+        if (spoke_this_tick > 1U) return 4;      /* never two at once */
+        if (match.event_count > 0U) {
+            (void)vox_digs_consume_events(&match, match.event_count);
+        }
+    }
+    /*
+     * The band is deliberately wide.  It is here to catch a return to the
+     * old behaviour -- seventy-two lines a match, a quarter of them repeats
+     * -- not to pin a tuning decision that taste may revisit.
+     */
+    if (lines < 4U) return 5;            /* a silent mine is also wrong */
+    if (lines > 30U) return 6;
+    /* Repetition was the other half of the complaint. */
+    if (repeats > 2U) return 7;
+    /* And the quiet one must be quieter than the loud one. */
+    if (bot_lines[1] > bot_lines[2] + bot_lines[3]) return 8;
+
+    /*
+     * Now the same match with the player speaking.  Pressing bark must make
+     * an answer much more likely -- that is what makes the bots feel like
+     * they are reacting to you rather than reciting.
+     */
+    if (vox_digs_match_init(&match, &rules) != VOX_OK) return 9;
+    for (tick = 0U; tick < 10800U && match.phase == VOX_DIGS_RUNNING;
+         ++tick) {
+        vox_u16 index;
+        if ((tick % 600U) == 300U && match.alive[0]) {
+            input.abi_version = VOX_ABI_VERSION;
+            input.struct_size = (vox_u32)sizeof(input);
+            input.player = 0U;
+            input.actions = VOX_DIGS_ACTION_BARK;
+            input.move_x_q15 = 0;
+            input.move_y_q15 = 0;
+            input.aim_x = match.aim_x[0];
+            input.aim_y = match.aim_y[0];
+            input.selected_weapon = match.selected_weapon[0];
+            input.reserved = 0U;
+            (void)vox_digs_submit_input(&match, &input);
+        }
+        if (vox_digs_match_step(&match) != VOX_OK) return 10;
+        for (index = 0U; index < match.event_count; ++index) {
+            const vox_digs_event *event =
+                &match.events[(match.event_head + index) %
+                              VOX_DIGS_MAX_EVENTS];
+            if (event->type != VOX_DIGS_EVENT_AI_BARK) continue;
+            if (event->source == 0U) {
+                presses++;
+                since = 0U;
+            } else if (since < 240U) {
+                answered++;
+            }
+        }
+        if (since != 0xFFFFFFFFUL) since++;
+        if (match.event_count > 0U) {
+            (void)vox_digs_consume_events(&match, match.event_count);
+        }
+    }
+    if (presses < 8U) return 11;         /* the button must work */
+    /* Most of what the player says should get an answer within four seconds. */
+    if (answered * 2U < presses) return 12;
+    return 0;
+}
+
 static int test_memory_carries_between_matches(void)
 {
     vox_digs_rules rules;
@@ -2715,14 +2832,30 @@ static int test_speech_is_paced_and_answered(void)
     match.spawn_shield_ticks[0] = 0U;
     match.spawn_shield_ticks[1] = 0U;
 
-    /* Nobody speaks the instant something happens -- there is a pause. */
+    /*
+     * Nobody speaks the instant something happens -- there is a pause.
+     *
+     * An ordinary hit is rolled for now and usually passes without comment,
+     * so this uses the one thing nobody stays quiet about: shooting a miner
+     * you had an arrangement with.  That is loud enough to bypass the roll,
+     * which is what makes it a reliable probe for the pause.
+     */
+    {
+        vox_digs_contract *pair =
+            (vox_digs_contract *)vox_digs_contract_get(&match, 0U, 1U);
+        if (pair == 0) return 2;
+        pair->tone = (vox_u16)VOX_DIGS_TONE_TRUCE;
+        pair->valence = 400;
+        pair->met = 1U;
+    }
     if (vox_digs_apply_hit(&match, 0U, 1U, VOX_DIGS_TOOL_POPPER,
                            VOX_DIGS_NO_PART, 15U,
                            VOX_DIGS_DAMAGE_BALLISTIC) != VOX_OK) {
-        return 2;
+        return 3;
     }
-    if (match.speech_stimulus[0] == VOX_DIGS_STIMULUS_NONE) return 3;
-    if (match.speech_stimulus[1] != VOX_DIGS_STIMULUS_HURT_BY) return 4;
+    if (match.speech_stimulus[0] != VOX_DIGS_STIMULUS_TRUCE_BROKEN) return 4;
+    if (match.speech_stimulus[1] != VOX_DIGS_STIMULUS_BETRAYED) return 5;
+    if (match.speech_delay[1] == 0U) return 6;
 
     for (tick = 0U; tick < 1500U && match.phase == VOX_DIGS_RUNNING; ++tick) {
         vox_u16 index;
@@ -3933,6 +4066,13 @@ int main(void)
         if (result != 0) {
             fprintf(stderr, "DIGS archetype mismatch (%d)\n", result);
             return 65;
+        }
+    }
+    {
+        int result = test_bark_pacing_and_variance();
+        if (result != 0) {
+            fprintf(stderr, "DIGS bark pacing mismatch (%d)\n", result);
+            return 74;
         }
     }
     {

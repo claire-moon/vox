@@ -250,7 +250,38 @@
 #define DIGS_SPEECH_COOLDOWN_SPAN 150U
 #define DIGS_SPEECH_REPLY_WINDOW 240U
 /* Silence between any two lines, from anyone.  One voice at a time. */
-#define DIGS_SPEECH_FLOOR_TICKS 90U
+#define DIGS_SPEECH_FLOOR_TICKS 150U
+
+/*
+ * Pacing.
+ *
+ * Measured before this: 72 lines over a 10800-tick match, 26 of them
+ * repeating something said in the previous twelve.  A line every two and a
+ * half seconds is not a conversation, it is a commentary.  The target is
+ * 10-15, weighted toward things that actually happened.
+ *
+ * The urge interval is long and jittered; the roll that follows it is scaled
+ * by sociability, so RIVET speaks up about eight times in a hundred
+ * opportunities and FLAMEY nearer thirty.  Neither number is a schedule.
+ */
+#define DIGS_SPEECH_URGE_MIN 300U
+#define DIGS_SPEECH_URGE_SPAN 420U
+#define DIGS_SPEECH_URGE_SCALE 150U
+/* After the player speaks, everyone is briefly much likelier to answer. */
+#define DIGS_SPEECH_ANSWER_WINDOW 240U
+#define DIGS_SPEECH_ANSWER_BONUS 450U
+#define DIGS_SPEECH_ANSWER_MIN 30U
+#define DIGS_SPEECH_ANSWER_SPAN 60U
+/* Answering someone who just spoke to you is easier than starting. */
+#define DIGS_SPEECH_REPLY_BONUS 200U
+/* Silence this long makes the next roll a certainty, so a quiet match still
+ * has voices in it without the ordinary roll having to be generous. */
+#define DIGS_SPEECH_DRY_TICKS 1500U
+/* At or above this urgency a thing is said whatever the dice say. */
+#define DIGS_SPEECH_ALWAYS_URGENCY 200U
+#define DIGS_SPEECH_EVENT_SCALE 2U
+/* Re-rolls allowed before taking whatever came up. */
+#define DIGS_SPEECH_PICK_TRIES 8U
 #define DIGS_MUZZLE_CLEARANCE_Q16 16384L
 
 static const vox_digs_weapon_properties digs_weapons[VOX_DIGS_TOOL_COUNT] = {
@@ -295,6 +326,12 @@ static void digs_contract_note(vox_digs_match *match, vox_u16 actor,
                                vox_u16 subject, vox_u16 stimulus);
 static void digs_speech_prompt(vox_digs_match *match, vox_u16 speaker,
                                vox_u16 subject, vox_u16 stimulus);
+static void digs_speech_set(vox_digs_match *match, vox_u16 speaker,
+                            vox_u16 subject, vox_u16 stimulus);
+static vox_u32 digs_speech_chattiness(const vox_digs_match *match,
+                                      vox_u16 player);
+static int digs_speech_roll(const vox_digs_match *match, vox_u16 player,
+                            vox_u32 chance, vox_u16 salt);
 static vox_u16 digs_stimulus_mirror(vox_u16 stimulus);
 
 /*
@@ -348,6 +385,7 @@ static void digs_speech_player_context(vox_digs_match *match, vox_u16 player)
     match->speech_subject[player] = best;
     match->speech_delay[player] = 0U;
 }
+
 
 static void digs_step_speech(vox_digs_match *match);
 static void digs_step_reactions(vox_digs_match *match);
@@ -2174,6 +2212,8 @@ vox_result vox_digs_match_init_ex(vox_digs_match *match,
     match->result_draw = 0U;
     match->winner_player = VOX_DIGS_NO_PLAYER;
     match->speech_floor_ticks = 0U;
+    match->speech_answer_ticks = 0U;
+    match->speech_dry_ticks = 0U;
     match->lava_level_q16 = 0U;
     match->lava_surface_y = (vox_u16)DIGS_LAVA_BASIN_TOP;
     match->projectile_count = 0U;
@@ -2235,6 +2275,16 @@ vox_result vox_digs_match_init_ex(vox_digs_match *match,
         match->speech_subject[i] = VOX_DIGS_NO_PLAYER;
         match->speech_delay[i] = 0U;
         match->speech_cooldown[i] = 0U;
+        match->speech_urge_ticks[i] = (vox_u16)(DIGS_SPEECH_URGE_MIN +
+            (digs_noise(rules->seed, 0U, i, 0xC1A7U) %
+             DIGS_SPEECH_URGE_SPAN));
+        match->speech_recent_cursor[i] = 0U;
+        {
+            vox_u16 slot;
+            for (slot = 0U; slot < VOX_DIGS_SPEAKER_RECENT; ++slot) {
+                match->speech_recent[i][slot] = 0U;
+            }
+        }
         match->weapon_charge_ticks[i] = 0U;
         match->weapon_charging[i] = 0U;
         match->bolt_shot_streak[i] = 0U;
@@ -3021,8 +3071,48 @@ static const vox_digs_personality *digs_speaker_personality(
  * already waiting, so a miner who is shot while still working up to a remark
  * about the weather says the thing that actually happened.
  */
-static void digs_speech_prompt(vox_digs_match *match, vox_u16 speaker,
-                               vox_u16 subject, vox_u16 stimulus)
+/* A dice roll, in parts per thousand, off the one noise source there is. */
+static int digs_speech_roll(const vox_digs_match *match, vox_u16 player,
+                            vox_u32 chance, vox_u16 salt)
+{
+    if (chance == 0U) {
+        return 0;
+    }
+    if (chance >= 1000U) {
+        return 1;
+    }
+    return (digs_noise(match->rules.seed, match->tick, player, salt) %
+            1000U) < chance;
+}
+
+/*
+ * How likely this miner is to speak up unprompted, per thousand.
+ *
+ * Sociability is the whole of it in the ordinary case, which is what makes
+ * one of them audibly chattier than another.  Two things override it: the
+ * window after the player has spoken, when everyone is keener to answer, and
+ * a long enough silence, which makes the next roll a certainty so a quiet
+ * match still has voices in it.
+ */
+static vox_u32 digs_speech_chattiness(const vox_digs_match *match,
+                                      vox_u16 player)
+{
+    const vox_digs_personality *personality =
+        digs_speaker_personality(match, player);
+    vox_u32 chance = ((vox_u32)personality->sociability *
+                      DIGS_SPEECH_URGE_SCALE) / 255U;
+    if (match->speech_dry_ticks >= DIGS_SPEECH_DRY_TICKS) {
+        return 1000U;
+    }
+    if (match->speech_answer_ticks > 0U) {
+        chance += DIGS_SPEECH_ANSWER_BONUS;
+    }
+    return chance;
+}
+
+/* Record an intention to speak.  The decision has already been made. */
+static void digs_speech_set(vox_digs_match *match, vox_u16 speaker,
+                            vox_u16 subject, vox_u16 stimulus)
 {
     const vox_digs_personality *personality;
     vox_u32 noise;
@@ -3033,7 +3123,7 @@ static void digs_speech_prompt(vox_digs_match *match, vox_u16 speaker,
         return;
     }
     if (match->speech_cooldown[speaker] != 0U &&
-        digs_stimulus_urgency(stimulus) < 100U) {
+        digs_stimulus_urgency(stimulus) < DIGS_SPEECH_ALWAYS_URGENCY) {
         return;
     }
     if (match->speech_stimulus[speaker] != VOX_DIGS_STIMULUS_NONE &&
@@ -3050,6 +3140,80 @@ static void digs_speech_prompt(vox_digs_match *match, vox_u16 speaker,
     match->speech_stimulus[speaker] = stimulus;
     match->speech_subject[speaker] = subject;
     match->speech_delay[speaker] = (vox_u16)delay;
+}
+
+/*
+ * Something happened -- does this miner remark on it?
+ *
+ * Loud news always gets said: a kill, a betrayal, being buried.  Everything
+ * quieter is rolled for, scaled by how loud it was and by how talkative the
+ * miner is.  This is what stopped every pellet in a firefight earning two
+ * lines of commentary.
+ */
+static void digs_speech_prompt(vox_digs_match *match, vox_u16 speaker,
+                               vox_u16 subject, vox_u16 stimulus)
+{
+    vox_u32 urgency;
+    if (stimulus == VOX_DIGS_STIMULUS_NONE ||
+        stimulus >= VOX_DIGS_STIMULUS_COUNT ||
+        !vox_digs_player_is_active(match, speaker)) {
+        return;
+    }
+    urgency = digs_stimulus_urgency(stimulus);
+    if (urgency < DIGS_SPEECH_ALWAYS_URGENCY) {
+        const vox_digs_personality *personality =
+            digs_speaker_personality(match, speaker);
+        vox_u32 chance = (urgency * DIGS_SPEECH_EVENT_SCALE *
+                          (vox_u32)personality->sociability) / 255U;
+        if (match->speech_answer_ticks > 0U) {
+            chance += DIGS_SPEECH_ANSWER_BONUS;
+        }
+        if (!digs_speech_roll(match, speaker, chance,
+                              (vox_u16)(0x0517U + stimulus))) {
+            return;
+        }
+    }
+    digs_speech_set(match, speaker, subject, stimulus);
+}
+
+
+/*
+ * Has this line been heard lately -- by this pair, or from this speaker to
+ * anyone at all?
+ *
+ * The second half is the new one.  Only the pair remembered before, so RIVET
+ * could say the same thing to CINDER and then to the player and neither of
+ * them was any the wiser, while the player heard it twice.
+ *
+ * depth bounds how far back to look, because a pool of five lines against a
+ * memory of eight would otherwise exclude everything it has and the caller
+ * would fall back to whatever it started on -- which is the repetition this
+ * is meant to prevent, arrived at from the other direction.
+ */
+static int digs_speech_heard(const vox_digs_match *match, vox_u16 speaker,
+                             const vox_digs_contract *contract,
+                             vox_u16 line, vox_u16 depth)
+{
+    vox_u16 i;
+    for (i = 0U; i < depth && i < VOX_DIGS_SPEAKER_RECENT; ++i) {
+        vox_u16 at = (vox_u16)((match->speech_recent_cursor[speaker] +
+                                VOX_DIGS_SPEAKER_RECENT - 1U - i) %
+                               VOX_DIGS_SPEAKER_RECENT);
+        if (match->speech_recent[speaker][at] == line) {
+            return 1;
+        }
+    }
+    if (contract != 0) {
+        for (i = 0U; i < depth && i < VOX_DIGS_RECENT_LINES; ++i) {
+            vox_u16 at = (vox_u16)((contract->recent_cursor +
+                                    VOX_DIGS_RECENT_LINES - 1U - i) %
+                                   VOX_DIGS_RECENT_LINES);
+            if (contract->recent_lines[at] == line) {
+                return 1;
+            }
+        }
+    }
+    return 0;
 }
 
 /*
@@ -3078,29 +3242,34 @@ static vox_u16 digs_speech_choose(vox_digs_match *match, vox_u16 speaker,
     if (pool.count == 0U) {
         return 65535U;
     }
-    roll = digs_noise(match->rules.seed, match->tick, speaker,
-                      (vox_u16)(0x1A1EU + stimulus));
-    chosen = (vox_u16)(pool.first + (vox_u16)(roll % pool.count));
     /*
-     * Walk forward past anything this pair has heard lately.  Bounded by the
-     * pool size, so a small pool simply repeats rather than looping forever.
+     * Re-roll past anything heard lately, rather than walking forward.
+     *
+     * Stepping to the next line on a collision looks harmless and is not:
+     * once two picks collide the walk hands out consecutive lines, so a pool
+     * gets read out in order and the writing sounds like a list.  A fresh
+     * roll each attempt keeps the distribution flat.
      */
-    if (contract != 0) {
-        for (attempt = 0U; attempt < pool.count; ++attempt) {
-            vox_u16 recent;
-            int seen = 0;
-            for (recent = 0U; recent < VOX_DIGS_RECENT_LINES; ++recent) {
-                if (contract->recent_lines[recent] == chosen) {
-                    seen = 1;
-                }
-            }
-            if (!seen) {
+    {
+        vox_u16 depth = pool.count > 1U ? (vox_u16)(pool.count - 1U) : 0U;
+        roll = digs_noise(match->rules.seed, match->tick, speaker,
+                          (vox_u16)(0x1A1EU + stimulus));
+        chosen = (vox_u16)(pool.first + (vox_u16)(roll % pool.count));
+        for (attempt = 0U; attempt < DIGS_SPEECH_PICK_TRIES; ++attempt) {
+            if (!digs_speech_heard(match, speaker, contract, chosen, depth)) {
                 break;
             }
-            chosen = (vox_u16)(pool.first +
-                               (vox_u16)((chosen + 1U - pool.first) %
-                                         pool.count));
+            roll = digs_noise(match->rules.seed, match->tick, speaker,
+                              (vox_u16)(0x1A1EU + stimulus + attempt + 1U));
+            chosen = (vox_u16)(pool.first + (vox_u16)(roll % pool.count));
         }
+    }
+    match->speech_recent[speaker][match->speech_recent_cursor[speaker]] =
+        chosen;
+    match->speech_recent_cursor[speaker] =
+        (vox_u16)((match->speech_recent_cursor[speaker] + 1U) %
+                  VOX_DIGS_SPEAKER_RECENT);
+    if (contract != 0) {
         contract->recent_lines[contract->recent_cursor] = chosen;
         contract->recent_cursor = (vox_u16)((contract->recent_cursor + 1U) %
                                             VOX_DIGS_RECENT_LINES);
@@ -3126,14 +3295,41 @@ static void digs_step_speech(vox_digs_match *match)
     if (match->speech_floor_ticks > 0U) {
         match->speech_floor_ticks--;
     }
+    if (match->speech_answer_ticks > 0U) {
+        match->speech_answer_ticks--;
+    }
+    if (match->speech_dry_ticks < 65535U) {
+        match->speech_dry_ticks++;
+    }
     for (player = 0U; player < match->rules.player_count; ++player) {
         vox_u16 stimulus;
         vox_u16 subject;
         vox_u16 line;
         vox_u16 tone = (vox_u16)VOX_DIGS_TONE_NEUTRAL;
         const vox_digs_personality *personality;
+        int pressed;
         if (match->speech_cooldown[player] > 0U) {
             match->speech_cooldown[player]--;
+        }
+        /*
+         * Read the press once and carry it.  Consuming the bit up front and
+         * then testing the same bit further down meant the gate always found
+         * it already cleared, and the miner never said anything at all.
+         */
+        pressed = !vox_digs_player_is_bot(match, player) &&
+                  match->alive[player] &&
+                  (match->player_actions[player] &
+                   VOX_DIGS_ACTION_BARK) != 0U;
+        if (pressed) {
+            /*
+             * A bark is an edge, not a state, but player_actions holds
+             * whatever was last submitted -- so any caller that submits
+             * input less often than it steps would leave the bit set and the
+             * miner would talk on every tick the cooldown allowed.
+             */
+            match->player_actions[player] =
+                (vox_u16)(match->player_actions[player] &
+                          (vox_u16)~VOX_DIGS_ACTION_BARK);
         }
         /*
          * The button is the timing.  A press works out the context if there
@@ -3142,8 +3338,7 @@ static void digs_step_speech(vox_digs_match *match)
          * defers it loses it, and a bark button that sometimes does nothing
          * is worse than one that interrupts.
          */
-        if (!vox_digs_player_is_bot(match, player) && match->alive[player] &&
-            (match->player_actions[player] & VOX_DIGS_ACTION_BARK) != 0U) {
+        if (pressed) {
             if (match->speech_stimulus[player] == VOX_DIGS_STIMULUS_NONE) {
                 digs_speech_player_context(match, player);
             }
@@ -3173,8 +3368,7 @@ static void digs_step_speech(vox_digs_match *match)
          * works out what you would say and holds it; pressing bark is what
          * says it.  Bots have no button, so they speak when they are ready.
          */
-        if (!vox_digs_player_is_bot(match, player) &&
-            (match->player_actions[player] & VOX_DIGS_ACTION_BARK) == 0U) {
+        if (!vox_digs_player_is_bot(match, player) && !pressed) {
             continue;
         }
         /* Somebody else is mid-sentence.  Wait. */
@@ -3189,6 +3383,32 @@ static void digs_step_speech(vox_digs_match *match)
         }
         personality = digs_speaker_personality(match, player);
         match->speech_floor_ticks = DIGS_SPEECH_FLOOR_TICKS;
+        match->speech_dry_ticks = 0U;
+        /*
+         * When the player speaks, the mine turns to look.  Everyone is
+         * briefly likelier to answer, and everyone's clock is pulled in so
+         * the answer arrives while it still reads as an answer -- but it is
+         * still a roll, so it is a conversation rather than a vending
+         * machine.
+         */
+        if (!vox_digs_player_is_bot(match, player)) {
+            vox_u16 other;
+            match->speech_answer_ticks = DIGS_SPEECH_ANSWER_WINDOW;
+            for (other = 0U; other < match->rules.player_count; ++other) {
+                vox_u32 spin;
+                vox_u16 soon;
+                if (other == player || !vox_digs_player_is_bot(match, other)) {
+                    continue;
+                }
+                spin = digs_noise(match->rules.seed, match->tick, other,
+                                  0xA715U);
+                soon = (vox_u16)(DIGS_SPEECH_ANSWER_MIN +
+                                 (spin % DIGS_SPEECH_ANSWER_SPAN));
+                if (match->speech_urge_ticks[other] > soon) {
+                    match->speech_urge_ticks[other] = soon;
+                }
+            }
+        }
         match->speech_cooldown[player] = (vox_u16)(DIGS_SPEECH_COOLDOWN_MIN +
             ((255U - (vox_u32)personality->sociability) *
              DIGS_SPEECH_COOLDOWN_SPAN) / 255U);
@@ -3202,13 +3422,17 @@ static void digs_step_speech(vox_digs_match *match)
         /* And now the other one may have something to say back. */
         if (subject < match->rules.player_count && subject != player &&
             match->alive[subject]) {
-            const vox_digs_personality *answerer =
-                digs_speaker_personality(match, subject);
-            vox_u32 roll = digs_noise(match->rules.seed, match->tick, subject,
-                                      0x7A1BU);
-            if ((roll % 255U) < (vox_u32)answerer->sociability) {
-                digs_speech_prompt(match, subject, player,
-                                   (vox_u16)VOX_DIGS_STIMULUS_TAUNTED);
+            /*
+             * Answering someone who just spoke to you is easier than
+             * starting, so the same chattiness gets a bonus rather than a
+             * separate rule -- which means the player's answer window lifts
+             * replies too, without a second knob to keep in step.
+             */
+            if (digs_speech_roll(match, subject,
+                                 digs_speech_chattiness(match, subject) +
+                                 DIGS_SPEECH_REPLY_BONUS, 0x7A1BU)) {
+                digs_speech_set(match, subject, player,
+                                (vox_u16)VOX_DIGS_STIMULUS_TAUNTED);
             }
         }
     }
@@ -5494,6 +5718,45 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     } else if (state->stuck_ticks > 0U) {
         state->stuck_ticks--;
     }
+    /*
+     * The urge to say something unprompted: a clock that always runs down,
+     * and a dice roll when it lands.
+     *
+     * This replaced a metronome -- a fixed window every 240 ticks per bot --
+     * which is why the mine used to sound like a scheduled broadcast.  The
+     * interval is long and jittered and the roll is scaled by sociability,
+     * so nothing about it is regular and one of them is plainly chattier
+     * than the others.  It lives in the reflex because the deliberation
+     * throttle returns early, and a clock that only ticks when a bot happens
+     * to be thinking is not a clock.
+     */
+    if (match->speech_urge_ticks[player] > 0U) {
+        match->speech_urge_ticks[player]--;
+    } else {
+        vox_u32 spin = digs_noise(match->rules.seed, match->tick, player,
+                                  0xC1A7U);
+        if (digs_speech_roll(match, player,
+                             digs_speech_chattiness(match, player),
+                             0xBA4BU)) {
+            vox_u16 remark = (vox_u16)VOX_DIGS_STIMULUS_IDLE;
+            vox_u16 about = VOX_DIGS_NO_PLAYER;
+            vox_i32 feet = digs_q16_to_cell(
+                match->players[player].position_y.value_q16);
+            if (match->buried_ticks[player] > 0U) {
+                remark = (vox_u16)VOX_DIGS_STIMULUS_BURIED;
+            } else if (feet + 8L >= (vox_i32)match->lava_surface_y) {
+                remark = (vox_u16)VOX_DIGS_STIMULUS_LAVA_CLOSE;
+            } else if (state->target != VOX_DIGS_NO_PLAYER &&
+                       state->memory_ticks > 0U) {
+                remark = (vox_u16)VOX_DIGS_STIMULUS_SPOTTED;
+                about = state->target;
+            }
+            digs_speech_set(match, player, about, remark);
+        }
+        match->speech_urge_ticks[player] =
+            (vox_u16)(DIGS_SPEECH_URGE_MIN +
+                      (spin % DIGS_SPEECH_URGE_SPAN));
+    }
     archetype = vox_digs_bot_archetype(match, player);
     /*
      * Drifted traits, not the archetype table.  A bot twenty matches in
@@ -5889,28 +6152,6 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     match->player_actions[player] = actions;
     match->move_x_q15[player] = move_x;
     match->move_y_q15[player] = 0;
-    /*
-     * Idle chatter is a prompt now, not an event.
-     *
-     * This used to raise a speech event directly with a three-bit noise value
-     * where the line id belongs, which the port then used to pick a phrase of
-     * its own.  Now it asks to say something and digs_step_speech decides
-     * what, after the pause that speaker's patience calls for -- so idle
-     * remarks go through exactly the same door as everything else, and the
-     * cooldown that stops a bot chattering applies to them too.
-     */
-    if (((match->tick + (vox_u32)player * 43U) % 240U) <
-        DIGS_AI_BARK_WINDOW_TICKS) {
-        vox_u16 remark = (vox_u16)VOX_DIGS_STIMULUS_IDLE;
-        if (hazard >= 2U) {
-            remark = (vox_u16)VOX_DIGS_STIMULUS_LAVA_CLOSE;
-        } else if (match->buried_ticks[player] > 0U) {
-            remark = (vox_u16)VOX_DIGS_STIMULUS_BURIED;
-        } else if (visible && target != VOX_DIGS_NO_PLAYER) {
-            remark = (vox_u16)VOX_DIGS_STIMULUS_SPOTTED;
-        }
-        digs_speech_prompt(match, player, target, remark);
-    }
     match->state_hash = vox_digs_hash(match);
     return VOX_OK;
 }
@@ -6721,6 +6962,8 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
     hash = digs_hash_mix(hash, (vox_u32)match->result_draw);
     hash = digs_hash_mix(hash, (vox_u32)match->winner_player);
     hash = digs_hash_mix(hash, (vox_u32)match->speech_floor_ticks);
+    hash = digs_hash_mix(hash, (vox_u32)match->speech_answer_ticks);
+    hash = digs_hash_mix(hash, (vox_u32)match->speech_dry_ticks);
     hash = digs_hash_mix(hash, match->memory.memory_hash);
     hash = digs_hash_mix(hash, match->lava_level_q16);
     hash = digs_hash_mix(hash, (vox_u32)match->lava_surface_y);
@@ -6776,6 +7019,16 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
         hash = digs_hash_mix(hash, (vox_u32)match->speech_subject[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->speech_delay[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->speech_cooldown[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->speech_urge_ticks[i]);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->speech_recent_cursor[i]);
+        {
+            vox_u16 slot;
+            for (slot = 0U; slot < VOX_DIGS_SPEAKER_RECENT; ++slot) {
+                hash = digs_hash_mix(hash,
+                                     (vox_u32)match->speech_recent[i][slot]);
+            }
+        }
         hash = digs_hash_mix(hash,
                              (vox_u32)match->players[i].position_x.value_q16);
         hash = digs_hash_mix(hash,

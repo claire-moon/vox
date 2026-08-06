@@ -46,6 +46,13 @@ typedef struct bench_counters {
     unsigned long limb_severs;
     unsigned long rope_events;
     unsigned long ai_state_changes;
+    /*
+     * Lines actually spoken.  Bark pacing is a taste judgement, and a taste
+     * judgement without a number attached gets retuned every playtest by
+     * whoever is most recently annoyed.
+     */
+    unsigned long speech_lines;
+    unsigned long speech_repeats;
     unsigned long unattributed_deaths;
     unsigned long hazard_damage;
 } bench_counters;
@@ -103,6 +110,27 @@ static void bench_drain_events(vox_digs_match *match, bench_counters *counters)
             break;
         case VOX_DIGS_EVENT_AI_STATE:
             counters->ai_state_changes++;
+            break;
+        case VOX_DIGS_EVENT_AI_BARK:
+            {
+                /*
+                 * A short window of what has just been said, so repetition
+                 * shows up as a number rather than as a complaint.
+                 */
+                static vox_u16 recent[12];
+                static unsigned int cursor;
+                unsigned int i;
+                for (i = 0U; i < 12U; ++i) {
+                    if (recent[i] == event->variant &&
+                        counters->speech_lines != 0UL) {
+                        counters->speech_repeats++;
+                        break;
+                    }
+                }
+                recent[cursor] = event->variant;
+                cursor = (cursor + 1U) % 12U;
+                counters->speech_lines++;
+            }
             break;
         case VOX_DIGS_EVENT_DAMAGE:
             if (event->source == VOX_DIGS_NO_PLAYER) {
@@ -269,6 +297,8 @@ int main(int argc, char **argv)
     printf("crushes=%lu\n", counters.crushes);
     printf("limb_severs=%lu\n", counters.limb_severs);
     printf("rope_events=%lu\n", counters.rope_events);
+    printf("speech_lines=%lu\n", counters.speech_lines);
+    printf("speech_repeats=%lu\n", counters.speech_repeats);
     printf("ai_state_changes=%lu\n", counters.ai_state_changes);
     printf("unattributed_deaths=%lu\n", counters.unattributed_deaths);
     printf("hazard_damage=%lu\n", counters.hazard_damage);
