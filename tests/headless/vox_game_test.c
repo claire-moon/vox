@@ -2669,6 +2669,67 @@ static vox_i16 test_overhear_run(vox_u16 bystander_tone)
     return to_speaker->valence;
 }
 
+static int test_init_leaves_nothing_uninitialised(void)
+{
+    /*
+     * vox_digs_match_init has no memset anywhere in it, by design -- the
+     * struct carries a whole world and clearing it wholesale on every init
+     * would be a measurable cost for no benefit.  The price is that every
+     * field must be assigned by hand, and a field that is missed holds
+     * whatever the caller's memory held.
+     *
+     * Three fields were missed: bleed_accumulator_q8, clot_ticks and
+     * buried_ticks.  All three are hashed and all three drive behaviour --
+     * garbage in buried_ticks past the lethal threshold crushes a miner on
+     * the first tick.  It stayed invisible because every caller in this tree
+     * uses static or global storage, which C zeroes for free.
+     *
+     * So: initialise two matches from identical rules over deliberately
+     * different garbage and require them to agree.  Any field added and not
+     * initialised fails this immediately.
+     */
+    static vox_digs_match dirty;
+    static vox_digs_match clean;
+    vox_digs_rules rules;
+    vox_u32 tick;
+    unsigned char *raw;
+    vox_u32 i;
+
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 4U;
+    rules.bot_mask = 0x000EU;
+    rules.match_ticks = 900U;
+    rules.lava_start_tick = 850U;
+
+    raw = (unsigned char *)&dirty;
+    for (i = 0U; i < (vox_u32)sizeof(dirty); ++i) {
+        raw[i] = (unsigned char)0xAAU;
+    }
+    raw = (unsigned char *)&clean;
+    for (i = 0U; i < (vox_u32)sizeof(clean); ++i) {
+        raw[i] = 0U;
+    }
+    if (vox_digs_match_init(&dirty, &rules) != VOX_OK) return 1;
+    if (vox_digs_match_init(&clean, &rules) != VOX_OK) return 2;
+    if (dirty.state_hash != clean.state_hash) return 3;
+
+    /* And they must stay in step, not merely start in step. */
+    for (tick = 0U; tick < 600U; ++tick) {
+        if (vox_digs_match_step(&dirty) != VOX_OK) return 4;
+        if (vox_digs_match_step(&clean) != VOX_OK) return 5;
+        if (dirty.event_count > 0U) {
+            (void)vox_digs_consume_events(&dirty, dirty.event_count);
+        }
+        if (clean.event_count > 0U) {
+            (void)vox_digs_consume_events(&clean, clean.event_count);
+        }
+        if (dirty.state_hash != clean.state_hash) return 6;
+    }
+    /* Nobody should have been crushed to death by uninitialised memory. */
+    if (dirty.deaths[0] != clean.deaths[0]) return 7;
+    return 0;
+}
+
 static int test_alone_you_talk_to_yourself(void)
 {
     vox_digs_rules rules;
@@ -4546,6 +4607,13 @@ int main(void)
         if (result != 0) {
             fprintf(stderr, "DIGS drift mismatch (%d)\n", result);
             return 75;
+        }
+    }
+    {
+        int result = test_init_leaves_nothing_uninitialised();
+        if (result != 0) {
+            fprintf(stderr, "DIGS init hygiene mismatch (%d)\n", result);
+            return 81;
         }
     }
     {
