@@ -2671,8 +2671,71 @@ static void demo_dark_panel(int x, int y, int width, int height)
     vox_ui_frame(&demo_ui, x, y, width, height, DEMO_VGA_BROWN);
 }
 
-static void demo_menu_item(int y, const char *label, int selected)
+/*
+ * Where the rows a screen just drew actually are.
+ *
+ * The mouse handlers were all guarded by screen == DEMO_PLAY, so no menu had
+ * ever been clickable.  Rather than write a rectangle table per screen and
+ * keep it in step with the drawing by hand -- which is how those things drift
+ * -- each row registers itself as it is drawn.  The registry is rebuilt every
+ * frame, so it cannot describe a layout that is no longer on screen.
+ */
+#define DEMO_MENU_ROW_MAX 32
+#define DEMO_ROW_ACTION 0
+#define DEMO_ROW_VALUE 1
+
+typedef struct demo_menu_row {
+    int x;
+    int y;
+    int width;
+    int height;
+    int index;
+    int kind;
+} demo_menu_row;
+
+static demo_menu_row demo_menu_rows[DEMO_MENU_ROW_MAX];
+static int demo_menu_row_count;
+
+static void demo_rows_reset(void)
 {
+    demo_menu_row_count = 0;
+}
+
+static void demo_row_register(int x, int y, int width, int height, int index,
+                              int kind)
+{
+    demo_menu_row *row;
+    if (demo_menu_row_count >= DEMO_MENU_ROW_MAX || index < 0) {
+        return;
+    }
+    row = &demo_menu_rows[demo_menu_row_count++];
+    row->x = x;
+    row->y = y;
+    row->width = width;
+    row->height = height;
+    row->index = index;
+    row->kind = kind;
+}
+
+/* Which row the pointer is over, or -1.  Nearest match wins on overlap. */
+static const demo_menu_row *demo_row_at(int x, int y)
+{
+    int i;
+    for (i = 0; i < demo_menu_row_count; ++i) {
+        const demo_menu_row *row = &demo_menu_rows[i];
+        if (x >= row->x && x < row->x + row->width &&
+            y >= row->y && y < row->y + row->height) {
+            return row;
+        }
+    }
+    return 0;
+}
+
+static void demo_menu_item(int y, const char *label, int index,
+                           int selection)
+{
+    int selected = index >= 0 && index == selection;
+    demo_row_register(82, y - 2, 156, 11, index, DEMO_ROW_ACTION);
     if (selected) {
         vox_ui_rect(&demo_ui, 82, y - 2, 156, 11, DEMO_VGA_BLUE);
         vox_ui_frame(&demo_ui, 82, y - 2, 156, 11,
@@ -2729,7 +2792,8 @@ static void demo_draw_inbox(demo_app *app)
             char row[48];
             sprintf(row, "%s%s", demo_identity_name(app, message->from),
                     message->unread ? "   NEW" : "");
-            demo_menu_item(34 + (int)i * 14, row, app->selection == (int)i);
+            demo_menu_item(34 + (int)i * 14, row, (int)i,
+                           app->selection);
         }
         vox_ui_text_center(&demo_ui, 160, 174, 1,
                            "UP DOWN  ENTER READ  ESC BACK",
@@ -2905,19 +2969,21 @@ static void demo_draw_title(demo_app *app)
         } else {
             strcpy(inbox_label, "INBOX");
         }
-        demo_menu_item(73, "START MATCH", app->selection == 0);
-        demo_menu_item(87, inbox_label, app->selection == 1);
-        demo_menu_item(101, "LOG", app->selection == 2);
-        demo_menu_item(115, "FOUNDRY LAB", app->selection == 3);
-        demo_menu_item(129, "CONTROLS", app->selection == 4);
-        demo_menu_item(143, "OPTIONS", app->selection == 5);
-        demo_menu_item(157, "QUIT", app->selection == 6);
+        demo_menu_item(73, "START MATCH", 0, app->selection);
+        demo_menu_item(87, inbox_label, 1, app->selection);
+        demo_menu_item(101, "LOG", 2, app->selection);
+        demo_menu_item(115, "FOUNDRY LAB", 3, app->selection);
+        demo_menu_item(129, "CONTROLS", 4, app->selection);
+        demo_menu_item(143, "OPTIONS", 5, app->selection);
+        demo_menu_item(157, "QUIT", 6, app->selection);
     }
 }
 
 static void demo_value_line(int y, const char *label, const char *value,
-                            int selected)
+                            int index, int selection)
 {
+    int selected = index >= 0 && index == selection;
+    demo_row_register(44, y - 2, 232, 11, index, DEMO_ROW_VALUE);
     if (selected) {
         vox_ui_rect(&demo_ui, 44, y - 2, 232, 11, DEMO_VGA_BLUE);
         vox_ui_frame(&demo_ui, 44, y - 2, 232, 11,
@@ -2939,18 +3005,16 @@ static void demo_draw_setup(demo_app *app)
     vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "MATCH SETUP",
                               DEMO_VGA_YELLOW);
     sprintf(value, "%d", app->local_players);
-    demo_value_line(43, "LOCAL PLAYERS", value, app->selection == 0);
+    demo_value_line(43, "LOCAL PLAYERS", value, 0, app->selection);
     sprintf(value, "%d", app->bots);
-    demo_value_line(57, "BOTS", value, app->selection == 1);
-    demo_value_line(71, "MAP", demo_map_names[app->map_style],
-                    app->selection == 2);
+    demo_value_line(57, "BOTS", value, 1, app->selection);
+    demo_value_line(71, "MAP", demo_map_names[app->map_style], 2, app->selection);
     sprintf(value, "%08lX", (unsigned long)app->seed);
-    demo_value_line(85, "SEED", value, app->selection == 3);
-    demo_value_line(99, "ARSENAL", demo_arsenal_names[app->arsenal],
-                    app->selection == 4);
-    demo_menu_item(117, "CUSTOMIZE GAME", app->selection == 5);
-    demo_menu_item(131, "START MATCH", app->selection == 6);
-    demo_menu_item(145, "BACK", app->selection == 7);
+    demo_value_line(85, "SEED", value, 3, app->selection);
+    demo_value_line(99, "ARSENAL", demo_arsenal_names[app->arsenal], 4, app->selection);
+    demo_menu_item(117, "CUSTOMIZE GAME", 5, app->selection);
+    demo_menu_item(131, "START MATCH", 6, app->selection);
+    demo_menu_item(145, "BACK", 7, app->selection);
     vox_ui_text_center(&demo_ui, 160, 180, 1,
                        "ARROWS CHANGE  ENTER SELECTS", DEMO_VGA_DARK_GRAY);
 }
@@ -2971,26 +3035,21 @@ static void demo_draw_customize(demo_app *app)
         sprintf(label, "PLAYER %d", player + 1);
         demo_value_line(30 + player * 12, label,
                         player < active_players ?
-                        app->player_names[player] : "EMPTY",
-                        app->selection == player);
+                        app->player_names[player] : "EMPTY", player, app->selection);
     }
     demo_value_line(82, "TIME LIMIT",
-                    demo_time_limit_names[app->time_limit_index],
-                    app->selection == 4);
+                    demo_time_limit_names[app->time_limit_index], 4, app->selection);
     demo_value_line(95, "LAVA RISES",
-                    demo_lava_names[app->lava_index],
-                    app->selection == 5);
+                    demo_lava_names[app->lava_index], 5, app->selection);
     demo_value_line(108, "SCORE LIMIT",
-                    demo_score_limit_names[app->score_limit_index],
-                    app->selection == 6);
+                    demo_score_limit_names[app->score_limit_index], 6, app->selection);
     demo_value_line(121, "RESPAWN",
-                    demo_respawn_mode_names[app->respawn_mode],
-                    app->selection == 7);
+                    demo_respawn_mode_names[app->respawn_mode], 7, app->selection);
     sprintf(value, "%d SEC",
             demo_respawn_delays[app->respawn_delay_index]);
-    demo_value_line(134, "SPAWN DELAY", value, app->selection == 8);
-    demo_menu_item(151, "RESTORE DEFAULTS", app->selection == 9);
-    demo_menu_item(166, "BACK", app->selection == 10);
+    demo_value_line(134, "SPAWN DELAY", value, 8, app->selection);
+    demo_menu_item(151, "RESTORE DEFAULTS", 9, app->selection);
+    demo_menu_item(166, "BACK", 10, app->selection);
     vox_ui_text_center(&demo_ui, 160, 180, 1,
                        "ENTER EDITS NAMES  ARROWS CHANGE",
                        DEMO_VGA_DARK_GRAY);
@@ -3073,54 +3132,41 @@ static void demo_draw_options(demo_app *app)
                    demo_frame_names[app->options.frame_cap_index]);
     page = app->selection < 8 ? 0 : 1;
     if (page == 0) {
-        demo_value_line(36, "FRAME CAP", cap_value, app->selection == 0);
+        demo_value_line(36, "FRAME CAP", cap_value, 0, app->selection);
         demo_value_line(51, "LIGHTFIELD",
-                        demo_gi_names[app->options.gi_quality],
-                        app->selection == 1);
-        demo_value_line(66, "MASTER VOLUME", volume,
-                        app->selection == 2);
+                        demo_gi_names[app->options.gi_quality], 1, app->selection);
+        demo_value_line(66, "MASTER VOLUME", volume, 2, app->selection);
         demo_value_line(81, "LAPTOP MODE",
-                        demo_toggle_names[app->options.laptop_mode],
-                        app->selection == 3);
+                        demo_toggle_names[app->options.laptop_mode], 3, app->selection);
         demo_value_line(96, "HAPTICS",
-                        demo_haptic_names[app->options.haptic_level],
-                        app->selection == 4);
+                        demo_haptic_names[app->options.haptic_level], 4, app->selection);
         demo_value_line(111, "FX PROFILE",
-                        demo_fx_names[app->options.fx_profile],
-                        app->selection == 5);
+                        demo_fx_names[app->options.fx_profile], 5, app->selection);
         demo_value_line(126, "FLASHES",
-                        demo_flash_names[app->options.flash_mode],
-                        app->selection == 6);
+                        demo_flash_names[app->options.flash_mode], 6, app->selection);
         demo_value_line(141, "GORE",
-                        demo_gore_names[app->options.gore_level],
-                        app->selection == 7);
+                        demo_gore_names[app->options.gore_level], 7, app->selection);
         vox_ui_text_center(&demo_ui, 160, 174, 1,
                            "UP DOWN  PAGE 1/2", DEMO_VGA_DARK_GRAY);
     } else {
         demo_value_line(36, "CAMERA SHAKE",
-                        demo_toggle_names[app->options.camera_shake],
-                        app->selection == 8);
+                        demo_toggle_names[app->options.camera_shake], 8, app->selection);
         demo_value_line(51, "DAMAGE NUMBERS",
-                        demo_toggle_names[app->options.damage_numbers],
-                        app->selection == 9);
+                        demo_toggle_names[app->options.damage_numbers], 9, app->selection);
         demo_value_line(66, "NUMBER SIZE",
-                        app->options.damage_number_size ? "LARGE" : "SMALL",
-                        app->selection == 10);
+                        app->options.damage_number_size ? "LARGE" : "SMALL", 10, app->selection);
         demo_value_line(81, "NUMBER COLOR",
                         demo_number_color_names[
-                            app->options.damage_number_color],
-                        app->selection == 11);
+                            app->options.damage_number_color], 11, app->selection);
         demo_value_line(96, "FULLSCREEN",
-                        demo_toggle_names[app->options.fullscreen],
-                        app->selection == 12);
+                        demo_toggle_names[app->options.fullscreen], 12, app->selection);
         demo_value_line(111, "DUMMY MODE",
-                        demo_toggle_names[app->options.dummy_mode],
-                        app->selection == 13);
+                        demo_toggle_names[app->options.dummy_mode], 13, app->selection);
         demo_menu_item(126, demo_chronicle_reset_armed ?
                        "PRESS AGAIN TO ERASE" :
-                       "RESET MINER MEMORY", app->selection == 14);
-        demo_menu_item(140, "INPUT & CONTROLLER", app->selection == 15);
-        demo_menu_item(154, "BACK", app->selection == 16);
+                       "RESET MINER MEMORY", 14, app->selection);
+        demo_menu_item(140, "INPUT & CONTROLLER", 15, app->selection);
+        demo_menu_item(154, "BACK", 16, app->selection);
         vox_ui_text_center(&demo_ui, 160, 174, 1,
                            "UP DOWN  PAGE 2/2  F8 CAPS",
                            DEMO_VGA_DARK_GRAY);
@@ -3167,47 +3213,37 @@ static void demo_draw_input_options(demo_app *app)
     }
     page = app->selection < 7 ? 0 : 1;
     if (page == 0) {
-        demo_value_line(36, "P1 MODE", p1_mode, app->selection == 0);
+        demo_value_line(36, "P1 MODE", p1_mode, 0, app->selection);
         demo_value_line(51, "P1 SENSITIVITY",
                         demo_sensitivity_names[
-                            app->player_input[0].sensitivity],
-                        app->selection == 1);
+                            app->player_input[0].sensitivity], 1, app->selection);
         demo_value_line(66, "P1 DEADZONE",
-                        demo_deadzone_names[app->player_input[0].deadzone],
-                        app->selection == 2);
+                        demo_deadzone_names[app->player_input[0].deadzone], 2, app->selection);
         demo_value_line(81, "P1 AIM SLOW",
                         demo_slowdown_names[
-                            app->player_input[0].aim_slowdown],
-                        app->selection == 3);
+                            app->player_input[0].aim_slowdown], 3, app->selection);
         demo_value_line(96, "P1 ROPE",
                         demo_rope_mode_names[
-                            app->player_input[0].rope_mode],
-                        app->selection == 4);
-        demo_value_line(111, "P2 MODE", p2_mode, app->selection == 5);
+                            app->player_input[0].rope_mode], 4, app->selection);
+        demo_value_line(111, "P2 MODE", p2_mode, 5, app->selection);
         demo_value_line(126, "P2 SENSITIVITY",
                         demo_sensitivity_names[
-                            app->player_input[1].sensitivity],
-                        app->selection == 6);
+                            app->player_input[1].sensitivity], 6, app->selection);
         vox_ui_text_center(&demo_ui, 160, 174, 1,
                            "UP DOWN  PAGE 1/2", DEMO_VGA_DARK_GRAY);
     } else {
         demo_value_line(36, "P2 DEADZONE",
-                        demo_deadzone_names[app->player_input[1].deadzone],
-                        app->selection == 7);
+                        demo_deadzone_names[app->player_input[1].deadzone], 7, app->selection);
         demo_value_line(51, "P2 AIM SLOW",
                         demo_slowdown_names[
-                            app->player_input[1].aim_slowdown],
-                        app->selection == 8);
+                            app->player_input[1].aim_slowdown], 8, app->selection);
         demo_value_line(66, "P2 ROPE",
                         demo_rope_mode_names[
-                            app->player_input[1].rope_mode],
-                        app->selection == 9);
+                            app->player_input[1].rope_mode], 9, app->selection);
         demo_value_line(81, "CALIBRATE PADS",
-                        calibrating ? "KEEP STICKS STILL" : "START",
-                        app->selection == 10);
-        demo_menu_item(101, "RESTORE INPUT DEFAULTS",
-                       app->selection == 11);
-        demo_menu_item(117, "BACK", app->selection == 12);
+                        calibrating ? "KEEP STICKS STILL" : "START", 10, app->selection);
+        demo_menu_item(101, "RESTORE INPUT DEFAULTS", 11, app->selection);
+        demo_menu_item(117, "BACK", 12, app->selection);
         vox_ui_text_center(&demo_ui, 160, 174, 1,
                            "UP DOWN  PAGE 2/2", DEMO_VGA_DARK_GRAY);
     }
@@ -3319,8 +3355,7 @@ static void demo_draw_controls(demo_app *app)
                               DEMO_VGA_YELLOW);
     demo_value_line(36, "DEVICE",
         app->binding_player == 0 ? "P1 KEYBOARD" :
-        (app->binding_player == 1 ? "P2 KEYBOARD" : "CONTROLLER"),
-        app->selection == 0);
+        (app->binding_player == 1 ? "P2 KEYBOARD" : "CONTROLLER"), 0, app->selection);
     for (action = 0; action < 9; ++action) {
         const char *binding_name;
         if (app->binding_player < 2) {
@@ -3341,11 +3376,10 @@ static void demo_draw_controls(demo_app *app)
                 demo_pad_button_label(demo_prompt_family(app), *binding);
         }
         sprintf(line, "%s", binding_name);
-        demo_value_line(44 + action * 11, actions[action], line,
-                        app->selection == action + 1);
+        demo_value_line(44 + action * 11, actions[action], line, action + 1, app->selection);
     }
-    demo_menu_item(148, "RESTORE DEFAULTS", app->selection == 10);
-    demo_menu_item(163, "BACK", app->selection == 11);
+    demo_menu_item(148, "RESTORE DEFAULTS", 10, app->selection);
+    demo_menu_item(163, "BACK", 11, app->selection);
     vox_ui_text_center(&demo_ui, 160, 180, 1,
         app->binding_capture ? "PRESS A NEW KEY  ESC CANCELS" :
         "ENTER REBINDS  LEFT RIGHT DEVICE", DEMO_VGA_LIGHT_CYAN);
@@ -4463,8 +4497,8 @@ static void demo_draw_play(demo_app *app)
                                "CONTROLLER LOST  RECONNECT OR RECLAIM",
                                DEMO_VGA_LIGHT_RED);
         }
-        demo_menu_item(105, "RESUME", app->selection == 0);
-        demo_menu_item(120, "EXIT TO TITLE", app->selection == 1);
+        demo_menu_item(105, "RESUME", 0, app->selection);
+        demo_menu_item(120, "EXIT TO TITLE", 1, app->selection);
     }
     demo_apply_flash(app);
 }
@@ -4507,6 +4541,11 @@ static void demo_draw_results(demo_app *app)
 
 static void demo_render(demo_app *app)
 {
+    /*
+     * Rebuilt every frame from what actually gets drawn, so the registry can
+     * never describe a layout that is no longer on screen.
+     */
+    demo_rows_reset();
     if (app->screen == DEMO_TITLE) {
         demo_draw_title(app);
     } else if (app->screen == DEMO_SETUP) {
@@ -6557,6 +6596,46 @@ static void demo_handle_event(demo_app *app, const SDL_Event *event)
             app->mouse_activity_x = app->mouse_x;
             app->mouse_activity_y = app->mouse_y;
             app->keyboard_aim_active = 0;
+        } else if (app->screen != DEMO_PLAY &&
+                   (delta_x > 1 || delta_y > 1)) {
+            /*
+             * Hovering moves the selection, so the mouse and the keyboard
+             * are pointing at the same row rather than fighting over two.
+             * Deliberately outside demo_activate_source: this is menu
+             * navigation, not a claim on a player slot, and routing it
+             * through the arbitration would take the pad off a player who
+             * merely brushed the mouse.
+             */
+            const demo_menu_row *row = demo_row_at(app->mouse_x,
+                                                   app->mouse_y);
+            app->mouse_activity_x = app->mouse_x;
+            app->mouse_activity_y = app->mouse_y;
+            if (row != 0 && row->index != app->selection) {
+                app->selection = row->index;
+                demo_audio_play(app, DEMO_SOUND_MOVE);
+            }
+        }
+    } else if (event->type == SDL_MOUSEBUTTONDOWN &&
+               app->screen != DEMO_PLAY &&
+               (event->button.button == SDL_BUTTON_LEFT ||
+                event->button.button == SDL_BUTTON_RIGHT)) {
+        /*
+         * A click is the key press the row would have taken.  Routing it
+         * through the same handler means every screen gets a mouse for free
+         * and no screen can disagree with itself about what a row does.
+         */
+        const demo_menu_row *row;
+        (void)demo_sync_hardware_mouse(app);
+        row = demo_row_at(app->mouse_x, app->mouse_y);
+        if (row != 0) {
+            app->selection = row->index;
+            if (row->kind == DEMO_ROW_VALUE) {
+                demo_handle_key(app,
+                                event->button.button == SDL_BUTTON_RIGHT ?
+                                SDLK_LEFT : SDLK_RIGHT, SDL_SCANCODE_UNKNOWN);
+            } else {
+                demo_handle_key(app, SDLK_RETURN, SDL_SCANCODE_UNKNOWN);
+            }
         }
     } else if (event->type == SDL_MOUSEBUTTONDOWN &&
                event->button.button == SDL_BUTTON_LEFT &&
@@ -8569,6 +8648,12 @@ static int demo_menu_self_test(void)
         "title", "setup", "options", "options2", "inbox", "inbox-read",
         "log", "controls", "customize"
     };
+    /*
+     * Which screens are made of selectable rows.  The message reader and the
+     * log are prose and a scroll view -- they have nothing to click, and
+     * demanding rows of them would only teach the test to lie.
+     */
+    static const int rows_expected[9] = {1, 1, 1, 1, 1, 0, 0, 1, 1};
     const char *path = "/tmp/digs-menu-self-test.ppm";
     int i;
     for (i = 0; i < 9; ++i) {
@@ -8596,6 +8681,36 @@ static int demo_menu_self_test(void)
             fprintf(stderr, "menu self-test: %s looks blank (%lu tones)\n",
                     screens[i], (unsigned long)distinct);
             return 2;
+        }
+        /*
+         * Every row a screen draws must be reachable with a pointer, and the
+         * row under the pointer must be the row the keyboard would select.
+         * A registry that drifts from the drawing is worse than no mouse at
+         * all -- it clicks the wrong thing confidently.
+         */
+        if (rows_expected[i] && demo_menu_row_count == 0) {
+            fprintf(stderr, "menu self-test: %s registered no rows\n",
+                    screens[i]);
+            return 3;
+        }
+        for (x = 0U; x < (vox_u32)demo_menu_row_count; ++x) {
+            const demo_menu_row *row = &demo_menu_rows[x];
+            const demo_menu_row *hit =
+                demo_row_at(row->x + row->width / 2,
+                            row->y + row->height / 2);
+            if (hit == 0 || hit->index != row->index) {
+                fprintf(stderr,
+                        "menu self-test: %s row %lu is not hit-testable\n",
+                        screens[i], (unsigned long)x);
+                return 4;
+            }
+            if (row->x < 0 || row->y < 0 ||
+                row->x + row->width > (int)DEMO_WIDTH ||
+                row->y + row->height > (int)DEMO_HEIGHT) {
+                fprintf(stderr, "menu self-test: %s row %lu is off screen\n",
+                        screens[i], (unsigned long)x);
+                return 5;
+            }
         }
     }
     (void)remove(path);
