@@ -108,8 +108,22 @@ typedef enum vox_audio_speech_profile {
     VOX_AUDIO_SPEECH_RIVET = 2,
     VOX_AUDIO_SPEECH_CINDER = 3,
     VOX_AUDIO_SPEECH_FLAMEY = 4,
-    VOX_AUDIO_SPEECH_PROFILE_COUNT = 5
+    /*
+     * The only voice that is not fixed at build time.  Its three scalars
+     * live on the engine rather than in the table so a player can tune their
+     * own miner without the other four moving.
+     */
+    VOX_AUDIO_SPEECH_CUSTOM = 5,
+    VOX_AUDIO_SPEECH_PROFILE_COUNT = 6
 } vox_audio_speech_profile;
+
+/* Bounds for the custom voice, wide enough to be worth moving. */
+#define VOX_AUDIO_VOICE_RATE_MIN 70U
+#define VOX_AUDIO_VOICE_RATE_MAX 140U
+#define VOX_AUDIO_VOICE_PITCH_MIN 70U
+#define VOX_AUDIO_VOICE_PITCH_MAX 250U
+#define VOX_AUDIO_VOICE_FORMANT_MIN 80U
+#define VOX_AUDIO_VOICE_FORMANT_MAX 130U
 
 /*
  * Forty deliberately small, language-neutral synthesis tokens.  Text and
@@ -308,6 +322,10 @@ typedef struct vox_audio_engine {
     vox_u32 speech_token_sample;
     vox_u32 speech_token_samples;
     vox_u32 speech_pitch_phase;
+    /* The player's own voice: rate percent, pitch hertz, formant percent. */
+    vox_u16 custom_rate_pct;
+    vox_u16 custom_pitch_hz;
+    vox_u16 custom_formant_pct;
     vox_u32 speech_pitch_step;
     vox_u32 speech_formant_phase[3];
     vox_u32 speech_formant_step[3];
@@ -339,6 +357,14 @@ void vox_audio_speech_init(vox_audio_speech *speech,
                            vox_u16 allophone_count);
 
 /* Initialize or reset caller-owned state.  No allocation or device I/O occurs. */
+/*
+ * Set the custom voice.  Values outside the documented bounds are clamped
+ * rather than rejected, so a hand-edited settings file cannot produce a
+ * miner nobody can hear.
+ */
+vox_result vox_audio_set_voice(vox_audio_engine *engine, vox_u16 rate_pct,
+                               vox_u16 pitch_hz, vox_u16 formant_pct);
+
 vox_result vox_audio_init(vox_audio_engine *engine, vox_u32 sample_rate,
                           vox_u32 seed);
 vox_result vox_audio_init_ex(vox_audio_engine *engine,

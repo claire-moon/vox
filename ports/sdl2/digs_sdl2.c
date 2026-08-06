@@ -102,7 +102,8 @@ typedef enum demo_screen {
     DEMO_CONTROLS = 9,
     DEMO_INPUT_OPTIONS = 11,
     DEMO_CUSTOMIZE = 12,
-    DEMO_NAME_EDITOR = 13
+    DEMO_NAME_EDITOR = 13,
+    DEMO_MINER = 14
 } demo_screen;
 
 typedef enum demo_input_preference {
@@ -280,6 +281,11 @@ typedef struct demo_app {
     int local_players;
     int time_limit_index;
     int lava_index;
+    /* The player's own voice: percentages and hertz, not indices, so the
+     * settings file says what it means. */
+    int voice_pitch;
+    int voice_tone;
+    int voice_speed;
     int score_limit_index;
     int respawn_mode;
     int respawn_delay_index;
@@ -940,7 +946,7 @@ static vox_u8 demo_speech_profile(int player)
         return (vox_u8)VOX_AUDIO_SPEECH_HIGH;
     }
     if (!vox_digs_player_is_bot(&demo_match, (vox_u16)player)) {
-        return (vox_u8)VOX_AUDIO_SPEECH_DEEP;
+        return (vox_u8)VOX_AUDIO_SPEECH_CUSTOM;
     }
     switch (vox_digs_bot_archetype(&demo_match, (vox_u16)player)) {
     case VOX_DIGS_ARCHETYPE_ENGINEER:
@@ -1147,6 +1153,14 @@ static void demo_audio_open(demo_app *app)
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
         return;
     }
+    /*
+     * The saved voice has to reach the engine the moment it exists, or the
+     * player's miner speaks in the default until they next open the screen
+     * and nudge something.
+     */
+    (void)vox_audio_set_voice(&app->audio, (vox_u16)app->voice_speed,
+                              (vox_u16)app->voice_pitch,
+                              (vox_u16)app->voice_tone);
     SDL_PauseAudioDevice(app->audio_device, 0);
 }
 
@@ -1506,6 +1520,9 @@ static void demo_match_settings_defaults(demo_app *app)
     strcpy(app->bot_names[2], "FLAMEY");
     app->time_limit_index = 1;
     app->lava_index = 0;
+    app->voice_pitch = 120;
+    app->voice_tone = 100;
+    app->voice_speed = 100;
     app->score_limit_index = 0;
     app->respawn_mode = 0;
     app->respawn_delay_index = 3;
@@ -1668,6 +1685,18 @@ static void demo_validate_input_settings(demo_app *app)
     if (app->lava_index < 0 || app->lava_index > 4) {
         app->lava_index = 0;
     }
+    if (app->voice_pitch < (int)VOX_AUDIO_VOICE_PITCH_MIN ||
+        app->voice_pitch > (int)VOX_AUDIO_VOICE_PITCH_MAX) {
+        app->voice_pitch = 120;
+    }
+    if (app->voice_tone < (int)VOX_AUDIO_VOICE_FORMANT_MIN ||
+        app->voice_tone > (int)VOX_AUDIO_VOICE_FORMANT_MAX) {
+        app->voice_tone = 100;
+    }
+    if (app->voice_speed < (int)VOX_AUDIO_VOICE_RATE_MIN ||
+        app->voice_speed > (int)VOX_AUDIO_VOICE_RATE_MAX) {
+        app->voice_speed = 100;
+    }
     if (app->score_limit_index < 0 || app->score_limit_index > 3) {
         app->score_limit_index = 0;
     }
@@ -1786,6 +1815,12 @@ static int demo_load_input_settings(demo_app *app)
             app->time_limit_index = value;
         } else if (sscanf(line, "LAVA_INDEX=%d", &value) == 1) {
             app->lava_index = value;
+        } else if (sscanf(line, "VOICE_PITCH=%d", &value) == 1) {
+            app->voice_pitch = value;
+        } else if (sscanf(line, "VOICE_TONE=%d", &value) == 1) {
+            app->voice_tone = value;
+        } else if (sscanf(line, "VOICE_SPEED=%d", &value) == 1) {
+            app->voice_speed = value;
         } else if (sscanf(line, "MATCH_MINUTES=%d", &value) == 1) {
             /* Schema 4 and earlier stored the minutes directly. */
             app->time_limit_index = value == 3 ? 2 : 1;
@@ -1972,7 +2007,9 @@ static int demo_save_input_settings(demo_app *app)
                 "DUMMY_MODE=%d\nHAPTIC_LEVEL=%d\nTIME_LIMIT_INDEX=%d\n"
                 "CAP_PROFILE=%lu\nCAP_FRAME_US=%lu\n"
                 "CAP_SUPPORTED_MASK=%lu\n"
-                "LAVA_INDEX=%d\nSCORE_LIMIT_INDEX=%d\nRESPAWN_MODE=%d\n"
+                "LAVA_INDEX=%d\nVOICE_PITCH=%d\nVOICE_TONE=%d\n"
+                "VOICE_SPEED=%d\n"
+                "SCORE_LIMIT_INDEX=%d\nRESPAWN_MODE=%d\n"
                 "RESPAWN_DELAY_INDEX=%d\nP1_NAME=%s\nP2_NAME=%s\n"
                 "P1_BARK=%d\nP2_BARK=%d\nPAD_BARK=%d\n",
                 app->options.frame_cap_index, app->options.gi_quality,
@@ -1987,7 +2024,9 @@ static int demo_save_input_settings(demo_app *app)
                 (unsigned long)app->cap_cache_profile,
                 (unsigned long)app->cap_cache_us,
                 (unsigned long)app->cap_cache_mask,
-                app->lava_index, app->score_limit_index,
+                app->lava_index, app->voice_pitch,
+                app->voice_tone, app->voice_speed,
+                app->score_limit_index,
                 app->respawn_mode,
                 app->respawn_delay_index, app->human_names[0],
                 app->human_names[1],
@@ -2766,6 +2805,113 @@ static const char *demo_identity_name(const demo_app *app, vox_u16 identity)
  * A list until you open one, then the message itself.  There is no reply --
  * the point is that they have been getting on with it without you.
  */
+/*
+ * MY MINER: the parts of your own miner that are yours.
+ *
+ * Its own screen rather than three more rows on CUSTOMIZE, which is already
+ * full -- and because outfit and helmet colour are coming here next, and a
+ * page that is about the miner is easier to add to than a page that is about
+ * the match.
+ */
+static void demo_apply_voice(demo_app *app)
+{
+    if (app->audio_device == 0U) {
+        return;
+    }
+    demo_audio_lock(app);
+    (void)vox_audio_set_voice(&app->audio, (vox_u16)app->voice_speed,
+                              (vox_u16)app->voice_pitch,
+                              (vox_u16)app->voice_tone);
+    demo_audio_unlock(app);
+}
+
+static void demo_value_line(int y, const char *label, const char *value,
+                            int index, int selection)
+{
+    int selected = index >= 0 && index == selection;
+    demo_row_register(44, y - 2, 232, 11, index, DEMO_ROW_VALUE);
+    if (selected) {
+        vox_ui_rect(&demo_ui, 44, y - 2, 232, 11, DEMO_VGA_BLUE);
+        vox_ui_frame(&demo_ui, 44, y - 2, 232, 11,
+                     DEMO_VGA_LIGHT_CYAN);
+    }
+    vox_ui_text(&demo_ui, 50, y, 1, label, DEMO_VGA_LIGHT_GRAY);
+    vox_ui_text(&demo_ui, 170, y, 1, value,
+                selected ? 255U : 170U, selected ? 255U : 170U,
+                selected ? 85U : 170U);
+}
+
+static void demo_draw_miner(demo_app *app)
+{
+    char value[24];
+    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
+    (void)vox_software_render_ex(&demo_title_world, &demo_target,
+                                 &demo_render_config);
+    demo_dark_panel(28, 8, 264, 184);
+    vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "MY MINER",
+                              DEMO_VGA_YELLOW);
+    vox_ui_text_center(&demo_ui, 160, 32, 1, app->player_names[0],
+                       DEMO_VGA_LIGHT_CYAN);
+    sprintf(value, "%d HZ", app->voice_pitch);
+    demo_value_line(56, "VOICE PITCH", value, 0, app->selection);
+    sprintf(value, "%d%%", app->voice_tone);
+    demo_value_line(72, "VOICE TONE", value, 1, app->selection);
+    sprintf(value, "%d%%", app->voice_speed);
+    demo_value_line(88, "VOICE SPEED", value, 2, app->selection);
+    demo_menu_item(112, "HEAR IT", 3, app->selection);
+    demo_menu_item(130, "RESTORE DEFAULTS", 4, app->selection);
+    demo_menu_item(148, "BACK", 5, app->selection);
+    vox_ui_text_center(&demo_ui, 160, 174, 1,
+                       "ARROWS CHANGE  ENTER SELECTS", DEMO_VGA_DARK_GRAY);
+}
+
+static void demo_handle_miner_key(demo_app *app, SDL_Keycode key)
+{
+    int direction = key == SDLK_LEFT ? -1 : (key == SDLK_RIGHT ? 1 : 0);
+    if (key == SDLK_ESCAPE) {
+        app->screen = DEMO_CUSTOMIZE;
+        app->selection = 9;
+        demo_audio_play(app, DEMO_SOUND_SELECT);
+    } else if (key == SDLK_UP) {
+        app->selection = (app->selection + 5) % 6;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_DOWN) {
+        app->selection = (app->selection + 1) % 6;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (direction != 0) {
+        if (app->selection == 0) {
+            app->voice_pitch += direction * 5;
+        } else if (app->selection == 1) {
+            app->voice_tone += direction * 2;
+        } else if (app->selection == 2) {
+            app->voice_speed += direction * 2;
+        }
+        demo_validate_input_settings(app);
+        demo_apply_voice(app);
+        (void)demo_save_input_settings(app);
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+        if (app->selection == 3) {
+            /* Hearing it is the only way to judge it. */
+            demo_apply_voice(app);
+            demo_audio_speak_text(app, "THAT WILL DO",
+                                  (vox_u8)VOX_AUDIO_SPEECH_CUSTOM,
+                                  VOX_AUDIO_PRIORITY_PLAYER_BARK, 0);
+        } else if (app->selection == 4) {
+            app->voice_pitch = 120;
+            app->voice_tone = 100;
+            app->voice_speed = 100;
+            demo_apply_voice(app);
+            (void)demo_save_input_settings(app);
+            demo_audio_play(app, DEMO_SOUND_SELECT);
+        } else if (app->selection == 5) {
+            app->screen = DEMO_CUSTOMIZE;
+            app->selection = 9;
+            demo_audio_play(app, DEMO_SOUND_SELECT);
+        }
+    }
+}
+
 static void demo_draw_inbox(demo_app *app)
 {
     vox_u16 count = demo_chronicle.inbox_count;
@@ -2979,21 +3125,6 @@ static void demo_draw_title(demo_app *app)
     }
 }
 
-static void demo_value_line(int y, const char *label, const char *value,
-                            int index, int selection)
-{
-    int selected = index >= 0 && index == selection;
-    demo_row_register(44, y - 2, 232, 11, index, DEMO_ROW_VALUE);
-    if (selected) {
-        vox_ui_rect(&demo_ui, 44, y - 2, 232, 11, DEMO_VGA_BLUE);
-        vox_ui_frame(&demo_ui, 44, y - 2, 232, 11,
-                     DEMO_VGA_LIGHT_CYAN);
-    }
-    vox_ui_text(&demo_ui, 50, y, 1, label, DEMO_VGA_LIGHT_GRAY);
-    vox_ui_text(&demo_ui, 170, y, 1, value,
-                selected ? 255U : 170U, selected ? 255U : 170U,
-                selected ? 85U : 170U);
-}
 
 static void demo_draw_setup(demo_app *app)
 {
@@ -3048,8 +3179,9 @@ static void demo_draw_customize(demo_app *app)
     sprintf(value, "%d SEC",
             demo_respawn_delays[app->respawn_delay_index]);
     demo_value_line(134, "SPAWN DELAY", value, 8, app->selection);
-    demo_menu_item(151, "RESTORE DEFAULTS", 9, app->selection);
-    demo_menu_item(166, "BACK", 10, app->selection);
+    demo_menu_item(149, "MY MINER", 9, app->selection);
+    demo_menu_item(163, "RESTORE DEFAULTS", 10, app->selection);
+    demo_menu_item(177, "BACK", 11, app->selection);
     vox_ui_text_center(&demo_ui, 160, 180, 1,
                        "ENTER EDITS NAMES  ARROWS CHANGE",
                        DEMO_VGA_DARK_GRAY);
@@ -4556,6 +4688,8 @@ static void demo_render(demo_app *app)
         demo_draw_name_editor(app);
     } else if (app->screen == DEMO_OPTIONS) {
         demo_draw_options(app);
+    } else if (app->screen == DEMO_MINER) {
+        demo_draw_miner(app);
     } else if (app->screen == DEMO_INBOX) {
         demo_draw_inbox(app);
     } else if (app->screen == DEMO_LOG) {
@@ -6102,10 +6236,10 @@ static void demo_handle_customize_key(demo_app *app, SDL_Keycode key)
         app->screen = DEMO_SETUP;
         app->selection = 7;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 10) % 11;
+        app->selection = (app->selection + 11) % 12;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 11;
+        app->selection = (app->selection + 1) % 12;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (direction != 0) {
         if (app->selection == 4) {
@@ -6130,9 +6264,12 @@ static void demo_handle_customize_key(demo_app *app, SDL_Keycode key)
             app->selection < app->local_players + app->bots) {
             demo_open_name_editor(app, app->selection);
         } else if (app->selection == 9) {
+            app->screen = DEMO_MINER;
+            app->selection = 0;
+        } else if (app->selection == 10) {
             demo_match_settings_defaults(app);
             (void)demo_save_input_settings(app);
-        } else if (app->selection == 10) {
+        } else if (app->selection == 11) {
             app->screen = DEMO_SETUP;
             app->selection = 7;
         }
@@ -6414,6 +6551,8 @@ static void demo_handle_key(demo_app *app, SDL_Keycode key,
         demo_handle_input_options_key(app, key);
     } else if (app->screen == DEMO_CONTROLS) {
         demo_handle_controls_key(app, key, scancode);
+    } else if (app->screen == DEMO_MINER) {
+        demo_handle_miner_key(app, key);
     } else if (app->screen == DEMO_INBOX) {
         demo_handle_inbox_key(app, key);
     } else if (app->screen == DEMO_LOG) {
@@ -8572,6 +8711,9 @@ static int demo_screenshot(const char *screen_name, const char *path)
     app.lava_index = 0;
     app.inbox_open = -1;
     app.options.gi_quality = 1;
+    app.voice_pitch = 120;
+    app.voice_tone = 100;
+    app.voice_speed = 100;
     strcpy(app.bot_names[0], "RIVET");
     strcpy(app.bot_names[1], "CINDER");
     strcpy(app.bot_names[2], "FLAMEY");
@@ -8590,6 +8732,7 @@ static int demo_screenshot(const char *screen_name, const char *path)
     } else if (strcmp(screen_name, "log") == 0) screen = DEMO_LOG;
     else if (strcmp(screen_name, "controls") == 0) screen = DEMO_CONTROLS;
     else if (strcmp(screen_name, "customize") == 0) screen = DEMO_CUSTOMIZE;
+    else if (strcmp(screen_name, "miner") == 0) screen = DEMO_MINER;
     if (screen < 0) {
         fprintf(stderr, "unknown screen: %s\n", screen_name);
         return 2;
@@ -8644,19 +8787,19 @@ static int demo_screenshot(const char *screen_name, const char *path)
  */
 static int demo_menu_self_test(void)
 {
-    static const char *screens[9] = {
+    static const char *screens[10] = {
         "title", "setup", "options", "options2", "inbox", "inbox-read",
-        "log", "controls", "customize"
+        "log", "controls", "customize", "miner"
     };
     /*
      * Which screens are made of selectable rows.  The message reader and the
      * log are prose and a scroll view -- they have nothing to click, and
      * demanding rows of them would only teach the test to lie.
      */
-    static const int rows_expected[9] = {1, 1, 1, 1, 1, 0, 0, 1, 1};
+    static const int rows_expected[10] = {1, 1, 1, 1, 1, 0, 0, 1, 1, 1};
     const char *path = "/tmp/digs-menu-self-test.ppm";
     int i;
-    for (i = 0; i < 9; ++i) {
+    for (i = 0; i < 10; ++i) {
         vox_u32 x;
         vox_u32 distinct = 0U;
         vox_u8 seen[8];
@@ -8714,7 +8857,7 @@ static int demo_menu_self_test(void)
         }
     }
     (void)remove(path);
-    printf("DIGS menu self-test passed screens=9\n");
+    printf("DIGS menu self-test passed screens=10\n");
     return 0;
 }
 
