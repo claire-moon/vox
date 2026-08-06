@@ -2028,6 +2028,8 @@ static const vox_u16
 digs_drift_rate[VOX_DIGS_ARCHETYPE_COUNT] = {3U, 9U, 6U};
 #define DIGS_DRIFT_FLOOR 40U
 #define DIGS_DRIFT_CEILING 235U
+/* Exchanges in a match past which a miner counts as talkative. */
+#define DIGS_DRIFT_TALKATIVE 6U
 
 static vox_u16 digs_drift_trait(vox_u16 value, vox_i32 direction,
                                 vox_u16 rate)
@@ -2080,20 +2082,59 @@ vox_result vox_digs_match_export_memory(const vox_digs_match *match,
         rate = archetype < VOX_DIGS_ARCHETYPE_COUNT ?
                digs_drift_rate[archetype] : 4U;
         /*
-         * Drift follows what the match actually did to them.  A miner who
-         * killed more than they died gets bolder and less careful; one who
-         * spent the match dying gets warier.  Talking a lot makes them more
-         * talkative.  Small steps -- this is a nudge per match, not a
-         * personality transplant.
+         * Drift follows what the match actually did to them.  Small steps --
+         * a nudge per match, not a personality transplant -- and every axis
+         * points at a decision the AI visibly makes, so a drifted bot plays
+         * differently rather than merely carrying different numbers.
          */
         {
             vox_i32 fortune = (vox_i32)match->scores[a] -
                               (vox_i32)match->deaths[a];
             vox_i32 sign = fortune > 0 ? 1L : (fortune < 0 ? -1L : 0L);
+            vox_u32 talk = 0U;
+            vox_u16 betrayed = 0U;
+            vox_u16 other;
+            for (other = 0U; other < match->rules.player_count; ++other) {
+                vox_u16 pair = vox_digs_pair_index(a, other);
+                const vox_digs_contract *contract;
+                if (pair >= VOX_DIGS_MAX_PAIRS) {
+                    continue;
+                }
+                contract = &match->contracts[pair];
+                talk += contract->exchanges;
+                if (contract->last_stimulus == VOX_DIGS_STIMULUS_BETRAYED &&
+                    contract->last_actor != a) {
+                    betrayed++;
+                }
+            }
+            /* Winning makes a miner bolder and less careful. */
             record->traits.aggression =
                 digs_drift_trait(record->traits.aggression, sign, rate);
             record->traits.caution =
                 digs_drift_trait(record->traits.caution, -sign, rate);
+            /*
+             * A miner who spent the match dying stops waiting around; one who
+             * survived can afford to take their time.  Patience is the
+             * decision cadence, so this is visible as twitchiness.
+             */
+            record->traits.patience =
+                digs_drift_trait(record->traits.patience, sign, rate);
+            /*
+             * Being betrayed is what makes a grudge, and a grudge is what
+             * makes a miner hunt somebody past whoever is nearer.  Nothing
+             * else earns it; winning quietly lets it fade.
+             */
+            record->traits.grudge = digs_drift_trait(record->traits.grudge,
+                betrayed > 0U ? 1L : (sign > 0L ? -1L : 0L), rate);
+            /*
+             * Talking begets talking.  A match spent in conversation leaves
+             * them chattier next time, a silent one leaves them quieter --
+             * which feeds straight back into how often they speak up.
+             */
+            record->traits.sociability =
+                digs_drift_trait(record->traits.sociability,
+                                 talk >= DIGS_DRIFT_TALKATIVE ? 1L : -1L,
+                                 rate);
         }
     }
     for (a = 0U; a < match->rules.player_count; ++a) {

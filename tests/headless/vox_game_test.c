@@ -2468,6 +2468,88 @@ static int test_bot_archetypes_and_charge_weapons(void)
  * A wide excavation must cave in, and a narrow tunnel must stay usable --
  * otherwise the digging tools destroy the tunnels they exist to make.
  */
+static int test_traits_drift_but_stay_recognisable(void)
+{
+    vox_digs_rules rules;
+    vox_digs_bot_memory memory;
+    vox_digs_bot_memory next;
+    const vox_digs_personality *base;
+    vox_u32 round;
+    vox_u32 tick;
+    vox_u16 moved = 0U;
+
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 4U;
+    rules.bot_mask = 0x000EU;
+    rules.match_ticks = 1200U;
+    rules.lava_start_tick = 1100U;
+    rules.score_limit = 0U;
+    vox_digs_memory_init(&memory);
+    base = vox_digs_personality_get(VOX_DIGS_ARCHETYPE_ENGINEER);
+    if (base == 0) return 1;
+    /* A fresh snapshot must start every bot on its archetype's own numbers. */
+    if (memory.identities[VOX_DIGS_IDENTITY_RIVET].traits.aggression !=
+        base->aggression) {
+        return 2;
+    }
+
+    /*
+     * Twelve matches back to back, each seeded from the last.  Long enough
+     * for drift to be unmistakable and for the clamps to be tested.
+     */
+    for (round = 0U; round < 12U; ++round) {
+        if (vox_digs_match_init_ex(&match, &rules, &memory) != VOX_OK) {
+            return 3;
+        }
+        for (tick = 0U; tick < 1200U && match.phase == VOX_DIGS_RUNNING;
+             ++tick) {
+            if (vox_digs_match_step(&match) != VOX_OK) return 4;
+            if (match.event_count > 0U) {
+                (void)vox_digs_consume_events(&match, match.event_count);
+            }
+        }
+        if (vox_digs_match_export_memory(&match, &next) != VOX_OK) return 5;
+        memory = next;
+    }
+
+    {
+        const vox_digs_identity_record *r =
+            &memory.identities[VOX_DIGS_IDENTITY_RIVET];
+        if (r->matches_played != 12U) return 6;
+        if (r->traits.aggression != base->aggression) moved++;
+        if (r->traits.caution != base->caution) moved++;
+        if (r->traits.patience != base->patience) moved++;
+        if (r->traits.grudge != base->grudge) moved++;
+        if (r->traits.sociability != base->sociability) moved++;
+        /* Twelve matches must leave a mark on more than one axis. */
+        if (moved < 2U) return 7;
+    }
+
+    /*
+     * And it must still be RIVET.  Every trait, for every identity, has to
+     * stay inside the clamp -- drift that runs to the rails would give three
+     * bots the same personality, which is the opposite of the point.
+     */
+    {
+        vox_u16 identity;
+        for (identity = 0U; identity < VOX_DIGS_IDENTITY_COUNT; ++identity) {
+            const vox_digs_personality *t =
+                &memory.identities[identity].traits;
+            if (t->aggression < 40U || t->aggression > 235U) return 8;
+            if (t->caution < 40U || t->caution > 235U) return 9;
+            if (t->patience < 40U || t->patience > 235U) return 10;
+            if (t->grudge < 40U || t->grudge > 235U) return 11;
+            if (t->sociability < 40U || t->sociability > 235U) return 12;
+        }
+    }
+    /* CINDER drifts faster than RIVET, so they must not have converged. */
+    if (memory.identities[VOX_DIGS_IDENTITY_RIVET].traits.patience ==
+        memory.identities[VOX_DIGS_IDENTITY_CINDER].traits.patience) {
+        return 13;
+    }
+    return 0;
+}
+
 static int test_bark_pacing_and_variance(void)
 {
     vox_digs_rules rules;
@@ -4066,6 +4148,13 @@ int main(void)
         if (result != 0) {
             fprintf(stderr, "DIGS archetype mismatch (%d)\n", result);
             return 65;
+        }
+    }
+    {
+        int result = test_traits_drift_but_stay_recognisable();
+        if (result != 0) {
+            fprintf(stderr, "DIGS drift mismatch (%d)\n", result);
+            return 75;
         }
     }
     {

@@ -394,6 +394,12 @@ static vox_digs_match demo_match;
  */
 static digs_chronicle demo_chronicle;
 static int demo_chronicle_ready;
+/*
+ * The reset row has to be chosen twice.  It destroys a history that cannot
+ * be recovered or replayed, and a single mis-keyed RETURN on a menu is not
+ * enough intent for that.
+ */
+static int demo_chronicle_reset_armed;
 static vox_world demo_title_world;
 static vox_ui_surface demo_ui;
 static vox_software_target demo_target;
@@ -936,33 +942,59 @@ static vox_u8 demo_speech_profile(int player)
  * simulation, where it is hashed and reproducible, and all that is left here
  * is substituting the name and putting it on the screen.
  */
+/*
+ * Put a line into readable form: the one substitution there is, %T for
+ * whoever is being talked about.
+ *
+ * Shared rather than inlined into the speech bubble, because the inbox
+ * reader has to do exactly the same thing to exactly the same lines, and a
+ * message that reads "WHERE HAVE YOU BEEN, %T" is the sort of thing that
+ * ships.
+ */
+static void demo_expand_line(vox_u16 line_id, const char *about,
+                             char *out, size_t capacity)
+{
+    const char *source = digs_lines_text(line_id);
+    size_t written = 0U;
+    size_t in = 0U;
+    if (out == 0 || capacity == 0U) {
+        return;
+    }
+    if (source == 0) {
+        out[0] = '\0';
+        return;
+    }
+    if (about == 0) {
+        about = "SOMEBODY";
+    }
+    while (source[in] != '\0' && written + 1U < capacity) {
+        if (source[in] == '%' && source[in + 1] == 'T') {
+            size_t copied = 0U;
+            while (about[copied] != '\0' && written + 1U < capacity) {
+                out[written++] = about[copied++];
+            }
+            in += 2U;
+            continue;
+        }
+        out[written++] = source[in++];
+    }
+    out[written] = '\0';
+}
+
 static void demo_speak_line(demo_app *app, int player, int target,
                             vox_u16 line_id, int bot)
 {
     const char *source = digs_lines_text(line_id);
     char phrase[96];
-    size_t out = 0U;
-    size_t in = 0U;
     if (player < 0 || player >= (int)demo_match.rules.player_count ||
         source == 0 || source[0] == '\0') {
         return;
     }
-    while (source[in] != '\0' && out + 1U < sizeof(phrase)) {
-        if (source[in] == '%' && source[in + 1] == 'T') {
-            const char *name = (target >= 0 &&
-                                target < (int)demo_match.rules.player_count) ?
-                               demo_player_name(app, (vox_u16)target) :
-                               "SOMEBODY";
-            size_t copied = 0U;
-            while (name[copied] != '\0' && out + 1U < sizeof(phrase)) {
-                phrase[out++] = name[copied++];
-            }
-            in += 2U;
-            continue;
-        }
-        phrase[out++] = source[in++];
-    }
-    phrase[out] = '\0';
+    demo_expand_line(line_id,
+                     (target >= 0 &&
+                      target < (int)demo_match.rules.player_count) ?
+                     demo_player_name(app, (vox_u16)target) : "SOMEBODY",
+                     phrase, sizeof(phrase));
     /*
      * One bubble on screen at a time.  Four miners shouting over each other
      * turned the battlefield into a noticeboard, and the conversation is
@@ -2828,8 +2860,11 @@ static void demo_draw_options(demo_app *app)
         demo_value_line(111, "DUMMY MODE",
                         demo_toggle_names[app->options.dummy_mode],
                         app->selection == 13);
-        demo_menu_item(130, "INPUT & CONTROLLER", app->selection == 14);
-        demo_menu_item(146, "BACK", app->selection == 15);
+        demo_menu_item(126, demo_chronicle_reset_armed ?
+                       "ERASE HISTORY - AGAIN TO CONFIRM" :
+                       "RESET MINER MEMORY", app->selection == 14);
+        demo_menu_item(140, "INPUT & CONTROLLER", app->selection == 15);
+        demo_menu_item(154, "BACK", app->selection == 16);
         vox_ui_text_center(&demo_ui, 160, 174, 1,
                            "UP DOWN  PAGE 2/2  F8 CAPS",
                            DEMO_VGA_DARK_GRAY);
@@ -5891,10 +5926,12 @@ static void demo_handle_options_key(demo_app *app, SDL_Keycode key)
         app->screen = DEMO_TITLE;
         app->selection = 0;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 15) % 16;
+        app->selection = (app->selection + 16) % 17;
+        demo_chronicle_reset_armed = 0;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 16;
+        app->selection = (app->selection + 1) % 17;
+        demo_chronicle_reset_armed = 0;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (direction != 0 || key == SDLK_RETURN || key == SDLK_KP_ENTER) {
         demo_audio_play(app, direction == 0 ? DEMO_SOUND_SELECT :
@@ -5950,9 +5987,32 @@ static void demo_handle_options_key(demo_app *app, SDL_Keycode key)
         } else if (app->selection == 13) {
             app->options.dummy_mode = !app->options.dummy_mode;
         } else if (app->selection == 14 && direction == 0) {
+            /*
+             * Erase everything the miners remember.
+             *
+             * The lead's notes ask for no reset in the shipped game, so that
+             * the history is unrepeatable and each player's is their own.
+             * This is here because it was asked for directly afterwards; the
+             * two-step is the compromise, because the thing being destroyed
+             * cannot be recovered and a single mis-keyed RETURN is not
+             * enough intent for that.
+             */
+            if (!demo_chronicle_reset_armed) {
+                demo_chronicle_reset_armed = 1;
+            } else {
+                char path[1032];
+                demo_chronicle_reset_armed = 0;
+                digs_chronicle_reset(&demo_chronicle);
+                demo_chronicle_ready = 1;
+                if (demo_chronicle_path(path, (int)sizeof(path))) {
+                    (void)digs_chronicle_save(&demo_chronicle, path);
+                }
+                demo_set_banner(app, "THEY HAVE FORGOTTEN YOU", 0);
+            }
+        } else if (app->selection == 15 && direction == 0) {
             app->screen = DEMO_INPUT_OPTIONS;
             app->selection = 0;
-        } else if (app->selection == 15 && direction == 0) {
+        } else if (app->selection == 16 && direction == 0) {
             app->screen = DEMO_TITLE;
             app->selection = 0;
         }
@@ -8096,6 +8156,55 @@ static int digs_chronicle_self_test(const char *path)
     if (!read.tampered) return 25;
     if (read.memory.regard[pair].valence != 0) return 26;
 
+    /*
+     * Messages between visits.  Nobody writes to a stranger, so a chronicle
+     * with no history in it must stay empty however long the gap; once the
+     * miners have actually played the player, somebody should eventually
+     * write, and what they write has to be real authored lines.
+     */
+    {
+        static digs_chronicle box;
+        vox_u16 attempt;
+        vox_u16 wrote = 0U;
+        digs_chronicle_reset(&box);
+        for (attempt = 0U; attempt < 40U; ++attempt) {
+            digs_chronicle_open(&box, 1000000UL + attempt * 90000UL);
+        }
+        if (box.inbox_count != 0U) return 29;   /* strangers stay silent */
+        if (box.memory.launch_counter != 40U) return 30;
+
+        digs_chronicle_reset(&box);
+        for (pair = 0U; pair < VOX_DIGS_MAX_PAIRS; ++pair) {
+            box.memory.regard[pair].matches_met = 4U;
+        }
+        pair = vox_digs_regard_index(VOX_DIGS_IDENTITY_PLAYER,
+                                     VOX_DIGS_IDENTITY_FLAMEY);
+        box.memory.regard[pair].tone = (vox_u16)VOX_DIGS_TONE_FEUD;
+        box.memory.regard[pair].betrayals = 1U;
+        for (attempt = 0U; attempt < 12U && wrote == 0U; ++attempt) {
+            digs_chronicle_open(&box, 2000000UL + attempt * 90000UL);
+            wrote = box.inbox_count;
+        }
+        if (wrote == 0U) return 31;             /* somebody must write */
+        if (box.inbox[0].line_count == 0U) return 32;
+        if (box.inbox[0].from >= VOX_DIGS_IDENTITY_PLAYER) return 33;
+        for (attempt = 0U; attempt < box.inbox[0].line_count; ++attempt) {
+            if (digs_lines_text(box.inbox[0].lines[attempt])[0] == '\0') {
+                return 34;
+            }
+        }
+        if (digs_chronicle_unread(&box) == 0U) return 35;
+        if (!digs_chronicle_mark_read(&box, 0U)) return 36;
+        if (digs_chronicle_mark_read(&box, 0U)) return 37;  /* only once */
+
+        /* The ring must not overflow however long the player stays away. */
+        for (attempt = 0U; attempt < 200U; ++attempt) {
+            digs_chronicle_open(&box, 3000000UL + attempt * 90000UL);
+        }
+        if (box.inbox_count > DIGS_INBOX_CAPACITY) return 38;
+        if (box.inbox_count == 0U) return 39;
+    }
+
     (void)remove(path);
     printf("DIGS chronicle self-test passed inbox=%u log=%u\n",
            (unsigned int)DIGS_INBOX_CAPACITY,
@@ -8249,6 +8358,21 @@ int main(int argc, char **argv)
         return demo_performance_self_test(ticks, qualify_named_bench);
     }
     memset(&app, 0, sizeof(app));
+    /*
+     * Open the chronicle before anything else touches it.  This is where the
+     * launch is counted, how long the player has been away is worked out,
+     * and each miner decides whether to have left a message about it -- the
+     * one place a wall clock is read, and it never reaches the simulation.
+     */
+    {
+        char chronicle_path[1032];
+        if (demo_chronicle_path(chronicle_path, (int)sizeof(chronicle_path))) {
+            (void)digs_chronicle_load(&demo_chronicle, chronicle_path);
+            digs_chronicle_open(&demo_chronicle, (vox_u32)time(0));
+            (void)digs_chronicle_save(&demo_chronicle, chronicle_path);
+            demo_chronicle_ready = 1;
+        }
+    }
     app.running = 1;
     app.settings_writable = 1;
     app.screen = DEMO_TITLE;

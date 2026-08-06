@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "digs_chronicle.h"
+#include "digs_lines.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,6 +58,7 @@ void digs_chronicle_reset(digs_chronicle *chronicle)
     chronicle->log_cursor = 0U;
     chronicle->matches_recorded = 0U;
     chronicle->tampered = 0U;
+    chronicle->last_epoch = 0U;
 }
 
 void digs_chronicle_log(digs_chronicle *chronicle, vox_u16 speaker,
@@ -106,6 +108,175 @@ vox_u16 digs_chronicle_unread(const digs_chronicle *chronicle)
     return count;
 }
 
+
+/* ---- messages left between visits ------------------------------------ */
+
+/* Seconds away past which a miner remarks on it.  Roughly half a day. */
+#define DIGS_CHRONICLE_ABSENCE_SECONDS 43200UL
+#define DIGS_CHRONICLE_HOUR 3600UL
+
+/*
+ * Deterministic per (launch, identity, slot), so opening the game twice on
+ * the same chronicle composes the same message.  It is presentation, not
+ * simulation, but a message that changed every time you looked at it would
+ * be obviously fake.
+ */
+static vox_u32 digs_chronicle_roll(vox_u32 launch, vox_u16 identity,
+                                   vox_u16 salt)
+{
+    vox_u32 hash = 2166136261U;
+    hash = digs_chronicle_mix(hash, "MSG");
+    hash ^= launch;
+    hash *= 16777619U;
+    hash ^= (vox_u32)identity * 2654435761U;
+    hash *= 16777619U;
+    hash ^= (vox_u32)salt;
+    hash *= 16777619U;
+    return hash;
+}
+
+/*
+ * What this miner would open with, given how they left things and how long
+ * it has been.  Every line comes from the same authored index the barks come
+ * from -- nothing is assembled here, which is the whole reason the mad-lib
+ * generator was deleted rather than filtered.
+ */
+static void digs_chronicle_compose(digs_chronicle *chronicle,
+                                   vox_u16 identity, vox_u32 away_hours)
+{
+    static const vox_u16 opener[VOX_DIGS_TONE_COUNT] = {
+        (vox_u16)VOX_DIGS_STIMULUS_HUMILIATED,     /* FEUD     */
+        (vox_u16)VOX_DIGS_STIMULUS_TAUNTED,        /* HOSTILE  */
+        (vox_u16)VOX_DIGS_STIMULUS_TAUNTED,        /* NEEDLING */
+        (vox_u16)VOX_DIGS_STIMULUS_IDLE,           /* NEUTRAL  */
+        (vox_u16)VOX_DIGS_STIMULUS_SPOTTED,        /* WARY     */
+        (vox_u16)VOX_DIGS_STIMULUS_TEAMED_UP,      /* THAWING  */
+        (vox_u16)VOX_DIGS_STIMULUS_TRUCE_ACCEPTED, /* TRUCE    */
+        (vox_u16)VOX_DIGS_STIMULUS_SAVED_BY        /* BONDED   */
+    };
+    digs_inbox_message *message;
+    vox_u16 pair = vox_digs_regard_index(identity,
+                                         (vox_u16)VOX_DIGS_IDENTITY_PLAYER);
+    vox_u16 tone = (vox_u16)VOX_DIGS_TONE_NEUTRAL;
+    vox_u16 voice = identity < DIGS_VOICE_COUNT ? identity :
+                    (vox_u16)DIGS_VOICE_MINER;
+    vox_u16 stimuli[DIGS_INBOX_LINES];
+    vox_u16 count = 0U;
+    vox_u16 i;
+    if (chronicle->inbox_count >= DIGS_INBOX_CAPACITY) {
+        /* Oldest falls off so the newest always has somewhere to go. */
+        for (i = 1U; i < DIGS_INBOX_CAPACITY; ++i) {
+            chronicle->inbox[i - 1U] = chronicle->inbox[i];
+        }
+        chronicle->inbox_count = (vox_u16)(DIGS_INBOX_CAPACITY - 1U);
+    }
+    if (pair < VOX_DIGS_MAX_PAIRS) {
+        tone = chronicle->memory.regard[pair].tone;
+        if (tone >= VOX_DIGS_TONE_COUNT) {
+            tone = (vox_u16)VOX_DIGS_TONE_NEUTRAL;
+        }
+    }
+    /* Two or three sentences: how they feel, what happened, and the absence. */
+    stimuli[count++] = opener[tone];
+    stimuli[count++] = chronicle->memory.regard[pair].betrayals > 0U ?
+                       (vox_u16)VOX_DIGS_STIMULUS_BETRAYED :
+                       (vox_u16)VOX_DIGS_STIMULUS_MATCH_END;
+    if (away_hours * DIGS_CHRONICLE_HOUR >= DIGS_CHRONICLE_ABSENCE_SECONDS) {
+        stimuli[count++] = (vox_u16)VOX_DIGS_STIMULUS_LONG_ABSENCE;
+    }
+    message = &chronicle->inbox[chronicle->inbox_count];
+    message->from = identity;
+    message->unread = 1U;
+    message->launch = chronicle->memory.launch_counter;
+    message->line_count = 0U;
+    for (i = 0U; i < count && i < DIGS_INBOX_LINES; ++i) {
+        digs_line_pool pool = digs_lines_pool(voice, tone, stimuli[i]);
+        vox_u32 roll;
+        if (pool.count == 0U) {
+            continue;
+        }
+        roll = digs_chronicle_roll(chronicle->memory.launch_counter, identity,
+                                   (vox_u16)(i + 1U));
+        message->lines[message->line_count] =
+            (vox_u16)(pool.first + (vox_u16)(roll % pool.count));
+        message->line_count++;
+    }
+    if (message->line_count > 0U) {
+        chronicle->inbox_count++;
+    }
+}
+
+void digs_chronicle_open(digs_chronicle *chronicle, vox_u32 now)
+{
+    vox_u32 away_hours = 0U;
+    vox_u16 identity;
+    if (chronicle == 0) {
+        return;
+    }
+    if (chronicle->last_epoch != 0U && now > chronicle->last_epoch) {
+        away_hours = (now - chronicle->last_epoch) / DIGS_CHRONICLE_HOUR;
+    }
+    chronicle->last_epoch = now;
+    if (chronicle->memory.launch_counter < 0xFFFFFFFFUL) {
+        chronicle->memory.launch_counter++;
+    }
+    chronicle->memory.elapsed_coarse = away_hours;
+    /*
+     * Nobody writes to a stranger.  A miner leaves a message only if they
+     * have actually played against this person, and then only sometimes --
+     * weighted by how talkative they are and how strongly they feel, so
+     * FLAMEY writes often, RIVET writes when something happened, and a
+     * blood feud gets a letter whatever the mood.
+     */
+    for (identity = 0U; identity < VOX_DIGS_IDENTITY_COUNT; ++identity) {
+        vox_u16 pair;
+        vox_u32 chance;
+        vox_u32 roll;
+        const vox_digs_regard *regard;
+        if (identity == VOX_DIGS_IDENTITY_PLAYER) {
+            continue;
+        }
+        pair = vox_digs_regard_index(identity,
+                                     (vox_u16)VOX_DIGS_IDENTITY_PLAYER);
+        if (pair >= VOX_DIGS_MAX_PAIRS) {
+            continue;
+        }
+        regard = &chronicle->memory.regard[pair];
+        if (regard->matches_met == 0U) {
+            continue;
+        }
+        chance = (vox_u32)chronicle->memory.identities[identity]
+                     .traits.sociability;
+        if (regard->tone == VOX_DIGS_TONE_FEUD ||
+            regard->tone == VOX_DIGS_TONE_BONDED) {
+            chance += 120U;
+        }
+        if (regard->betrayals > 0U) {
+            chance += 80U;
+        }
+        if (away_hours * DIGS_CHRONICLE_HOUR >=
+            DIGS_CHRONICLE_ABSENCE_SECONDS) {
+            chance += 60U;
+        }
+        roll = digs_chronicle_roll(chronicle->memory.launch_counter, identity,
+                                   0U) % 400U;
+        if (roll < chance) {
+            digs_chronicle_compose(chronicle, identity, away_hours);
+        }
+    }
+    (void)vox_digs_memory_hash(&chronicle->memory);
+}
+
+int digs_chronicle_mark_read(digs_chronicle *chronicle, vox_u16 index)
+{
+    if (chronicle == 0 || index >= chronicle->inbox_count ||
+        index >= DIGS_INBOX_CAPACITY || !chronicle->inbox[index].unread) {
+        return 0;
+    }
+    chronicle->inbox[index].unread = 0U;
+    return 1;
+}
+
 /* ---- writing --------------------------------------------------------- */
 
 static int digs_chronicle_emit(FILE *file, vox_u32 *sum, const char *line)
@@ -122,6 +293,8 @@ static int digs_chronicle_write_body(FILE *file, vox_u32 *sum,
     vox_u16 j;
     sprintf(line, "%s %u\n", DIGS_CHRONICLE_MAGIC,
             (unsigned int)DIGS_CHRONICLE_VERSION);
+    if (!digs_chronicle_emit(file, sum, line)) return 0;
+    sprintf(line, "EPOCH %lu\n", (unsigned long)chronicle->last_epoch);
     if (!digs_chronicle_emit(file, sum, line)) return 0;
     sprintf(line, "LAUNCH %lu %lu %u %u\n",
             (unsigned long)chronicle->memory.launch_counter,
@@ -267,6 +440,10 @@ static int digs_chronicle_read_file(digs_chronicle *chronicle,
         sum = digs_chronicle_mix(sum, line);
         if (sscanf(line, DIGS_CHRONICLE_MAGIC " %u", &version) == 1) {
             have_magic = 1;
+            continue;
+        }
+        if (sscanf(line, "EPOCH %lu", &l1) == 1) {
+            chronicle->last_epoch = (vox_u32)l1;
             continue;
         }
         if (sscanf(line, "LAUNCH %lu %lu %u %u", &l1, &l2, &a, &b) == 4) {

@@ -342,7 +342,8 @@ if (VOX_BUILD_SDL2_DEMO)
         ports/sdl2/vox_sdl_ui.c
     )
     target_link_libraries(digs_demo PRIVATE digs_game digs_miner_art vox_audio SDL2::SDL2)
-    target_include_directories(digs_demo PRIVATE engine/include ports/sdl2)
+    target_include_directories(digs_demo PRIVATE engine/include ports/sdl2
+        games/digs)
     target_compile_definitions(digs_demo PRIVATE SDL_MAIN_HANDLED)
     # The chronicle is meant to be unrepeatable, so a released build has no
     # way to erase it.  Refining the feature needs one, so debug builds get

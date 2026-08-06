@@ -53,6 +53,12 @@ typedef struct digs_chronicle {
     vox_u16 log_cursor;                 /* where the next one goes */
     vox_u16 matches_recorded;
     vox_u16 tampered;
+    /*
+     * When the player was last here, as a coarse wall-clock stamp.  It lives
+     * in the port and never enters the simulation: the whole determinism
+     * contract rests on the sim never reading a clock.
+     */
+    vox_u32 last_epoch;
 } digs_chronicle;
 
 #ifdef __cplusplus
@@ -82,6 +88,17 @@ const digs_log_entry *digs_chronicle_log_at(const digs_chronicle *chronicle,
 
 /* How many messages are waiting.  This is the (N) beside INBOX. */
 vox_u16 digs_chronicle_unread(const digs_chronicle *chronicle);
+
+/*
+ * Note a launch: bump the counter, work out how long the player has been
+ * away from `now`, and let each miner decide whether to leave a message
+ * about it.  `now` is a wall-clock stamp supplied by the caller -- the
+ * chronicle never reads a clock itself, and neither does the simulation.
+ */
+void digs_chronicle_open(digs_chronicle *chronicle, vox_u32 now);
+
+/* Mark a message read.  Returns 1 if it was unread until now. */
+int digs_chronicle_mark_read(digs_chronicle *chronicle, vox_u16 index);
 
 #ifdef __cplusplus
 }
