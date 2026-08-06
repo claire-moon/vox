@@ -36,7 +36,7 @@
 #define DEMO_INPUT_SWITCH_HYSTERESIS_MS 750U
 #define DEMO_CONTROLLER_ACTIVITY_MARGIN 0.08
 #define DEMO_CONTROLLER_CALIBRATION_MS 750U
-#define DEMO_SETTINGS_VERSION 4
+#define DEMO_SETTINGS_VERSION 5
 #define DEMO_ROPE_AIM_RANGE 48.0
 #define DEMO_NAME_CHARACTERS 12
 #define DEMO_NAME_CAPACITY 13
@@ -278,7 +278,8 @@ typedef struct demo_app {
     int arsenal;
     vox_u32 seed;
     int local_players;
-    int match_minutes;
+    int time_limit_index;
+    int lava_index;
     int score_limit_index;
     int respawn_mode;
     int respawn_delay_index;
@@ -416,6 +417,23 @@ static const int demo_frame_caps[DEMO_FRAME_CAP_COUNT] = {
 static const char *demo_frame_names[DEMO_FRAME_CAP_COUNT] = {
     "15 LOW", "30", "60", "90", "120", "144", "UNLIMITED"
 };
+/*
+ * Time limits, in minutes.  Zero is UNLIMITED, which is not really unlimited
+ * -- digs_validate_rules refuses match_ticks == 0 and the lava ramp divides
+ * by (match_ticks - lava_start_tick), so a genuinely endless match would
+ * either be rejected or divide by zero.  Ninety-nine minutes is past any
+ * session anyone will play and keeps every one of those invariants true.
+ */
+static const int demo_time_limits[6] = {1, 2, 3, 5, 10, 0};
+#define DEMO_TIME_UNLIMITED_MINUTES 99
+static const char *demo_time_limit_names[6] = {
+    "1:00", "2:00", "3:00", "5:00", "10:00", "UNLIMITED"
+};
+/* When the lava starts, counted from the end.  AUTO is the old behaviour. */
+static const char *demo_lava_names[5] = {
+    "AUTO", "OFF", "LAST 1:00", "LAST 2:00", "LAST 5:00"
+};
+static const int demo_lava_lead_seconds[5] = {30, -1, 60, 120, 300};
 static const char *demo_map_names[3] = {"COAL RIDGE", "DEEPWORKS", "FURNACE YARD"};
 static const char *demo_gi_names[3] = {"COMPATIBILITY", "BALANCED", "SHOWCASE"};
 static const char *demo_toggle_names[2] = {"OFF", "ON"};
@@ -1486,7 +1504,8 @@ static void demo_match_settings_defaults(demo_app *app)
     strcpy(app->bot_names[0], "RIVET");
     strcpy(app->bot_names[1], "CINDER");
     strcpy(app->bot_names[2], "FLAMEY");
-    app->match_minutes = 2;
+    app->time_limit_index = 1;
+    app->lava_index = 0;
     app->score_limit_index = 0;
     app->respawn_mode = 0;
     app->respawn_delay_index = 3;
@@ -1643,8 +1662,11 @@ static void demo_validate_input_settings(demo_app *app)
         app->cap_cache_us = 0U;
         app->cap_cache_mask = 0U;
     }
-    if (app->match_minutes != 2 && app->match_minutes != 3) {
-        app->match_minutes = 2;
+    if (app->time_limit_index < 0 || app->time_limit_index > 5) {
+        app->time_limit_index = 1;
+    }
+    if (app->lava_index < 0 || app->lava_index > 4) {
+        app->lava_index = 0;
     }
     if (app->score_limit_index < 0 || app->score_limit_index > 3) {
         app->score_limit_index = 0;
@@ -1670,7 +1692,8 @@ static int demo_load_input_settings(demo_app *app)
     demo_options saved_options;
     demo_bindings saved_bindings;
     char saved_human_names[DEMO_LOCAL_MAX][DEMO_NAME_CAPACITY];
-    int saved_match_minutes;
+    int saved_time_limit_index;
+    int saved_lava_index;
     int saved_score_limit_index;
     int saved_respawn_mode;
     int saved_respawn_delay_index;
@@ -1688,7 +1711,8 @@ static int demo_load_input_settings(demo_app *app)
     saved_bindings = app->bindings;
     memcpy(saved_human_names, app->human_names,
            sizeof(saved_human_names));
-    saved_match_minutes = app->match_minutes;
+    saved_time_limit_index = app->time_limit_index;
+    saved_lava_index = app->lava_index;
     saved_score_limit_index = app->score_limit_index;
     saved_respawn_mode = app->respawn_mode;
     saved_respawn_delay_index = app->respawn_delay_index;
@@ -1758,8 +1782,13 @@ static int demo_load_input_settings(demo_app *app)
         } else if (sscanf(line, "CAP_SUPPORTED_MASK=%lu",
                           &unsigned_value) == 1) {
             app->cap_cache_mask = (vox_u32)unsigned_value;
+        } else if (sscanf(line, "TIME_LIMIT_INDEX=%d", &value) == 1) {
+            app->time_limit_index = value;
+        } else if (sscanf(line, "LAVA_INDEX=%d", &value) == 1) {
+            app->lava_index = value;
         } else if (sscanf(line, "MATCH_MINUTES=%d", &value) == 1) {
-            app->match_minutes = value;
+            /* Schema 4 and earlier stored the minutes directly. */
+            app->time_limit_index = value == 3 ? 2 : 1;
         } else if (sscanf(line, "SCORE_LIMIT_INDEX=%d", &value) == 1) {
             app->score_limit_index = value;
         } else if (sscanf(line, "RESPAWN_MODE=%d", &value) == 1) {
@@ -1825,14 +1854,21 @@ static int demo_load_input_settings(demo_app *app)
         }
     }
     (void)fclose(file);
-    if (version != 1 && version != 2 && version != 3 &&
+    /*
+     * Every schema this build knows how to read, not just the current one.
+     * Bumping DEMO_SETTINGS_VERSION without adding the outgoing number here
+     * silently discards the settings of everybody upgrading -- which is what
+     * happened to schema four the moment five was introduced.
+     */
+    if (version != 1 && version != 2 && version != 3 && version != 4 &&
         version != DEMO_SETTINGS_VERSION) {
         memcpy(app->player_input, saved_input, sizeof(saved_input));
         app->options = saved_options;
         app->bindings = saved_bindings;
         memcpy(app->human_names, saved_human_names,
                sizeof(saved_human_names));
-        app->match_minutes = saved_match_minutes;
+        app->time_limit_index = saved_time_limit_index;
+        app->lava_index = saved_lava_index;
         app->score_limit_index = saved_score_limit_index;
         app->respawn_mode = saved_respawn_mode;
         app->respawn_delay_index = saved_respawn_delay_index;
@@ -1933,10 +1969,10 @@ static int demo_save_input_settings(demo_app *app)
                 "CAMERA_SHAKE=%d\nDAMAGE_NUMBERS=%d\n"
                 "DAMAGE_NUMBER_SIZE=%d\nDAMAGE_NUMBER_COLOR=%d\n"
                 "FX_PROFILE=%d\nMASTER_VOLUME=%d\nLAPTOP_MODE=%d\n"
-                "DUMMY_MODE=%d\nHAPTIC_LEVEL=%d\nMATCH_MINUTES=%d\n"
+                "DUMMY_MODE=%d\nHAPTIC_LEVEL=%d\nTIME_LIMIT_INDEX=%d\n"
                 "CAP_PROFILE=%lu\nCAP_FRAME_US=%lu\n"
                 "CAP_SUPPORTED_MASK=%lu\n"
-                "SCORE_LIMIT_INDEX=%d\nRESPAWN_MODE=%d\n"
+                "LAVA_INDEX=%d\nSCORE_LIMIT_INDEX=%d\nRESPAWN_MODE=%d\n"
                 "RESPAWN_DELAY_INDEX=%d\nP1_NAME=%s\nP2_NAME=%s\n"
                 "P1_BARK=%d\nP2_BARK=%d\nPAD_BARK=%d\n",
                 app->options.frame_cap_index, app->options.gi_quality,
@@ -1947,11 +1983,12 @@ static int demo_save_input_settings(demo_app *app)
                 app->options.damage_number_color, app->options.fx_profile,
                 app->options.master_volume, app->options.laptop_mode,
                 app->options.dummy_mode, app->options.haptic_level,
-                app->match_minutes,
+                app->time_limit_index,
                 (unsigned long)app->cap_cache_profile,
                 (unsigned long)app->cap_cache_us,
                 (unsigned long)app->cap_cache_mask,
-                app->score_limit_index, app->respawn_mode,
+                app->lava_index, app->score_limit_index,
+                app->respawn_mode,
                 app->respawn_delay_index, app->human_names[0],
                 app->human_names[1],
                 (int)app->bindings.keyboard_bark[0],
@@ -2932,24 +2969,28 @@ static void demo_draw_customize(demo_app *app)
     for (player = 0; player < (int)VOX_DIGS_MAX_SLOTS; ++player) {
         char label[12];
         sprintf(label, "PLAYER %d", player + 1);
-        demo_value_line(34 + player * 13, label,
+        demo_value_line(30 + player * 12, label,
                         player < active_players ?
                         app->player_names[player] : "EMPTY",
                         app->selection == player);
     }
-    sprintf(value, "%d:00", app->match_minutes);
-    demo_value_line(88, "TIME LIMIT", value, app->selection == 4);
-    demo_value_line(101, "SCORE LIMIT",
-                    demo_score_limit_names[app->score_limit_index],
+    demo_value_line(82, "TIME LIMIT",
+                    demo_time_limit_names[app->time_limit_index],
+                    app->selection == 4);
+    demo_value_line(95, "LAVA RISES",
+                    demo_lava_names[app->lava_index],
                     app->selection == 5);
-    demo_value_line(114, "RESPAWN",
-                    demo_respawn_mode_names[app->respawn_mode],
+    demo_value_line(108, "SCORE LIMIT",
+                    demo_score_limit_names[app->score_limit_index],
                     app->selection == 6);
+    demo_value_line(121, "RESPAWN",
+                    demo_respawn_mode_names[app->respawn_mode],
+                    app->selection == 7);
     sprintf(value, "%d SEC",
             demo_respawn_delays[app->respawn_delay_index]);
-    demo_value_line(127, "SPAWN DELAY", value, app->selection == 7);
-    demo_menu_item(145, "RESTORE DEFAULTS", app->selection == 8);
-    demo_menu_item(163, "BACK", app->selection == 9);
+    demo_value_line(134, "SPAWN DELAY", value, app->selection == 8);
+    demo_menu_item(151, "RESTORE DEFAULTS", app->selection == 9);
+    demo_menu_item(166, "BACK", app->selection == 10);
     vox_ui_text_center(&demo_ui, 160, 180, 1,
                        "ENTER EDITS NAMES  ARROWS CHANGE",
                        DEMO_VGA_DARK_GRAY);
@@ -4594,10 +4635,35 @@ static int demo_start_match(demo_app *app, int foundry)
         rules.lava_start_tick = rules.match_ticks - 60U;
         rules.score_limit = 100U;
     } else {
-        rules.match_ticks = (vox_u32)app->match_minutes * 60U *
+        /*
+         * UNLIMITED is ninety-nine minutes, not infinity.  Zero match_ticks
+         * is rejected by digs_validate_rules and the lava ramp divides by
+         * (match_ticks - lava_start_tick), so a genuinely endless match
+         * would either fail validation or divide by zero.  Ninety-nine
+         * minutes is past any session anyone will sit through.
+         */
+        int minutes = demo_time_limits[app->time_limit_index];
+        vox_u32 lead;
+        if (minutes <= 0) {
+            minutes = DEMO_TIME_UNLIMITED_MINUTES;
+        }
+        rules.match_ticks = (vox_u32)minutes * 60U *
                             VOX_DIGS_TICKS_PER_SECOND;
-        rules.lava_start_tick = rules.match_ticks -
-                                30U * VOX_DIGS_TICKS_PER_SECOND;
+        if (demo_lava_lead_seconds[app->lava_index] < 0) {
+            /*
+             * Lava OFF still has to start, because lava_start_tick must be
+             * below match_ticks.  One tick before the end means it never
+             * gets off the floor.
+             */
+            lead = 1U;
+        } else {
+            lead = (vox_u32)demo_lava_lead_seconds[app->lava_index] *
+                   VOX_DIGS_TICKS_PER_SECOND;
+            if (lead >= rules.match_ticks) {
+                lead = rules.match_ticks - 1U;
+            }
+        }
+        rules.lava_start_tick = rules.match_ticks - lead;
         rules.score_limit = (vox_u32)
                             demo_score_limits[app->score_limit_index];
         rules.respawn_mode = (vox_u16)app->respawn_mode;
@@ -5997,20 +6063,23 @@ static void demo_handle_customize_key(demo_app *app, SDL_Keycode key)
         app->screen = DEMO_SETUP;
         app->selection = 7;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 9) % 10;
+        app->selection = (app->selection + 10) % 11;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 10;
+        app->selection = (app->selection + 1) % 11;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (direction != 0) {
         if (app->selection == 4) {
-            app->match_minutes = app->match_minutes == 2 ? 3 : 2;
+            app->time_limit_index =
+                (app->time_limit_index + direction + 6) % 6;
         } else if (app->selection == 5) {
+            app->lava_index = (app->lava_index + direction + 5) % 5;
+        } else if (app->selection == 6) {
             app->score_limit_index =
                 (app->score_limit_index + direction + 4) % 4;
-        } else if (app->selection == 6) {
-            app->respawn_mode = 1 - app->respawn_mode;
         } else if (app->selection == 7) {
+            app->respawn_mode = 1 - app->respawn_mode;
+        } else if (app->selection == 8) {
             app->respawn_delay_index =
                 (app->respawn_delay_index + direction + 5) % 5;
         }
@@ -6021,10 +6090,10 @@ static void demo_handle_customize_key(demo_app *app, SDL_Keycode key)
         if (app->selection >= 0 &&
             app->selection < app->local_players + app->bots) {
             demo_open_name_editor(app, app->selection);
-        } else if (app->selection == 8) {
+        } else if (app->selection == 9) {
             demo_match_settings_defaults(app);
             (void)demo_save_input_settings(app);
-        } else if (app->selection == 9) {
+        } else if (app->selection == 10) {
             app->screen = DEMO_SETUP;
             app->selection = 7;
         }
@@ -7774,9 +7843,47 @@ static int demo_settings_self_test(const char *path)
         status = 5;
         goto done;
     }
-    if (!demo_settings_first_line_equals(path, "DIGS_SETTINGS=4\n")) {
-        fprintf(stderr, "settings self-test did not persist schema four\n");
+    if (!demo_settings_first_line_equals(path, "DIGS_SETTINGS=5\n")) {
+        fprintf(stderr, "settings self-test did not persist schema five\n");
         status = 6;
+        goto done;
+    }
+
+    /*
+     * Schema four stored the time limit as a number of minutes, and only 2
+     * or 3 were reachable.  Five stores an index into a longer list, so an
+     * old file has to be read as minutes and mapped -- otherwise somebody
+     * who had picked 3:00 comes back to 2:00 with no explanation.
+     */
+    demo_settings_test_defaults(&app);
+    if (!demo_write_settings_fixture(path,
+            "DIGS_SETTINGS=4\nMATCH_MINUTES=3\n") ||
+        demo_load_input_settings(&app) != 1 ||
+        demo_time_limits[app.time_limit_index] != 3) {
+        fprintf(stderr, "settings self-test schema-four time migration "
+                        "failed\n");
+        status = 7;
+        goto done;
+    }
+    demo_settings_test_defaults(&app);
+    if (!demo_write_settings_fixture(path,
+            "DIGS_SETTINGS=4\nMATCH_MINUTES=2\n") ||
+        demo_load_input_settings(&app) != 1 ||
+        demo_time_limits[app.time_limit_index] != 2) {
+        fprintf(stderr, "settings self-test schema-four time migration "
+                        "failed\n");
+        status = 8;
+        goto done;
+    }
+    /* And an out-of-range index from a hand-edited file must not stick. */
+    demo_settings_test_defaults(&app);
+    if (!demo_write_settings_fixture(path,
+            "DIGS_SETTINGS=5\nTIME_LIMIT_INDEX=99\nLAVA_INDEX=99\n") ||
+        demo_load_input_settings(&app) != 1 ||
+        app.time_limit_index < 0 || app.time_limit_index > 5 ||
+        app.lava_index < 0 || app.lava_index > 4) {
+        fprintf(stderr, "settings self-test time clamp failed\n");
+        status = 9;
         goto done;
     }
 
@@ -7789,7 +7896,7 @@ static int demo_settings_self_test(const char *path)
         app.options.laptop_mode != 0 || app.options.dummy_mode != 0 ||
         app.options.haptic_level != 2 ||
         demo_save_input_settings(&app) != 1 ||
-        !demo_settings_first_line_equals(path, "DIGS_SETTINGS=4\n")) {
+        !demo_settings_first_line_equals(path, "DIGS_SETTINGS=5\n")) {
         fprintf(stderr, "settings self-test schema-two migration failed\n");
         status = 7;
         goto done;
@@ -8382,7 +8489,8 @@ static int demo_screenshot(const char *screen_name, const char *path)
     app.map_style = VOX_DIGS_MAP_COAL_RIDGE;
     app.arsenal = DEMO_ARSENAL_FULL;
     app.seed = 0x564F5831U;
-    app.match_minutes = 3;
+    app.time_limit_index = 2;
+    app.lava_index = 0;
     app.inbox_open = -1;
     app.options.gi_quality = 1;
     strcpy(app.bot_names[0], "RIVET");

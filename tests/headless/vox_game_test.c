@@ -2468,6 +2468,66 @@ static int test_bot_archetypes_and_charge_weapons(void)
  * A wide excavation must cave in, and a narrow tunnel must stay usable --
  * otherwise the digging tools destroy the tunnels they exist to make.
  */
+static int test_extreme_time_limits_stay_valid(void)
+{
+    vox_digs_rules rules;
+    vox_u32 tick;
+    static const vox_u32 minutes[6] = {1U, 2U, 3U, 5U, 10U, 99U};
+    vox_u32 option;
+
+    /*
+     * The menu offers UNLIMITED and a lava setting that can be switched off.
+     * Both push on invariants the simulation actually enforces:
+     * digs_validate_rules refuses match_ticks == 0, requires
+     * lava_start_tick < match_ticks, and the lava ramp divides by the
+     * difference.  Every combination the menu can produce must survive that.
+     */
+    for (option = 0U; option < 6U; ++option) {
+        vox_u32 leads[3];
+        vox_u32 which;
+        vox_digs_rules_classic(&rules);
+        rules.player_count = 2U;
+        rules.bot_mask = 0x0002U;
+        rules.score_limit = 0U;
+        rules.match_ticks = minutes[option] * 60U *
+                            VOX_DIGS_TICKS_PER_SECOND;
+        leads[0] = 1U;                                    /* lava off */
+        leads[1] = 30U * VOX_DIGS_TICKS_PER_SECOND;       /* auto */
+        leads[2] = rules.match_ticks - 1U;                /* from the start */
+        for (which = 0U; which < 3U; ++which) {
+            vox_u32 lead = leads[which];
+            if (lead >= rules.match_ticks) {
+                lead = rules.match_ticks - 1U;
+            }
+            rules.lava_start_tick = rules.match_ticks - lead;
+            if (vox_digs_match_init(&match, &rules) != VOX_OK) {
+                return (int)(1 + option * 3U + which);
+            }
+            /* Step across the lava boundary; the ramp must not divide by 0. */
+            for (tick = 0U; tick < 400U && match.phase == VOX_DIGS_RUNNING;
+                 ++tick) {
+                if (vox_digs_match_step(&match) != VOX_OK) {
+                    return (int)(40 + option * 3U + which);
+                }
+                if (match.event_count > 0U) {
+                    (void)vox_digs_consume_events(&match, match.event_count);
+                }
+            }
+            if (match.lava_surface_y > VOX_WORLD_HEIGHT) {
+                return (int)(80 + option * 3U + which);
+            }
+        }
+    }
+    /* A zero-length match must still be refused. */
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0x0002U;
+    rules.match_ticks = 0U;
+    rules.lava_start_tick = 0U;
+    if (vox_digs_match_init(&match, &rules) == VOX_OK) return 120;
+    return 0;
+}
+
 static int test_traits_drift_but_stay_recognisable(void)
 {
     vox_digs_rules rules;
@@ -4148,6 +4208,13 @@ int main(void)
         if (result != 0) {
             fprintf(stderr, "DIGS archetype mismatch (%d)\n", result);
             return 65;
+        }
+    }
+    {
+        int result = test_extreme_time_limits_stay_valid();
+        if (result != 0) {
+            fprintf(stderr, "DIGS time limit mismatch (%d)\n", result);
+            return 76;
         }
     }
     {
