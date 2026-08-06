@@ -262,7 +262,22 @@
 #define DIGS_SPEECH_FLOOR_IN_EXCHANGE 42U
 #define DIGS_SPEECH_FLOOR_BETWEEN 480U
 /* How long a conversation stays live after the last thing said in it. */
-#define DIGS_SPEECH_EXCHANGE_WINDOW 200U
+/*
+ * How long an exchange stays live after a line, on top of how long that line
+ * took to say.
+ *
+ * This was a flat 200 ticks, which is shorter than a long line takes to
+ * deliver at all -- so a patient miner, whose whole character is waiting for
+ * you to finish, had its reply queued for longer than the exchange existed.
+ * The window tore down underneath it, the between-exchange floor of 480 then
+ * held the queued line, and RIVET answered seven to eleven seconds late into
+ * a conversation whose heat and line count had already been zeroed.  Measured
+ * before this: RIVET's replies averaged 452 ticks and peaked at 680, with two
+ * of five landing inside the window; CINDER, who interrupts, was always
+ * inside it.  The patient archetype was structurally excluded from the one
+ * feature this release is built around.
+ */
+#define DIGS_SPEECH_ANSWER_SLACK 200U
 /*
  * Lines in one exchange before it is closed off.
  *
@@ -3361,6 +3376,19 @@ static void digs_speech_set(vox_digs_match *match, vox_u16 speaker,
     }
     /* Chatty miners are also erratic about when they pipe up. */
     delay += (noise % 25U) * (vox_u32)personality->sociability / 255U;
+    /*
+     * Never queue a reply for longer than the exchange it belongs to.  A
+     * delay past the window is not merely late: the exchange is torn down
+     * underneath it and the between-exchange floor then sits on the line, so
+     * it arrives many seconds later into a conversation that no longer
+     * exists.  Waiting out the line is the intent; waiting past the end of
+     * the conversation is not.
+     */
+    if (match->speech_answer_ticks > 0U &&
+        delay >= (vox_u32)match->speech_answer_ticks) {
+        delay = match->speech_answer_ticks > 1U ?
+                (vox_u32)(match->speech_answer_ticks - 1U) : 1U;
+    }
     match->speech_stimulus[speaker] = stimulus;
     match->speech_subject[speaker] = subject;
     match->speech_delay[speaker] = (vox_u16)delay;
@@ -3695,7 +3723,7 @@ static vox_u16 digs_speech_arc(vox_digs_match *match, vox_u16 base,
  */
 static void digs_speech_broadcast(vox_digs_match *match, vox_u16 speaker,
                                   vox_u16 subject, vox_u16 stimulus,
-                                  vox_u16 audience)
+                                  vox_u16 audience, int may_reply)
 {
     vox_u16 listener;
     for (listener = 0U; listener < match->rules.player_count; ++listener) {
@@ -3731,6 +3759,16 @@ static void digs_speech_broadcast(vox_digs_match *match, vox_u16 speaker,
          * Anyone may answer, not only whoever it was aimed at.  Feeling
          * strongly about the subject is what makes a third miner speak up.
          */
+        if (!may_reply) {
+            /*
+             * The exchange just closed on its last line.  Everyone still
+             * heard it -- the opinions above have already moved -- but
+             * nobody answers a conversation that is over.  Queueing a reply
+             * here was how a patient miner ended up speaking into a torn
+             * down exchange after the between-exchange floor had run.
+             */
+            continue;
+        }
         chance = digs_speech_chattiness(match, listener);
         if (addressed) {
             chance += DIGS_SPEECH_REPLY_BONUS;
@@ -3883,8 +3921,12 @@ static void digs_step_speech(vox_digs_match *match)
     match->speech_exchange_heat = 0;
             match->speech_floor_ticks = DIGS_SPEECH_FLOOR_BETWEEN;
         } else {
+            /* The window follows the line: a long remark earns a long pause
+             * for somebody to answer it in. */
+            vox_u32 window = (vox_u32)vox_digs_speech_duration(line) +
+                             DIGS_SPEECH_ANSWER_SLACK;
             match->speech_floor_ticks = DIGS_SPEECH_FLOOR_IN_EXCHANGE;
-            match->speech_answer_ticks = DIGS_SPEECH_EXCHANGE_WINDOW;
+            match->speech_answer_ticks = (vox_u16)window;
         }
         /*
          * When the player speaks, the mine turns to look.  Everyone is
@@ -3936,7 +3978,8 @@ static void digs_step_speech(vox_digs_match *match)
          * Replies used to be the addressee's alone, which is precisely why
          * three bots in a room produced three private conversations.
          */
-        digs_speech_broadcast(match, player, subject, stimulus, audience);
+        digs_speech_broadcast(match, player, subject, stimulus, audience,
+                              match->speech_answer_ticks > 0U);
     }
 }
 
