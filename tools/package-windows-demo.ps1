@@ -141,8 +141,14 @@ try {
     if (-not (Test-Path -LiteralPath $demo -PathType Leaf)) {
         Stop-Package 'the Release digs_demo.exe was not produced'
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $share 'digs\scripts\manifest.txt') -PathType Leaf)) {
+    # This named the Lua catalog manifest, which v0.0.4 removed. Check that
+    # CMake staged a share tree at all, rather than one file inside it that
+    # may come and go.
+    if (-not (Test-Path -LiteralPath (Join-Path $share 'digs') -PathType Container)) {
         Stop-Package 'the DIGS runtime data was not staged by CMake'
+    }
+    if (-not (Get-ChildItem -LiteralPath (Join-Path $share 'digs') -Recurse -File)) {
+        Stop-Package 'the staged DIGS runtime data tree is empty'
     }
 
     Push-Location $Root

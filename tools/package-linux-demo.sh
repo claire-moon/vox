@@ -170,6 +170,10 @@ if [[ -n "$DIRTY_STATE" ]]; then
         'package-linux-demo: WARNING: building an explicitly allowed dirty-tree package.' >&2
 fi
 
+# A bundle whose START-HERE, README and archive name disagree about which
+# release it is wastes the tester's time before they even run it.
+"$ROOT/tools/vox-version-check.sh"
+
 if [[ -z ${SOURCE_DATE_EPOCH:-} ]]; then
     SOURCE_DATE_EPOCH=$(git -C "$ROOT" show -s --format=%ct HEAD)
 fi
@@ -472,8 +476,17 @@ tar -xzf "$BINARY_ARCHIVE" -C "$PACKAGED_CHECK_DIR"
 PACKAGED_ROOT="$PACKAGED_CHECK_DIR/$ARCHIVE_STEM"
 [[ -x "$PACKAGED_ROOT/run-digs.sh" ]] || \
     die 'the packaged Linux launcher is missing or not executable'
-[[ -r "$PACKAGED_ROOT/bin/share/digs/scripts/manifest.txt" ]] || \
+# Assert the property, not one payload file.  This check named the Lua
+# catalog manifest, which v0.0.4 removed, so it failed on a package that was
+# perfectly good.  Comparing the two trees keeps it testing what it is for --
+# that bin/share resolves to the one canonical copy -- however the payload
+# changes later.
+[[ -d "$PACKAGED_ROOT/bin/share/digs" ]] || \
     die 'the packaged Linux executable-relative data path is broken'
+PACKAGED_SHARE_TREE=$(cd -- "$PACKAGED_ROOT/share" && find . | sort)
+PACKAGED_BIN_SHARE_TREE=$(cd -- "$PACKAGED_ROOT/bin/share" && find . | sort)
+[[ "$PACKAGED_SHARE_TREE" == "$PACKAGED_BIN_SHARE_TREE" ]] || \
+    die 'bin/share does not resolve to the packaged share tree'
 capture_evidence packaged-digs-input-self-test "$EVIDENCE_DIR" \
     "$PACKAGED_ROOT/run-digs.sh" --input-self-test
 capture_evidence packaged-digs-load-self-test "$EVIDENCE_DIR" \
