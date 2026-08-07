@@ -283,6 +283,8 @@ Run these from the extracted demo directory:
   ./bin/digs_demo --performance-self-test 600
   ./bin/digs_demo --settings-self-test qa/out/digs-settings-test.cfg
   ./bin/digs_demo --camera-self-test
+  ./bin/digs_demo --chronicle-self-test
+  ./bin/digs_demo --menu-self-test
   ./bin/digs_demo --render-miner-icon-xpm qa/out/digs-miner-test.xpm
   ./bin/vox_headless
   ./bin/digs_headless
@@ -295,9 +297,14 @@ audio sample timing is independent of rendered frames, the bark test checks
 all curated slots and unknown-word phonetics, the haptic test checks mixer
 levels and isolation without requiring a pad, the performance test enforces
 the v0.0.4 four-miner simulation budget only on the named laptop bench, and
-the settings test checks schema migration without changing real user settings.
+the settings test checks schema migration without changing real user settings,
+the chronicle test writes a save file and reads it back and refuses a damaged
+one, and the menu test walks every screen and fails on anything drawn outside
+its frame.
 The load test is the portable gate: at 600 ticks it validates exact activity
-and state hash c37e44b6 without applying machine timing limits. Run the strict
+and state hash 1acec253 without applying machine timing limits. That hash
+and the activity counters moved from v0.0.3 because bots now breach walls;
+a v0.0.3 expectation applied here reads as a failure and is not one. Run the strict
 performance test only on the i7-10750H laptop qualification bench. The camera
 self-test checks every zoom and world edge for black exposure, verifies
 true close zoom plus full-world player/lava framing and the offscreen lava
@@ -307,8 +314,8 @@ share/digs/icons/digs-miner.xpm. The benchmark reports Compatibility, Balanced,
 and Showcase CPU Lightfield results. Hashes must repeat for the same frozen
 build; use this archive's evidence logs rather than old v0.0.1 values.
 
-The package-time versions of these checks, CTest, Cargo tests, script
-validation, and raw exit statuses are under evidence/.
+The package-time versions of these checks, CTest, and raw exit statuses are
+under evidence/.
 
 
 8. MANUAL v0.0.4 PLAYTEST

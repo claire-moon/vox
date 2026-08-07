@@ -88,7 +88,8 @@ fi
 "$BUILD_DIR/digs_demo" --fixed-step-self-test
 # v0.0.4: the save layer round-trips and refuses a damaged file, and no screen
 # draws outside its frame.  Neither is covered by ctest -- both need the port.
-"$BUILD_DIR/digs_demo" --chronicle-self-test
+"$BUILD_DIR/digs_demo" --chronicle-self-test \
+    "$BUILD_DIR/digs-chronicle-self-test.dat"
 "$BUILD_DIR/digs_demo" --menu-self-test
 "$BUILD_DIR/digs_demo" --render-miner-icon-xpm "$MINER_ICON"
 test -s "$MINER_ICON"

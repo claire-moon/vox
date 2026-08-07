@@ -75,3 +75,8 @@ docs/compatibility/MATRIX.md :: qa/V0.0.3-QUICK-FEEDBACK.txt
 # workflow could have clobbered. The guard itself is version-agnostic --
 # it protects any published release -- so this is context, not behaviour.
 .github/workflows/publish-release.yml :: This replaces the v0.0.3-era release.yml
+
+# Warns the tester that the previous release's canonical hash no longer
+# applies. Naming it is the entire content of the warning.
+CG-README.TXT :: the activity counters moved from v0.0.3
+CG-README.TXT :: expectation applied here reads as a failure

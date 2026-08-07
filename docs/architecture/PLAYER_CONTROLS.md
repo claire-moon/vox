@@ -14,7 +14,7 @@ only when the preceding physics result was grounded, and applies bounded lift
 toward a reachable target while steam remains. Steam is a 16-bit resource: it
 drains while thrusting and recharges during grounded ticks. Thrust grants mild
 lateral authority without replacing momentum; release lets gravity turn the
-motion into a glide. The C++98 solver then advances the body against the C89
+motion into a glide. The solver then advances the body against the C89
 terrain.
 
 The SDL2 host maps controls as follows:

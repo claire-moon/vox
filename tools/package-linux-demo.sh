@@ -259,7 +259,8 @@ capture_evidence digs-fixed-step-self-test "$EVIDENCE_DIR" \
 # Both can fail in ways the simulation tests cannot see, so both are shipped
 # as package evidence alongside the determinism logs.
 capture_evidence digs-chronicle-self-test "$EVIDENCE_DIR" \
-    "$BUILD_DIR/digs_demo" --chronicle-self-test
+    "$BUILD_DIR/digs_demo" --chronicle-self-test \
+        "$EVIDENCE_DIR/digs-chronicle-self-test.dat"
 capture_evidence digs-menu-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --menu-self-test
 capture_evidence digs-miner-icon "$EVIDENCE_DIR" \

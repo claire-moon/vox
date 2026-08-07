@@ -12,7 +12,7 @@ SDL2 input / deterministic bots
       DIGS C89 match rules
        |               |
        v               v
-C89 material world   C++98 fixed-point bodies
+C89 material world   C89 fixed-point bodies 
        |               |
        +-------+-------+
                v
