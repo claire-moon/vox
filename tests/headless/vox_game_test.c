@@ -2669,6 +2669,70 @@ static vox_i16 test_overhear_run(vox_u16 bystander_tone)
     return to_speaker->valence;
 }
 
+static int test_the_clock_stays_out_of_the_hash(void)
+{
+    static vox_digs_match early;
+    static vox_digs_match later;
+    vox_digs_rules rules;
+    vox_digs_bot_memory first;
+    vox_digs_bot_memory second;
+    vox_u32 tick;
+
+    /*
+     * The port reads a wall clock exactly once, at launch, to work out how
+     * long the player has been away.  Those values ride along in the memory
+     * snapshot, and the snapshot's digest is folded into the match hash --
+     * so for a while time(0) was an input to the authoritative hash of a
+     * simulation that never reads it.
+     *
+     * Two matches one launch apart were then provably identical tick for
+     * tick, with the same world hash, the same scores and the same deaths,
+     * and a different state hash from tick zero.  A desync detector would
+     * have called an identical match a divergence, and a recorded replay
+     * could not be reproduced by the same binary the next day.
+     */
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 4U;
+    rules.bot_mask = 0x000EU;
+    rules.match_ticks = 2000U;
+    rules.lava_start_tick = 1900U;
+    rules.score_limit = 0U;
+
+    vox_digs_memory_init(&first);
+    vox_digs_memory_init(&second);
+    /* Identical in everything the simulation can see; one launch apart. */
+    first.launch_counter = 7U;
+    first.elapsed_coarse = 3U;
+    second.launch_counter = 8U;
+    second.elapsed_coarse = 5U;
+    if (vox_digs_memory_hash(&first) != vox_digs_memory_hash(&second)) {
+        return 1;
+    }
+    if (vox_digs_match_init_ex(&early, &rules, &first) != VOX_OK) return 2;
+    if (vox_digs_match_init_ex(&later, &rules, &second) != VOX_OK) return 3;
+    if (early.state_hash != later.state_hash) return 4;
+    for (tick = 0U; tick < 600U; ++tick) {
+        if (vox_digs_match_step(&early) != VOX_OK) return 5;
+        if (vox_digs_match_step(&later) != VOX_OK) return 6;
+        if (early.event_count > 0U) {
+            (void)vox_digs_consume_events(&early, early.event_count);
+        }
+        if (later.event_count > 0U) {
+            (void)vox_digs_consume_events(&later, later.event_count);
+        }
+        if (early.state_hash != later.state_hash) return 7;
+    }
+    /* And a snapshot that differs in something the sim DOES read must not
+     * hash the same, or this test would pass by hashing nothing at all. */
+    second.identities[VOX_DIGS_IDENTITY_RIVET].traits.aggression =
+        (vox_u16)(first.identities[VOX_DIGS_IDENTITY_RIVET].traits.aggression
+                  + 11U);
+    if (vox_digs_memory_hash(&first) == vox_digs_memory_hash(&second)) {
+        return 8;
+    }
+    return 0;
+}
+
 static int test_init_leaves_nothing_uninitialised(void)
 {
     /*
@@ -4607,6 +4671,13 @@ int main(void)
         if (result != 0) {
             fprintf(stderr, "DIGS drift mismatch (%d)\n", result);
             return 75;
+        }
+    }
+    {
+        int result = test_the_clock_stays_out_of_the_hash();
+        if (result != 0) {
+            fprintf(stderr, "DIGS clock-in-hash mismatch (%d)\n", result);
+            return 82;
         }
     }
     {

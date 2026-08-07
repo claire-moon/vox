@@ -2125,8 +2125,23 @@ vox_u32 vox_digs_memory_hash(vox_digs_bot_memory *memory)
         return 0U;
     }
     hash = digs_hash_mix(hash, memory->memory_version);
-    hash = digs_hash_mix(hash, memory->launch_counter);
-    hash = digs_hash_mix(hash, memory->elapsed_coarse);
+    /*
+     * launch_counter and elapsed_coarse are deliberately NOT folded in.
+     *
+     * They come from the port's wall clock, and this digest is folded into
+     * vox_digs_hash -- so including them put time(0) into the authoritative
+     * match hash.  The simulation never reads either field, so two matches
+     * one launch apart were provably identical tick for tick, with the same
+     * world hash, the same scores and the same deaths, and a different state
+     * hash from tick zero.  Any replay verifier or desync detector comparing
+     * state hashes would have called an identical match a divergence, and a
+     * recorded replay could never be reproduced by the same binary on the
+     * same machine the next day.
+     *
+     * This digest is not persisted -- the chronicle has its own checksum --
+     * so its only consumer is the match hash, and the match hash must be a
+     * function of what the simulation can see.
+     */
     for (i = 0U; i < VOX_DIGS_IDENTITY_COUNT; ++i) {
         const vox_digs_identity_record *r = &memory->identities[i];
         hash = digs_hash_mix(hash, (vox_u32)r->traits.aggression);

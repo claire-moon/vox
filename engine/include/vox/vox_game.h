@@ -530,8 +530,13 @@ typedef struct vox_digs_bot_memory {
     vox_u32 abi_version;
     vox_u32 struct_size;
     vox_u32 memory_version;
-    vox_u32 launch_counter;      /* set by the port, never read in the sim */
-    vox_u32 elapsed_coarse;      /* likewise: whole hours since last launch */
+    /*
+     * Both set by the port from a wall clock, and neither read by the
+     * simulation -- so neither is folded into memory_hash, because that
+     * digest ends up inside the authoritative match hash.
+     */
+    vox_u32 launch_counter;
+    vox_u32 elapsed_coarse;      /* whole hours since the last launch */
     vox_digs_identity_record identities[VOX_DIGS_IDENTITY_COUNT];
     vox_digs_regard regard[VOX_DIGS_MAX_PAIRS];
     vox_u32 memory_hash;
@@ -668,7 +673,12 @@ vox_result vox_digs_generate_map(vox_world *world, vox_u16 map_style,
                                  vox_u32 seed);
 /* Fill a snapshot with the canonical starting state: no history at all. */
 void vox_digs_memory_init(vox_digs_bot_memory *memory);
-/* Recompute and store memory_hash.  Returns it. */
+/*
+ * Recompute and store memory_hash: a digest of everything in the snapshot
+ * that the simulation can actually see.  The wall-clock fields are excluded
+ * on purpose -- this digest is folded into vox_digs_hash, and the match hash
+ * has to be a function of the simulation alone.
+ */
 vox_u32 vox_digs_memory_hash(vox_digs_bot_memory *memory);
 /* Which identity a slot is playing.  VOX_DIGS_IDENTITY_COUNT if invalid. */
 vox_u16 vox_digs_memory_identity(const vox_digs_match *match, vox_u16 player);
