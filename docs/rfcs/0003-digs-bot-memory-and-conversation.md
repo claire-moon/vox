@@ -44,9 +44,20 @@ init through `vox_digs_match_init_ex` and read back with
 condition, exactly like a seed.
 
 Two matches started from the same seed and the same memory snapshot produce
-the same canonical hash on any host, and `--load-self-test 600` prints the
-same hash on a pref path with a long history as on a fresh one. VOX-QA-094
-tests precisely this.
+the same canonical hash on any host.
+
+Memory is an opening condition, so a *different* snapshot legitimately
+produces a different hash -- that is what it means for the miners to carry
+something in, and `digs_memory_across_sessions` asserts it directly: a match
+opened from a played chronicle does not simulate identically to a first
+meeting. Anything else would mean memory was decorative.
+
+`--load-self-test 600` is unaffected by any of this because it deliberately
+does not read the chronicle. That is the point of it: the portable regression
+has to print the same numbers on a machine with a long history as on a fresh
+one, or it stops being comparable between two testers. VOX-QA-094 tests that
+property, and it is a narrower claim than "memory never touches the hash",
+which is false.
 
 This boundary is easy to breach by accident and was breached once during
 implementation: the memory digest folded `launch_counter` and `elapsed_coarse`,
@@ -174,6 +185,13 @@ future reader does not "fix" it back.
 - `--load-self-test 600` reproduces the canonical counters and hash, and does
   so identically on histories of any length (VOX-QA-094).
 - `--chronicle-self-test` round-trips a chronicle and refuses a damaged one.
+- `digs_memory_across_sessions` (`tools/vox-session-evidence.sh`) plays a
+  match in one process and opens a match from the resulting file in another,
+  which is the only lane in the project that crosses a process boundary.
+  It asserts that the accounts arrive intact, that the second match opens
+  non-neutral, that its hash differs from a first meeting's, and that a
+  missing or damaged chronicle is refused rather than reported as a first
+  meeting.
 - `--menu-self-test` walks every screen and fails on anything drawn outside
   its frame.
 - Targeted determinism tests: `test_the_clock_stays_out_of_the_hash`,
