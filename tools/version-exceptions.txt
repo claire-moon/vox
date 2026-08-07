@@ -70,3 +70,8 @@ docs/compatibility/MATRIX.md :: ## v0.0.3 test lanes
 # pointing it at the v0.0.4 form would misrecord what that lane asked for.
 docs/compatibility/MATRIX.md :: Through v0.0.3 a Rust boundary
 docs/compatibility/MATRIX.md :: qa/V0.0.3-QUICK-FEEDBACK.txt
+
+# Names the workflow this one replaced, and the release whose assets that
+# workflow could have clobbered. The guard itself is version-agnostic --
+# it protects any published release -- so this is context, not behaviour.
+.github/workflows/publish-release.yml :: This replaces the v0.0.3-era release.yml
