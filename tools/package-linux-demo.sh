@@ -329,6 +329,22 @@ copy_tree "$ROOT/docs" "$STAGE_DIR/docs"
 if [[ -d "$ROOT/qa" ]]; then
     copy_tree "$ROOT/qa" "$STAGE_DIR/qa"
     rm -rf -- "$STAGE_DIR/qa/out"
+    # Previous releases' feedback forms stay in the repository as the record
+    # of those releases, but shipping them here just gives a tester two
+    # documents and no way to tell which one this bundle wants.  Matched by
+    # shape rather than by name so this does not need editing next release.
+    # Derived from the VERSION file, not from $VERSION: the latter carries
+    # suffixes like -ci and -dev, which name no form and would fail the
+    # check below on every CI package run.
+    CURRENT_FEEDBACK_FORM="V$("$ROOT/tools/vox-version.sh")-QUICK-FEEDBACK.txt"
+    for form in "$STAGE_DIR"/qa/V*-QUICK-FEEDBACK.txt; do
+        [[ -e "$form" ]] || continue
+        if [[ "$(basename -- "$form")" != "$CURRENT_FEEDBACK_FORM" ]]; then
+            rm -f -- "$form"
+        fi
+    done
+    [[ -r "$STAGE_DIR/qa/$CURRENT_FEEDBACK_FORM" ]] || \
+        die "the packaged qa/ tree is missing $CURRENT_FEEDBACK_FORM"
 fi
 [[ -r "$STAGE_DIR/QUICK-FEEDBACK.txt" ]] || \
     die 'the guided quick-feedback artifact was not packaged'
