@@ -16,10 +16,20 @@ laptop; that stream records average, p95, maximum, event counts, awake cells,
 and state hash against the RFC timing limits. A shorter diagnostic is not
 release evidence.
 
+The chronicle stream proves the save layer writes and reads back what it was
+given and refuses a file that fails its checksum; it does not prove recovery
+from a genuinely corrupted file on disk, which is a manual checkpoint. The
+menu stream proves that no screen draws content outside its own frame; it says
+nothing about whether those screens are legible, which is judged by eye.
+
+Neither the chronicle nor the memory it carries enters the canonical hash.
+The load stream prints the same state hash on a machine with a long history as
+on a fresh one, which is the determinism boundary this release rests on.
+
 Archive ordering, ownership, and timestamps are normalized with
 SOURCE_DATE_EPOCH. The source archive is reproducible from the same tree.
 The evidence-bearing binary archive is intentionally not promised to be
-bit-for-bit reproducible: genuine ctest, Cargo, and benchmark output contains
+bit-for-bit reproducible: genuine ctest and benchmark output contains
 real execution durations. Removing or rewriting those values would make the
 logs cease to be raw evidence. The shipped game binaries and every archive are
 covered by SHA256SUMS so a particular release artifact can be verified.

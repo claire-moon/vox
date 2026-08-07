@@ -44,6 +44,10 @@ case "$NAMED_BENCH_QUALIFY" in
         ;;
 esac
 
+# Cheapest gate in the script, and the only one that catches a build which is
+# correct in every way except the name it calls itself by.
+"$ROOT/tools/vox-version-check.sh"
+
 cmake -S "$ROOT" -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
     -DVOX_BUILD_TESTS=ON \
@@ -82,6 +86,10 @@ fi
     "$BUILD_DIR/digs-settings-self-test.cfg"
 "$BUILD_DIR/digs_demo" --camera-self-test
 "$BUILD_DIR/digs_demo" --fixed-step-self-test
+# v0.0.4: the save layer round-trips and refuses a damaged file, and no screen
+# draws outside its frame.  Neither is covered by ctest -- both need the port.
+"$BUILD_DIR/digs_demo" --chronicle-self-test
+"$BUILD_DIR/digs_demo" --menu-self-test
 "$BUILD_DIR/digs_demo" --render-miner-icon-xpm "$MINER_ICON"
 test -s "$MINER_ICON"
 "$BUILD_DIR/digs_demo" --smoke-test "$SMOKE_IMAGE"

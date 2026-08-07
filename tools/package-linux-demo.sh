@@ -251,6 +251,13 @@ capture_evidence digs-camera-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --camera-self-test
 capture_evidence digs-fixed-step-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --fixed-step-self-test
+# v0.0.4 adds a save layer and a window widget every screen draws through.
+# Both can fail in ways the simulation tests cannot see, so both are shipped
+# as package evidence alongside the determinism logs.
+capture_evidence digs-chronicle-self-test "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --chronicle-self-test
+capture_evidence digs-menu-self-test "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --menu-self-test
 capture_evidence digs-miner-icon "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --render-miner-icon-xpm \
         digs-miner-generated.xpm
