@@ -475,6 +475,14 @@ if (VOX_BUILD_TESTS)
         add_test(NAME digs_chronicle_persistence
             COMMAND digs_demo --chronicle-self-test
                     ${CMAKE_CURRENT_BINARY_DIR}/digs-chronicle-self-test.dat)
+        # Memory that survives a single process is a variable, not memory.
+        # This drives the save layer across real process boundaries, so it
+        # needs a shell rather than one COMMAND.
+        if (UNIX)
+            add_test(NAME digs_memory_across_sessions
+                COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/vox-session-evidence.sh
+                        $<TARGET_FILE:digs_demo>)
+        endif()
         add_test(NAME digs_camera_bounds
             COMMAND digs_demo --camera-self-test)
         add_test(NAME digs_fixed_step_debt

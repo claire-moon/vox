@@ -6,7 +6,7 @@ Purpose
 
 This is the short, guided human-in-the-loop lane for a v0.0.4 candidate. A
 keyboard/mouse pass takes about 30 minutes. Each controller transport adds
-about 8 minutes. It does not replace the 101-checkpoint release pass.
+about 8 minutes. It does not replace the 102-checkpoint release pass.
 
 v0.0.4 is "THE BOTS REMEMBER". The headline change is that the three miners
 carry attitudes between sessions and talk to each other and to you. Most of
@@ -53,6 +53,7 @@ From the extracted Linux x86-64 bundle run:
   ./bin/digs_demo --bark-self-test
   ./bin/digs_demo --chronicle-self-test
   ./bin/digs_demo --menu-self-test
+  ./session-evidence.sh ./bin/digs_demo
   ./bin/digs_demo --haptic-self-test
   ./bin/digs_demo --load-self-test 600
   ./bin/vox_headless
@@ -65,7 +66,15 @@ a failure here; use this release's evidence log, not the previous one.
 
 --chronicle-self-test writes a chronicle, reads it back, and confirms a damaged
 one is refused by its checksum. --menu-self-test walks every menu screen and
-fails if anything draws outside its frame.
+fails if anything draws outside its frame. session-evidence.sh runs the game
+three separate times over one chronicle file and proves that what a match
+teaches the miners is still there on the next launch and changes how the next
+match plays.
+
+That last one covers the mechanism, and only the mechanism. It cannot tell you
+whether a miner reads as holding a grudge, which is the actual feature and the
+reason section 2 below asks you to quit the game and come back. A green
+session-evidence.sh is not a reason to skip it.
 
 If 600 ticks are temporarily too slow while diagnosing an active change,
 `--load-self-test 180` is a reduced quick probe only and cannot pass
@@ -78,7 +87,7 @@ state/frame hashes. These commands do not prove visible output, audible sound,
 controller behavior, or rumble.
 
 Workbook IDs: VOX-QA-022 through 025, VOX-QA-075, VOX-QA-077, VOX-QA-086,
-VOX-QA-087 and VOX-QA-095. Add VOX-QA-088 only for a named-laptop
+VOX-QA-087, VOX-QA-095 and VOX-QA-104. Add VOX-QA-088 only for a named-laptop
 qualification run.
 
 

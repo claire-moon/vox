@@ -8777,6 +8777,248 @@ static void demo_wait_for_frame(Uint64 frequency, int frame_cap,
 }
 
 /*
+ * One phase of the cross-session evidence: what a played match teaches the
+ * miners, the next launch starts with.
+ *
+ * Everything else about the save layer is provable inside one process, and
+ * --chronicle-self-test does that.  This is the part that is not: whether a
+ * match actually writes memory, whether the file carries it across a real
+ * process boundary, and whether the next match starts from it rather than
+ * from nothing.  The phases are separate commands precisely so the test
+ * harness can run them as separate processes -- one process pretending to
+ * relaunch itself would prove noticeably less.
+ *
+ * The clock is supplied rather than read.  digs_chronicle_open takes a stamp,
+ * and passing a fixed one keeps the whole test deterministic while still
+ * exercising the away-time path that decides whether anybody writes.
+ *
+ * Phases:
+ *   fresh   -- open a match with no history, report the opening regard
+ *   record  -- play a match from whatever is on disk, write back what it
+ *              taught them
+ *   verify  -- open a match from the file on disk, report the opening regard
+ *
+ * The harness asserts that `fresh` opens neutral, that `record` moves it, and
+ * that `verify` in a later process sees what `record` left.
+ */
+#define DEMO_SESSION_CLOCK 1700000000UL
+#define DEMO_SESSION_TICKS 900U
+
+static void demo_session_rules(vox_digs_rules *rules)
+{
+    vox_digs_rules_classic(rules);
+    rules->player_count = 4U;
+    rules->bot_mask = (vox_u16)((1U << 2) | (1U << 3));
+    rules->map_style = VOX_DIGS_MAP_DEEPWORKS;
+    rules->weapon_mask = 0x07FFU;
+    rules->fx_budget = VOX_DIGS_FX_CARNAGE;
+    rules->match_ticks = DEMO_SESSION_TICKS + 1200U;
+    rules->lava_start_tick = DEMO_SESSION_TICKS / 2U;
+    rules->score_limit = 0U;
+    rules->respawn_delay_ticks = 0U;
+    rules->seed = 0x5330304DU;
+}
+
+/*
+ * Report the account between the player and one named miner, plus a coarse
+ * total across every pair, so the harness can tell "nothing carried" from
+ * "something carried" without depending on which pair the fighting happened
+ * to land on.
+ */
+static void demo_session_report(const char *phase, const vox_digs_match *match,
+                                const digs_chronicle *chronicle)
+{
+    vox_u16 pair;
+    long carried = 0L;
+    vox_u16 met = 0U;
+    vox_u16 played = 0U;
+    vox_u16 identity;
+    const char *who;
+    for (pair = 0U; pair < VOX_DIGS_MAX_PAIRS; ++pair) {
+        long value = (long)chronicle->memory.regard[pair].valence;
+        carried += value < 0L ? -value : value;
+        met = (vox_u16)(met + chronicle->memory.regard[pair].matches_met);
+    }
+    for (identity = 0U; identity < VOX_DIGS_IDENTITY_COUNT; ++identity) {
+        played = (vox_u16)(played +
+                 chronicle->memory.identities[identity].matches_played);
+    }
+    /*
+     * Report which miner the opening account belongs to rather than assuming
+     * it.  Slot 2's archetype decides its identity, so naming one here would
+     * be a guess that reads as a fact in an evidence log.
+     */
+    pair = vox_digs_pair_index(0U, 2U);
+    identity = vox_digs_memory_identity(match, 2U);
+    /*
+     * Canonical names, not the player's renamed ones: this goes into an
+     * evidence log, where "RIVET" has to mean the archetype rather than
+     * whatever somebody typed into the customize screen.
+     */
+    {
+        static const char *const names[VOX_DIGS_IDENTITY_COUNT + 1U] = {
+            "RIVET", "CINDER", "FLAMEY", "PLAYER", "NOBODY"
+        };
+        who = names[identity <= VOX_DIGS_IDENTITY_COUNT ?
+                    identity : VOX_DIGS_IDENTITY_COUNT];
+    }
+    printf("DIGS session self-test phase=%s launches=%lu matches=%lu "
+           "regard_total=%ld pairs_met=%lu identity_matches=%lu "
+           "opening_with=%s opening_tone=%lu opening_valence=%ld "
+           "hash=%08lx\n",
+           phase,
+           (unsigned long)chronicle->memory.launch_counter,
+           (unsigned long)chronicle->matches_recorded,
+           carried,
+           (unsigned long)met,
+           (unsigned long)played,
+           who,
+           (unsigned long)(pair < VOX_DIGS_MAX_PAIRS ?
+                           match->contracts[pair].tone : 0U),
+           (long)(pair < VOX_DIGS_MAX_PAIRS ?
+                  match->contracts[pair].valence : 0),
+           (unsigned long)match->state_hash);
+}
+
+static int demo_session_self_test(const char *path, const char *phase)
+{
+    static digs_chronicle chronicle;
+    vox_digs_rules rules;
+    int recording = strcmp(phase, "record") == 0;
+    int verifying = strcmp(phase, "verify") == 0;
+    int starting_fresh = strcmp(phase, "fresh") == 0;
+
+    if (!recording && !verifying && !starting_fresh) {
+        fprintf(stderr, "session self-test: phase must be fresh, record or "
+                        "verify\n");
+        return 1;
+    }
+    demo_session_rules(&rules);
+
+    if (starting_fresh) {
+        digs_chronicle_reset(&chronicle);
+        if (vox_digs_match_init_ex(&demo_match, &rules, 0) != VOX_OK) {
+            fprintf(stderr, "session self-test: fresh match init failed\n");
+            return 2;
+        }
+        demo_session_report("fresh", &demo_match, &chronicle);
+        return 0;
+    }
+
+    /*
+     * A verify phase that silently accepted a missing file would pass for the
+     * wrong reason -- it would be reporting a first meeting, which is exactly
+     * what the harness is trying to distinguish from a carried one.
+     */
+    {
+        int loaded = digs_chronicle_load(&chronicle, path);
+        if (verifying && loaded != 1) {
+            fprintf(stderr, "session self-test: no chronicle to verify at %s\n",
+                    path);
+            return 3;
+        }
+        if (chronicle.tampered) {
+            fprintf(stderr, "session self-test: chronicle at %s is damaged\n",
+                    path);
+            return 4;
+        }
+    }
+    digs_chronicle_open(&chronicle, (vox_u32)DEMO_SESSION_CLOCK);
+
+    if (vox_digs_match_init_ex(&demo_match, &rules, &chronicle.memory) !=
+        VOX_OK) {
+        fprintf(stderr, "session self-test: match init failed\n");
+        return 5;
+    }
+
+    if (verifying) {
+        demo_session_report("verify", &demo_match, &chronicle);
+        return 0;
+    }
+
+    /*
+     * Play it.  The input stream is the deterministic one the load self-test
+     * uses: two locals fighting two bots with explosives, which reliably
+     * produces kills, deaths and the stimuli the accounts are built from.
+     */
+    {
+        vox_u32 tick;
+        for (tick = 0U; tick < DEMO_SESSION_TICKS; ++tick) {
+            vox_u16 player;
+            if ((tick % 90U) == 0U) {
+                vox_u32 blast_x = VOX_WORLD_WIDTH / 5U +
+                    (tick / 90U * 67U) % (VOX_WORLD_WIDTH * 3U / 5U);
+                vox_u32 blast_y = VOX_WORLD_HEIGHT * 3U / 5U;
+                (void)vox_world_blast(&demo_match.world, blast_x, blast_y, 0U,
+                                      7U, 700L << 16);
+            }
+            for (player = 0U; player < 2U; ++player) {
+                vox_digs_input input;
+                vox_u16 target = (vox_u16)(player + 2U);
+                long aim_x = demo_match.players[target].position_x.value_q16 /
+                             65536L;
+                long aim_y = demo_match.players[target].position_y.value_q16 /
+                             65536L;
+                memset(&input, 0, sizeof(input));
+                input.abi_version = VOX_ABI_VERSION;
+                input.struct_size = (vox_u32)sizeof(input);
+                input.player = player;
+                input.actions = VOX_DIGS_ACTION_FIRE;
+                if ((tick % 72U) >= 52U) {
+                    input.actions = 0U;
+                }
+                if (((tick / 75U) + player) & 1U) {
+                    input.actions = (vox_u16)(input.actions |
+                                              VOX_DIGS_ACTION_LEFT);
+                    input.move_x_q15 = -24576;
+                } else {
+                    input.actions = (vox_u16)(input.actions |
+                                              VOX_DIGS_ACTION_RIGHT);
+                    input.move_x_q15 = 24576;
+                }
+                /* Somebody has to speak, or the accounts never move. */
+                if ((tick % 150U) == (vox_u32)(player * 45U)) {
+                    input.actions = (vox_u16)(input.actions |
+                                              VOX_DIGS_ACTION_BARK);
+                }
+                if (aim_x < 0L) aim_x = 0L;
+                if (aim_y < 0L) aim_y = 0L;
+                if (aim_x >= (long)VOX_WORLD_WIDTH) {
+                    aim_x = (long)VOX_WORLD_WIDTH - 1L;
+                }
+                if (aim_y >= (long)VOX_WORLD_HEIGHT) {
+                    aim_y = (long)VOX_WORLD_HEIGHT - 1L;
+                }
+                input.aim_x = (vox_u16)aim_x;
+                input.aim_y = (vox_u16)aim_y;
+                input.selected_weapon = VOX_DIGS_TOOL_FIRECRACKER;
+                (void)vox_digs_submit_input(&demo_match, &input);
+            }
+            if (vox_digs_match_step(&demo_match) != VOX_OK) {
+                fprintf(stderr, "session self-test: step failed at %lu\n",
+                        (unsigned long)tick);
+                return 6;
+            }
+        }
+    }
+
+    if (vox_digs_match_export_memory(&demo_match, &chronicle.memory) !=
+        VOX_OK) {
+        fprintf(stderr, "session self-test: memory export failed\n");
+        return 7;
+    }
+    if (chronicle.matches_recorded < 65535U) {
+        chronicle.matches_recorded++;
+    }
+    if (!digs_chronicle_save(&chronicle, path)) {
+        fprintf(stderr, "session self-test: could not write %s\n", path);
+        return 8;
+    }
+    demo_session_report("record", &demo_match, &chronicle);
+    return 0;
+}
+
+/*
  * Prove the chronicle survives a round trip, repairs a mangled file, and
  * records that it was mangled.  This is the one part of the save layer that
  * a player can break from outside the game, so it is the part that has to be
@@ -9182,6 +9424,9 @@ int main(int argc, char **argv)
         const char *path = argc >= 3 ? argv[2] :
                            "/tmp/digs-chronicle-self-test.dat";
         return digs_chronicle_self_test(path);
+    }
+    if (argc >= 4 && strcmp(argv[1], "--session-self-test") == 0) {
+        return demo_session_self_test(argv[2], argv[3]);
     }
 #ifdef DIGS_CHRONICLE_DEBUG
     /*

@@ -263,6 +263,9 @@ capture_evidence digs-chronicle-self-test "$EVIDENCE_DIR" \
         "$EVIDENCE_DIR/digs-chronicle-self-test.dat"
 capture_evidence digs-menu-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --menu-self-test
+capture_evidence digs-session-evidence "$EVIDENCE_DIR" \
+    env VOX_SESSION_DEMO="$BUILD_DIR/digs_demo" \
+        "$ROOT/tools/vox-session-evidence.sh"
 capture_evidence digs-miner-icon "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --render-miner-icon-xpm \
         digs-miner-generated.xpm
@@ -306,6 +309,8 @@ install -m 0755 -- "$ROOT/packaging/linux/smoke-test.sh" \
     "$STAGE_DIR/smoke-test.sh"
 install -m 0755 -- "$ROOT/packaging/linux/benchmark.sh" \
     "$STAGE_DIR/benchmark.sh"
+install -m 0755 -- "$ROOT/tools/vox-session-evidence.sh" \
+    "$STAGE_DIR/session-evidence.sh"
 install -m 0755 -- "$ROOT/packaging/linux/qa-cockpit.sh" \
     "$STAGE_DIR/qa-cockpit.sh"
 install -m 0644 -- "$ROOT/packaging/linux/libexec/vox-runtime.sh" \

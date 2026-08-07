@@ -25,14 +25,20 @@ every machine released since 1990.
 | Chronicle durability | Same host | RUNS | `--chronicle-self-test` round-trips a chronicle and refuses a damaged one by checksum. Recovery from a genuinely corrupted file on disk is VOX-QA-092 and is not automated. |
 | Menu and window layout | Same host; 10 screens | RUNS | `--menu-self-test` walks every screen and fails on content drawn outside its frame. Scrollbar behaviour, wrapping and colour coding are judged by eye in VOX-QA-101 and 102. |
 | Playable payload budget | Staged Release tree | RUNS | 505,735 bytes, 34.2% of the 1,474,560-byte ceiling, 968,825 bytes of headroom. The budget covers the binary plus the staged `share/` tree; documentation, licences and evidence are tester-archive material and excluded. |
-| Four-miner destruction performance | i7-10750H in `power-saver`; GTX 1660 Ti laptop, CPU-authoritative simulation | PLANNED | `--performance-self-test 600` retains the 5 ms average/8 ms p95/16.67 ms maximum gate, but no frozen-tree v0.0.4 qualification run has been recorded. Until one is, this row carries no performance claim. |
-| Bot memory across sessions | Same host | PLANNED | Memory, inbox and contract behaviour are judged across a quit-and-relaunch cycle that no automated lane performs. VOX-QA-089 through 093 are the accepted evidence and are not yet recorded. |
+| Four-miner destruction performance | Named bench: i7-10750H in `power-saver`; GTX 1660 Ti laptop; CPU-authoritative simulation | RUNS | Clean-tree package qualification with `VOX_NAMED_BENCH_QUALIFY=1` records avg 3.074 ms, p95 5.287 ms, max 9.620 ms against the 5 / 8 / 16.67 ms gate, with canonical activity and hash `1acec253`. Five further runs on the same bench held every limit (avg 2.927-3.439, p95 4.999-6.792, max 7.518-13.171), so `max` is the variable metric and the narrowest margin. Recorded with ordinary desktop work running, which makes the result conservative rather than flattering. This is a 600-tick qualification, not the 15-minute soak. |
+| Bot memory across sessions | Same host; three separate processes over one chronicle file | RUNS | `tools/vox-session-evidence.sh` plays a match in one process, writes the chronicle, and opens a match from it in another. The carried accounts arrive intact (regard total 592, three pairs met), the second match opens at valence -136 where a first meeting opens at 0, and its state hash differs from a first meeting's -- so memory reaches the simulation rather than merely being stored. A missing or checksum-failed chronicle is refused rather than reported as a first meeting, which would pass the carry test for the wrong reason. Verified by reintroducing the defect: a build that ignores loaded memory fails exactly the two load-bearing assertions. This proves the mechanism, NOT that any of it reads as a grudge; VOX-QA-089 through 093 remain the human evidence and are still unrecorded. |
 | NVIDIA GTX 1660 Ti rendering | Same laptop | PLANNED | v0.0.4 remains a CPU renderer presented by SDL2. GPU presence is test-bench context, not evidence of graphics acceleration. |
 
 These rows describe the working tree at the time of writing. The v0.0.4
 release checklist, a clean package, the QA workbook, and physical
-controller/audio evidence remain authoritative promotion gates, and the two
-PLANNED rows above are exactly the gaps a tagging run has to close or state.
+controller/audio evidence remain authoritative promotion gates.
+
+One gap is deliberately still open. The cross-session row proves the
+mechanism and nothing about how it feels: a number carried across a relaunch
+is not a grudge a player notices. With no relationship UI by design, whether
+the miners read as characters is carried entirely by the writing and the
+pacing, and only a person can say. That is what `qa/V0.0.4-QUICK-FEEDBACK.txt`
+sections 2, 5 and 8 are for, and no automated result substitutes for them.
 
 ## v0.0.4 test lanes
 

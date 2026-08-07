@@ -91,6 +91,9 @@ fi
 "$BUILD_DIR/digs_demo" --chronicle-self-test \
     "$BUILD_DIR/digs-chronicle-self-test.dat"
 "$BUILD_DIR/digs_demo" --menu-self-test
+# Memory that survives one process is a variable. This drives the save
+# layer across real process boundaries, which no other lane does.
+VOX_SESSION_DEMO="$BUILD_DIR/digs_demo" "$ROOT/tools/vox-session-evidence.sh"
 "$BUILD_DIR/digs_demo" --render-miner-icon-xpm "$MINER_ICON"
 test -s "$MINER_ICON"
 "$BUILD_DIR/digs_demo" --smoke-test "$SMOKE_IMAGE"
