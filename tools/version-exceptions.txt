@@ -31,7 +31,7 @@ CG-README.TXT :: rather than old v0.0.1 values
 
 # Lua was dropped for v0.0.4; the note explains what it was there for and
 # when it left, which requires naming the release it left after.
-THIRD_PARTY.md :: was vendored through
+THIRD_PARTY.md :: was vendored through `v0.0.3`
 
 # The comment explains a behaviour that was deliberately removed, and which
 # release removed it.  Losing the version loses the point of the comment.
@@ -57,12 +57,26 @@ docs/architecture/PHYSICS.md :: Through v0.0.3 this was
 # the *current* release's section is exactly the mistake this gate exists to
 # catch, and a whole-file rule would hide it.
 # ---------------------------------------------------------------------------
-docs/compatibility/MATRIX.md :: v0.0.1
-docs/compatibility/MATRIX.md :: v0.0.2
+# Anchored to the actual sentences rather than to a bare "v0.0.1" / "v0.0.2".
+# A blanket rule made those two versions invisible on every line of the file,
+# including the v0.0.4 rows -- a mistake caught by injecting one.
+docs/compatibility/MATRIX.md :: ## v0.0.2 development-candidate evidence
+docs/compatibility/MATRIX.md :: but v0.0.2 still uploads a CPU-rendered SDL texture
+docs/compatibility/MATRIX.md :: ## v0.0.1 evidence
+docs/compatibility/MATRIX.md :: No GPU backend exists in v0.0.1
+docs/compatibility/MATRIX.md :: [v0.0.1 Linux x86-64 acceptance evidence]
+docs/compatibility/MATRIX.md :: V0.0.1_LINUX_EVIDENCE.md
+docs/compatibility/MATRIX.md :: Required shape | v0.0.1 status
+docs/compatibility/MATRIX.md :: Neither emulator is a v0.0.1 build/runtime dependency
 docs/compatibility/MATRIX.md :: ## v0.0.3 development-candidate evidence
-docs/compatibility/MATRIX.md :: Four-miner deterministic load
-docs/compatibility/MATRIX.md :: NVIDIA GTX 1660 Ti rendering
-docs/compatibility/MATRIX.md :: These rows are implementation-candidate
+# Matched on text unique to the v0.0.3 rows. The row LABELS appear in the
+# v0.0.4 section too, so exempting by label would have quietly covered a wrong
+# version in the current release's evidence -- the precise hole this file is
+# per-line rather than per-file to avoid.
+docs/compatibility/MATRIX.md :: before the v0.0.3 tag
+docs/compatibility/MATRIX.md :: V0.0.3_RELEASE_CHECKLIST.md
+docs/compatibility/MATRIX.md :: v0.0.3 remains a CPU renderer
+docs/compatibility/MATRIX.md :: boundaries. The v0.0.3 release
 docs/compatibility/MATRIX.md :: ## v0.0.3 test lanes
 
 # Added with the v0.0.4 section. The first states what the portable-core
@@ -79,4 +93,9 @@ docs/compatibility/MATRIX.md :: qa/V0.0.3-QUICK-FEEDBACK.txt
 # Warns the tester that the previous release's canonical hash no longer
 # applies. Naming it is the entire content of the warning.
 CG-README.TXT :: the activity counters moved from v0.0.3
-CG-README.TXT :: expectation applied here reads as a failure
+CG-README.TXT :: a v0.0.3 expectation applied here reads as a failure
+
+# The v0.0.4 load row states that v0.0.3's counters no longer apply, which is
+# the one thing a tester most needs told. Its own rule, matched on v0.0.4 text.
+docs/compatibility/MATRIX.md :: These counters differ from v0.0.3 principally
+docs/compatibility/MATRIX.md :: a v0.0.3 expectation applied here reads as a failure

@@ -113,10 +113,25 @@ for file in $files; do
 done
 
 # Apply the exemptions, recording which ones were needed.
+#
+# A rule excuses ITS OWN PHRASE, not the whole line.  Each matching rule's
+# text is cut out of the line and whatever is left is checked again, so a row
+# that legitimately mentions an old release stays covered for every other
+# mention in it.
+#
+# This matters because the compatibility matrix is a table: one row is one
+# very long line, and excusing the whole line for a single historical mention
+# blinded the gate to the rest of that row.  Two realistic mistakes injected
+# into the v0.0.4 section went undetected before this change.
+#
+# It also means a rule has to contain the version it excuses.  Matching on a
+# row label alone excuses nothing, which is the intended pressure: say what
+# you are excusing.
 status=0
 if [ -s "$WORK.hits" ]; then
     while IFS="$(printf '\t')" read -r file line_no text; do
         exempt=0
+        residue=$text
         if [ -r "$EXCEPTIONS" ]; then
             while IFS= read -r rule; do
                 # Comments and blank lines.
@@ -127,24 +142,42 @@ if [ -s "$WORK.hits" ]; then
                 if [ "$rule" = "$rule_path" ]; then
                     # Whole-file exemption.
                     exempt=1
+                    residue=''
                     printf '%s\n' "$rule_path" >> "$WORK.used"
                     break
                 fi
                 rule_text=${rule#*'::'}
                 rule_text=$(printf '%s' "$rule_text" | sed 's/^[[:space:]]*//')
-                case $text in
+                # An empty phrase would match forever and excuse everything.
+                [ -n "$rule_text" ] || continue
+                case $residue in
                     *"$rule_text"*)
-                        exempt=1
+                        # Cut out every occurrence of this rule's phrase and
+                        # keep going: several rules may apply to one line, and
+                        # one phrase may appear more than once in it.
+                        while :; do
+                            case $residue in
+                                *"$rule_text"*)
+                                    residue=${residue%%"$rule_text"*}${residue#*"$rule_text"}
+                                    ;;
+                                *) break ;;
+                            esac
+                        done
                         printf '%s:: %s\n' "$rule_path" "$rule_text" \
                             >> "$WORK.used"
-                        break
                         ;;
                 esac
             done < "$EXCEPTIONS"
         fi
         if [ "$exempt" -eq 0 ]; then
-            printf '  %s:%s: %s\n' "$file" "$line_no" "$text"
-            status=1
+            # Does an old version survive once the excused phrases are gone?
+            residue=$(printf '%s' "$residue" | sed "s/v\{0,1\}$VERSION//g")
+            if printf '%s' "$residue" | grep -q "$PATTERN"; then
+                printf '  %s:%s: %s\n' "$file" "$line_no" "$text"
+                status=1
+            elif [ "$VERBOSE" -eq 1 ]; then
+                printf '  exempt  %s:%s\n' "$file" "$line_no" >&2
+            fi
         elif [ "$VERBOSE" -eq 1 ]; then
             printf '  exempt  %s:%s\n' "$file" "$line_no" >&2
         fi
