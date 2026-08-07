@@ -13,6 +13,42 @@ every machine released since 1990.
 | VERIFIED | Native or reproducible acceptance evidence is recorded |
 | UNSUPPORTED | Explicitly outside the current profile |
 
+## v0.0.4 development-candidate evidence
+
+| Surface | Exact environment | State | Evidence and boundary |
+|---|---|---|---|
+| Strict portable core, ABI 10, and deterministic match | Linux Mint/Ageless Linux x86-64; Intel Core i7-10750H; GCC 13.3 and Clang 18.1; CMake 3.28 | RUNS | Working-tree `./dev.sh check` passes 22/22 with `vox_headless` at `3ca4d8b0` and `digs_headless` at `43c03b9d`. v0.0.4 is ISO C only: the Rust and C++ boundaries of previous releases are gone, so no cargo lane appears in this table. Clean-package and hosted-platform evidence remain separate gates. |
+| Optimisation invariance | Same laptop; GCC 13.3 at `-O0`, `-O1`, `-O2` and `-Os` | RUNS | All four optimisation levels reproduce `vox_headless=3ca4d8b0` and `digs_headless=43c03b9d`. This is a determinism result, not a speed result. |
+| SDL2 visible-region software host and device-clock audio | Same laptop; SDL2 2.30; CPU RGB renderer | RUNS | Non-windowed smoke passes at state `845478cb` and frame `2604ef6a`; input, cap, audio cadence, bark, chronicle, menu, settings, camera-detail, and fixed-step debt self-tests pass. This does not promote the interactive display, audible output, or physical controller paths beyond their manual gates. |
+| Four-miner deterministic load | Portable SDL2 non-windowed host; 600 authoritative ticks | RUNS | Working-tree verification reproduces fired 43, explosions 16, crushes 1, effects 474, awake 10754, and state hash `1acec253`. These counters differ from v0.0.3 principally because bots now breach walls; a v0.0.3 expectation applied here reads as a failure and is not one. No wall-clock assertion is applied, so this is a correctness/load result rather than a speed claim. |
+| Saved history excluded from the canonical hash | Same host; pref paths with and without an accumulated chronicle | RUNS | `--load-self-test 600` prints `1acec253` regardless of how much history the pref path holds, and `test_the_clock_stays_out_of_the_hash` fails if a wall-clock value re-enters the digest. This is the determinism boundary RFC 0003 rests on; VOX-QA-094 is its human lane. |
+| Chronicle durability | Same host | RUNS | `--chronicle-self-test` round-trips a chronicle and refuses a damaged one by checksum. Recovery from a genuinely corrupted file on disk is VOX-QA-092 and is not automated. |
+| Menu and window layout | Same host; 10 screens | RUNS | `--menu-self-test` walks every screen and fails on content drawn outside its frame. Scrollbar behaviour, wrapping and colour coding are judged by eye in VOX-QA-101 and 102. |
+| Playable payload budget | Staged Release tree | RUNS | 505,735 bytes, 34.2% of the 1,474,560-byte ceiling, 968,825 bytes of headroom. The budget covers the binary plus the staged `share/` tree; documentation, licences and evidence are tester-archive material and excluded. |
+| Four-miner destruction performance | i7-10750H in `power-saver`; GTX 1660 Ti laptop, CPU-authoritative simulation | PLANNED | `--performance-self-test 600` retains the 5 ms average/8 ms p95/16.67 ms maximum gate, but no frozen-tree v0.0.4 qualification run has been recorded. Until one is, this row carries no performance claim. |
+| Bot memory across sessions | Same host | PLANNED | Memory, inbox and contract behaviour are judged across a quit-and-relaunch cycle that no automated lane performs. VOX-QA-089 through 093 are the accepted evidence and are not yet recorded. |
+| NVIDIA GTX 1660 Ti rendering | Same laptop | PLANNED | v0.0.4 remains a CPU renderer presented by SDL2. GPU presence is test-bench context, not evidence of graphics acceleration. |
+
+These rows describe the working tree at the time of writing. The v0.0.4
+release checklist, a clean package, the QA workbook, and physical
+controller/audio evidence remain authoritative promotion gates, and the two
+PLANNED rows above are exactly the gaps a tagging run has to close or state.
+
+## v0.0.4 test lanes
+
+| Lane | Required commands or artifact | What a successful result can prove | What it cannot prove |
+|---|---|---|---|
+| Linux x86-64 full candidate | `tools/vox-verify.sh`, clean `tools/package-linux-demo.sh`, package evidence, and `qa/V0.0.4-QUICK-FEEDBACK.txt` followed by the full workbook | Strict scalar/NASM build parity, automated host behavior, packaged data/source identity, the size budget, and the explicitly observed laptop/device paths | GPU acceleration, bot memory across sessions, or any untested controller, transport, OS, driver, display, or historical target |
+| Conversation and memory | `qa/V0.0.4-QUICK-FEEDBACK.txt` sections 2, 5 and 8 with logs attached | That the miners carry attitudes across a relaunch, that pacing and interruption read correctly by ear, and that the Options reset does what it says | Anything about a different seed, personality mix, or session history than the one recorded |
+| Windows x64 portable core | `portable-core / Windows x64 MSVC` Actions job | Compile/link plus native CTest for the scalar/headless boundary on the named hosted image | SDL2 gameplay host, Win32 input/audio/haptics, installer, historical Windows, or physical performance |
+| macOS Intel portable core | `portable-core / macOS 15 Intel Clang` Actions job | Compile/link plus native CTest for the scalar/headless boundary on the named hosted image | SDL2/Quartz gameplay host, CoreAudio, controllers, app bundle, Apple Silicon, or physical performance |
+| Linux i686 portability probe | `portable core / Linux i686 multilib` Actions job | 32-bit compile/link and test execution for the portable scalar/headless boundary | A historical distribution, 32-bit SDL host, memory-budget fitness, period drivers, or period CPU speed |
+
+The portable-core matrix is now the whole of the ISO C portability claim.
+Through v0.0.3 a Rust boundary and a C++98 translation unit were also
+exercised; v0.0.4 has neither, so these three lanes are the only mechanical
+evidence that the core compiles and runs as ISO C90 off this laptop.
+
 ## v0.0.3 development-candidate evidence
 
 | Surface | Exact environment | State | Evidence and boundary |
@@ -35,7 +71,7 @@ remain authoritative promotion gates.
 
 | Lane | Required commands or artifact | What a successful result can prove | What it cannot prove |
 |---|---|---|---|
-| Linux x86-64 full candidate | `tools/vox-verify.sh`, clean `tools/package-linux-demo.sh`, package evidence, and `qa/V0.0.4-QUICK-FEEDBACK.txt` followed by the full workbook | Strict scalar/NASM build parity, automated host behavior, packaged data/source identity, and the explicitly observed laptop/device paths | GPU acceleration or any untested controller, transport, OS, driver, display, or historical target |
+| Linux x86-64 full candidate | `tools/vox-verify.sh`, clean `tools/package-linux-demo.sh`, package evidence, and `qa/V0.0.3-QUICK-FEEDBACK.txt` followed by the full workbook | Strict scalar/NASM build parity, automated host behavior, packaged data/source identity, and the explicitly observed laptop/device paths | GPU acceleration or any untested controller, transport, OS, driver, display, or historical target |
 | Windows x64 portable core | `portable-core / Windows x64 MSVC` Actions job | Compile/link plus native CTest and Rust results for the scalar/headless boundary on the named hosted image | SDL2 gameplay host, Win32 input/audio/haptics, installer, historical Windows, or physical performance |
 | macOS Intel portable core | `portable-core / macOS 15 Intel Clang` Actions job | Compile/link plus native CTest and Rust results for the scalar/headless boundary on the named hosted image | SDL2/Quartz gameplay host, CoreAudio, controllers, app bundle, Apple Silicon, or physical performance |
 | Linux i686 portability probe | `portable core / Linux i686 multilib` Actions job | 32-bit compile/link and test execution for the portable scalar/headless boundary | A historical distribution, 32-bit SDL host, memory-budget fitness, period drivers, or period CPU speed |

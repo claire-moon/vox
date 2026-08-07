@@ -64,3 +64,9 @@ docs/compatibility/MATRIX.md :: Four-miner deterministic load
 docs/compatibility/MATRIX.md :: NVIDIA GTX 1660 Ti rendering
 docs/compatibility/MATRIX.md :: These rows are implementation-candidate
 docs/compatibility/MATRIX.md :: ## v0.0.3 test lanes
+
+# Added with the v0.0.4 section. The first states what the portable-core
+# matrix replaced; the second is the v0.0.3 lane's own requirement, and
+# pointing it at the v0.0.4 form would misrecord what that lane asked for.
+docs/compatibility/MATRIX.md :: Through v0.0.3 a Rust boundary
+docs/compatibility/MATRIX.md :: qa/V0.0.3-QUICK-FEEDBACK.txt
