@@ -7,7 +7,7 @@ umask 022
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 DIST_DIR=${VOX_PACKAGE_DIST_DIR:-"$ROOT/dist"}
-VERSION=${VOX_PACKAGE_VERSION:-v0.0.3}
+VERSION=${VOX_PACKAGE_VERSION:-$("$ROOT/tools/vox-version.sh" --tag)}
 ARCHIVE_STEM="vox-digs-$VERSION-linux-x86_64"
 SOURCE_STEM="vox-digs-$VERSION-source"
 BINARY_ARCHIVE="$DIST_DIR/$ARCHIVE_STEM.tar.gz"
@@ -300,7 +300,7 @@ install -m 0644 -- "$ROOT/packaging/linux/libexec/vox-runtime.sh" \
     "$STAGE_DIR/libexec/vox-runtime.sh"
 copy_file "$ROOT/packaging/linux/START-HERE.txt" "$STAGE_DIR/START-HERE.txt"
 copy_file "$ROOT/CG-README.TXT" "$STAGE_DIR/CG-README.TXT"
-copy_file "$ROOT/qa/V0.0.3-QUICK-FEEDBACK.txt" \
+copy_file "$ROOT/qa/V0.0.4-QUICK-FEEDBACK.txt" \
     "$STAGE_DIR/QUICK-FEEDBACK.txt"
 
 copy_file "$ROOT/LICENSE" "$STAGE_DIR/LICENSE"

@@ -71,6 +71,10 @@ run_tests() {
 }
 
 run_gates() {
+    say "Version"
+    # Cheap and total, so it runs first: a wrong number here is only ever
+    # noticed after somebody downloads the wrong thing.
+    "$ROOT/tools/vox-version-check.sh"
     say "Size budget"
     "$ROOT/tools/vox-size-report.sh" "$BUILD_DIR" |
         grep -E '^(payload_bytes|payload_pct_ceiling|headroom_bytes|status)='

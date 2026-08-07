@@ -126,8 +126,8 @@ REPORT=$RUN_DIR/REPORT.md
 SYSTEM=$RUN_DIR/system.txt
 mkdir -p "$EXPORT_DIR" "$WORKBOOK_DIR" "$LOG_DIR" ||
     die "cannot create output directory: $RUN_DIR"
-if [ -r "$ROOT/qa/V0.0.3-QUICK-FEEDBACK.txt" ]; then
-    cp "$ROOT/qa/V0.0.3-QUICK-FEEDBACK.txt" \
+if [ -r "$ROOT/qa/V0.0.4-QUICK-FEEDBACK.txt" ]; then
+    cp "$ROOT/qa/V0.0.4-QUICK-FEEDBACK.txt" \
         "$RUN_DIR/QUICK-FEEDBACK.txt" ||
         die "cannot copy the guided quick-feedback artifact"
 fi

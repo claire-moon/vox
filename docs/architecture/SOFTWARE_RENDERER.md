@@ -43,7 +43,7 @@ canonical material array and match hash remain untouched. Custom menu/HUD text
 is composited afterward as a separate RGB layer.
 
 The renderer owns two fixed world-sized light fields plus solid and surface
-caches, so this v0.0.3 scalar implementation is allocation-free but not
+caches, so this v0.0.4 scalar implementation is allocation-free but not
 reentrant. A host must serialize calls. A future worker implementation may use
 caller-owned scratch arenas and chunk-dirty recomputation after proving
 byte-stable results against this path.

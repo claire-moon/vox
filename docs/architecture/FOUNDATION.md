@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# v0.0.3 foundation
+# v0.0.4 foundation
 
 The first demo proves a complete bounded path from input to authoritative
 materials and bodies to a lit graphical frame. It does not establish the final
@@ -25,7 +25,7 @@ C89 material world   C++98 fixed-point bodies
  SDL2 texture / custom UI / VOX Audio v2
 ```
 
-The active v0.0.3 profile is `512 x 320 x 10`, split into 640
+The active v0.0.4 profile is `512 x 320 x 10`, split into 640
 `16 x 16 x 10` chunks. Its 1,638,400 cells are exactly forty times the
 original demo volume and four times the v0.0.1 dense profile. That expanded
 space supports seed-selected archipelagos, continents, twin hills, broad sky,

@@ -1,7 +1,7 @@
-DIGS v0.0.3 - CG QUICK-START AND TEST GUIDE
+DIGS v0.0.4 - CG QUICK-START AND TEST GUIDE
 ===========================================
 
-This is the Linux x86-64 CPU-rendered v0.0.3 demo candidate. DIGS uses the
+This is the Linux x86-64 CPU-rendered v0.0.4 demo candidate. DIGS uses the
 VOX simulation engine, but the game title is simply DIGS. The game does not
 use the GTX 1660 Ti yet; this build is deliberately testing the portable CPU
 software path.
@@ -294,7 +294,7 @@ cap test validates deterministic cap qualification, the cadence test proves
 audio sample timing is independent of rendered frames, the bark test checks
 all curated slots and unknown-word phonetics, the haptic test checks mixer
 levels and isolation without requiring a pad, the performance test enforces
-the v0.0.3 four-miner simulation budget only on the named laptop bench, and
+the v0.0.4 four-miner simulation budget only on the named laptop bench, and
 the settings test checks schema migration without changing real user settings.
 The load test is the portable gate: at 600 ticks it validates exact activity
 and state hash c37e44b6 without applying machine timing limits. Run the strict
@@ -311,10 +311,10 @@ The package-time versions of these checks, CTest, Cargo tests, script
 validation, and raw exit statuses are under evidence/.
 
 
-8. MANUAL v0.0.3 PLAYTEST
+8. MANUAL v0.0.4 PLAYTEST
 -------------------------
 
-For a shorter first report, use qa/V0.0.3-QUICK-FEEDBACK.txt (or the packaged
+For a shorter first report, use qa/V0.0.4-QUICK-FEEDBACK.txt (or the packaged
 QUICK-FEEDBACK.txt). It is a guided 20-minute keyboard/mouse lane with separate
 F310 and Switch Pro USB/Bluetooth additions and exact workbook checkpoint IDs.
 It finds regressions quickly but does not replace the complete list below.
@@ -434,7 +434,7 @@ On Debian-family systems the package name is python3-openpyxl.
 For an explicitly non-release package from a dirty development tree only:
 
   VOX_PACKAGE_ALLOW_DIRTY=1 \
-  VOX_PACKAGE_VERSION=v0.0.3-dev \
+  VOX_PACKAGE_VERSION=v0.0.4-dev \
   tools/package-linux-demo.sh
 
 
@@ -449,7 +449,7 @@ Both archives must report OK. The binary bundle contains SBOM.spdx.json, raw
 package-time evidence, GPL notices, and launch/test scripts.
 The matching Corresponding Source archive is distributed beside it.
 
-v0.0.3 publishes easy-run Linux and Windows x86-64 bundles. The exposed game
+v0.0.4 publishes easy-run Linux and Windows x86-64 bundles. The exposed game
 renderer remains the CPU-software vertical slice. macOS, historical operating
 systems, a GPU renderer, network multiplayer, a complete rigid-body solver,
 device-specific remapping wizards for every unknown pad, and final competitive

@@ -12,6 +12,7 @@
 #include "digs_lines.h"
 #include "digs_chronicle.h"
 #include "vox/vox_render.h"
+#include "vox/vox_version.h"
 #include "vox_sdl_ui.h"
 
 #define DEMO_WIDTH 320U
@@ -9361,7 +9362,7 @@ int main(int argc, char **argv)
     demo_load_controller_mappings();
     (void)SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
     (void)SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
-    app.window = SDL_CreateWindow("DIGS v0.0.3 Demo",
+    app.window = SDL_CreateWindow(VOX_VERSION_TITLE " Demo",
                                   SDL_WINDOWPOS_CENTERED,
                                   SDL_WINDOWPOS_CENTERED,
                                   DEMO_WINDOW_WIDTH, DEMO_WINDOW_HEIGHT,

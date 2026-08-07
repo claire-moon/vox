@@ -1,4 +1,4 @@
-DIGS v0.0.3 package-time evidence
+DIGS v0.0.4 package-time evidence
 ========================================
 
 Each named command has an unmodified stdout stream, unmodified stderr stream,

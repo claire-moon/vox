@@ -1,0 +1,66 @@
+# Surfaces allowed to name a version other than the one in VERSION.
+# Read by tools/vox-version-check.sh.
+#
+# Two forms:
+#
+#   path                  every line in the file is exempt
+#   path :: substring     only lines containing the substring are exempt
+#
+# Every rule needs a reason.  A rule that matches nothing fails the check --
+# a stale exemption is a hole waiting for the next mistake to fall into, so
+# the list cannot quietly rot.
+#
+# The bar for adding one: the text is describing project history, not this
+# build.  "What changed since v0.0.3" has to be able to say v0.0.3.  If the
+# text tells a player what to download or what they are running, it is not an
+# exception; it is a bug.
+
+# ---------------------------------------------------------------------------
+# Whole files: records of previous releases, and documents organised by version
+# ---------------------------------------------------------------------------
+
+# A version-by-version roadmap.  Naming old releases is the entire point.
+ROADMAP.txt
+
+# ---------------------------------------------------------------------------
+# Individual historical statements inside otherwise-live documents
+# ---------------------------------------------------------------------------
+
+# Tells the tester not to compare against a two-release-old evidence log.
+CG-README.TXT :: rather than old v0.0.1 values
+
+# Lua was dropped for v0.0.4; the note explains what it was there for and
+# when it left, which requires naming the release it left after.
+THIRD_PARTY.md :: was vendored through
+
+# The comment explains a behaviour that was deliberately removed, and which
+# release removed it.  Losing the version loses the point of the comment.
+games/digs/digs_game.c :: That was the v0.0.2 behaviour
+games/digs/digs_game.c :: v0.0.3 removed on purpose
+
+# Architecture notes comparing today's profile against the original ones.
+docs/architecture/ACCELERATION.md :: `v0.0.1` includes one deliberately small
+docs/architecture/CHUNKED_WORLD.md :: four times the v0.0.1 dense slab
+docs/architecture/FOUNDATION.md :: four times the v0.0.1 dense profile
+docs/architecture/TERRAIN_TOOLS.md :: DIGS `v0.0.1` defines ten stable weapon
+# The physics core stopped being C++98 in v0.0.4; the sentence dates that.
+docs/architecture/PHYSICS.md :: Through v0.0.3 this was
+
+# ---------------------------------------------------------------------------
+# docs/compatibility/MATRIX.md
+#
+# Structured as one evidence section per release.  Older sections are frozen
+# records of what was actually observed at the time and must not be edited to
+# say v0.0.4 -- that would be claiming evidence that was never collected.
+#
+# Exempted per line rather than whole-file on purpose: a wrong version inside
+# the *current* release's section is exactly the mistake this gate exists to
+# catch, and a whole-file rule would hide it.
+# ---------------------------------------------------------------------------
+docs/compatibility/MATRIX.md :: v0.0.1
+docs/compatibility/MATRIX.md :: v0.0.2
+docs/compatibility/MATRIX.md :: ## v0.0.3 development-candidate evidence
+docs/compatibility/MATRIX.md :: Four-miner deterministic load
+docs/compatibility/MATRIX.md :: NVIDIA GTX 1660 Ti rendering
+docs/compatibility/MATRIX.md :: These rows are implementation-candidate
+docs/compatibility/MATRIX.md :: ## v0.0.3 test lanes

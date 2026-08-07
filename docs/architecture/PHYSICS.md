@@ -13,7 +13,7 @@ markers were removed and nothing else changed. The conversion is verifiable —
 their pre-conversion hashes exactly. Dropping the C++ language also removed the
 `libstdc++` and `libgcc_s` runtime dependencies from every shipped binary.
 
-The v0.0.3 body is an axis-aligned fixed-point capsule proxy with Q16.16
+The v0.0.4 body is an axis-aligned fixed-point capsule proxy with Q16.16
 position, velocity, and half extents. Each 60 Hz tick applies saturating
 gravity, clamps speed, then resolves horizontal movement before vertical
 movement through bounded one-sixteenth-cell substeps. A projected side-view

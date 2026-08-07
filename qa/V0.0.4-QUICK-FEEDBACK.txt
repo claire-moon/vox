@@ -1,0 +1,327 @@
+DIGS v0.0.4 QUICK FEEDBACK RUN
+================================
+
+Purpose
+-------
+
+This is the short, guided human-in-the-loop lane for a v0.0.4 candidate. A
+keyboard/mouse pass takes about 30 minutes. Each controller transport adds
+about 8 minutes. It does not replace the 101-checkpoint release pass.
+
+v0.0.4 is "THE BOTS REMEMBER". The headline change is that the three miners
+carry attitudes between sessions and talk to each other and to you. Most of
+that cannot be judged in a single match: sections 2 and 7 deliberately ask you
+to quit the game and come back, and section 7 is the only part of this run that
+cannot be shortened.
+
+Record only what you actually observe. A successful Linux test does not prove
+Windows, macOS, a historical operating system, GPU acceleration, Bluetooth,
+or vibration on hardware that was not used. Mark unavailable checks Blocked or
+Not Run in qa/VOX_QA_FEEDBACK.xlsx.
+
+
+0. IDENTIFY THE RUN (2 MINUTES)
+--------------------------------
+
+1. Extract the complete tester archive; do not copy bin/digs_demo by itself.
+2. Copy qa/VOX_QA_FEEDBACK.xlsx to a new tester-named .xlsx file.
+3. Fill the Environment sheet first. At minimum record:
+
+     build ID and binary SHA-256       OS, architecture, CPU and power profile
+     display resolution / refresh      SDL2 and audio backend/device
+     controller model, GUID, transport and prompt family
+     P1/P2 ownership and rope mode      haptics, Laptop and Dummy settings
+     qualified cap result               seed, local players and bots
+
+4. Use one visible seed for this entire run. Enable F1 diagnostics and capture
+   one opening screenshot containing the seed, cap, tick and state hash.
+5. Note whether this pref path already holds a chronicle from earlier play. A
+   first-ever launch and a returning launch are different tests, and section 2
+   needs to know which one you started from.
+
+Workbook IDs: VOX-QA-089 environment context.
+
+
+1. NON-WINDOWED GATE (3-6 MINUTES)
+-----------------------------------
+
+From the extracted Linux x86-64 bundle run:
+
+  ./smoke-test.sh
+  ./bin/digs_demo --cap-self-test
+  ./bin/digs_demo --audio-cadence-self-test
+  ./bin/digs_demo --bark-self-test
+  ./bin/digs_demo --chronicle-self-test
+  ./bin/digs_demo --menu-self-test
+  ./bin/digs_demo --haptic-self-test
+  ./bin/digs_demo --load-self-test 600
+  ./bin/vox_headless
+  ./bin/digs_headless
+
+The load command must reproduce fired 43, explosions 16, crushes 1, effects
+474, awake 10754, and hash 1acec253 without judging host speed. These counters
+moved from v0.0.3 because bots now dig, so a v0.0.3 expectation will look like
+a failure here; use this release's evidence log, not the previous one.
+
+--chronicle-self-test writes a chronicle, reads it back, and confirms a damaged
+one is refused by its checksum. --menu-self-test walks every menu screen and
+fails if anything draws outside its frame.
+
+If 600 ticks are temporarily too slow while diagnosing an active change,
+`--load-self-test 180` is a reduced quick probe only and cannot pass
+VOX-QA-087. On the named i7-10750H laptop bench only, run
+`--performance-self-test 600` or set VOX_NAMED_BENCH_QUALIFY=1 for
+smoke-test.sh to attempt VOX-QA-088's strict 5/8/16.67 ms qualification.
+Keep every printed hash and exit status. Run smoke-test.sh twice when
+investigating determinism; the same frozen binary must print the same
+state/frame hashes. These commands do not prove visible output, audible sound,
+controller behavior, or rumble.
+
+Workbook IDs: VOX-QA-022 through 025, VOX-QA-075, VOX-QA-077, VOX-QA-086,
+VOX-QA-087 and VOX-QA-095. Add VOX-QA-088 only for a named-laptop
+qualification run.
+
+
+2. WHAT THE MINERS REMEMBER (6 MINUTES PLUS A RELAUNCH)
+--------------------------------------------------------
+
+This is the release's headline feature and the easiest thing to mis-test. Do
+not judge it inside one match.
+
+1. Play one full match against all three bots. Pick a fight with exactly one
+   of them: kill it repeatedly and ignore the other two. Note which miner you
+   antagonised and keep the log.
+2. Quit to the desktop. Do not use the Options reset.
+3. Relaunch and start a new match with the same three bots. Read the opening
+   exchanges before doing anything else.
+
+The miner you antagonised should open colder or more hostile than the two you
+left alone, and should refer to what happened rather than to a generic mood.
+Neutral openings from all three mean memory did not survive the relaunch;
+record it as VOX-QA-089 Fail with both logs attached.
+
+4. Open INBOX from the main menu. On a relaunch that followed immediately, it
+   must read NO MAIL TODAY rather than showing an empty frame. To test the
+   filled case, quit, move the system clock forward by a day, and relaunch:
+   one or more miners should have left an attributed message in their own
+   voice. Opening one clears its unread mark and drops the (N) beside INBOX.
+5. Restore the system clock before continuing.
+
+Workbook IDs: VOX-QA-089, 090 and 091.
+
+
+3. KEYBOARD/MOUSE STABILITY AND COMBAT (8 MINUTES)
+---------------------------------------------------
+
+Start Full Works with one local miner and one bot. Wait out the five-second
+spawn shield before judging damage.
+
+1. Move, jump, and use short and long steampack burns. Cross a gap, reverse,
+   glide, touch a slope and a ceiling, and verify there is no position jump.
+2. Dig beside and below the miner. Remove support, trigger a collapse into the
+   miner, and blast the same area repeatedly. A bounded push or one ordinary
+   crush death is valid; a distant teleport is not.
+3. Shoot the bot's head, torso and a limb with the Nail Gun and Shotgun, then
+   use an explosive. Confirm visible hits reduce health exactly once and a
+   legitimate death, gore/dismemberment and delayed respawn are distinct.
+4. Repeat blasts against a wall and watch all debris settle or expire. Report
+   any upward-moving column or one-cell needle tower with seed/tick/location.
+5. Charge the Mining Rail with minus selected. Tap once, then fully charge
+   through soft terrain toward the bot; repeat against stone/bedrock. Confirm
+   tell, penetration/stop, anatomy result, recoil, afterimage and cooldown.
+6. Use mouse-wheel zoom at the world edges and above lava. The hardware aim and
+   single software reticle must agree; close zoom reveals more voxel/light
+   detail; lava has one world position; no black frame is exposed.
+7. New in v0.0.4: watch a bot that is walled in. It should cut its way out with
+   a breaching tool rather than grinding against the wall. A bot that stands
+   still against terrain for more than a few seconds is a defect; record the
+   seed and location.
+
+Workbook IDs: VOX-QA-066 through 069, 073, 074, 082 and 085.
+
+
+4. ROPE AND FEEDBACK (4 MINUTES)
+--------------------------------
+
+1. Test P1 Hold mode: cast to stable high material, swing, reel, reverse around
+   a corner and release. Destroy the occupied anchor.
+2. Switch P1 to Toggle and repeat. A miss must not auto-retry. The two modes
+   must follow release versus a fresh press respectively.
+3. After spawn protection ends, strike the bot with the hook head. The cast
+   ends and the living target becomes exactly 1 HP; the cable is harmless.
+   Repeat during a new spawn shield and confirm all damage/knockback is blocked.
+4. Listen for hit/kill/rail/rope feedback. Speech bubbles and chip voice must
+   agree.
+
+Workbook IDs: VOX-QA-068, 070 through 072, 077 and 083.
+
+
+5. THE CONVERSATION (8 MINUTES)
+--------------------------------
+
+The bark button is the whole interface to this system. Everything below is
+judged by ear.
+
+1. Start Full Works with one local miner and three bots. Play several minutes
+   WITHOUT pressing the bark button. The player character must never speak on
+   its own. The bots should talk among themselves in bursts, with quiet
+   stretches between; at most one speech bubble may be on screen at any moment.
+   Wall-to-wall chatter and total silence are both failures.
+2. Now press the bark button in a range of situations: after a kill, after
+   dying, while digging, while being shot at, and next to a specific miner.
+   Every press must produce exactly one line, and the line must fit what is
+   happening. A press that produces nothing is a defect even if the next press
+   works.
+3. Aim at one particular miner and press bark. That miner should be the subject
+   of the line and the most likely to answer.
+4. Time the replies per archetype. RIVET should nearly always let you finish;
+   CINDER should talk over you often; FLAMEY should be inconsistent. If any
+   archetype interrupts every single time, record VOX-QA-099 Fail with timings.
+5. Cut a bot off deliberately by pressing bark while its bubble is up. Its
+   bubble should disappear -- being able to talk over somebody is intended.
+6. Watch for an exchange that escalates and one that cools off. A row should
+   read as a row, ending on a line that fits how it ended, rather than as three
+   unrelated insults.
+7. Play one match alone with no bots and press bark repeatedly with a few
+   seconds between presses. The lines must follow from each other as one train
+   of thought, not restart from unrelated openers, and must not repeat.
+
+Count roughly how many lines a match produces with and without your own
+presses. Pressing bark should visibly raise how much the bots say.
+
+Workbook IDs: VOX-QA-096 through 100.
+
+
+6. INTERFACE (4 MINUTES)
+-------------------------
+
+1. Open every menu screen in turn: options, customize, inbox and log. On each,
+   move the selection to the last entry with the keyboard, then a controller,
+   then the mouse wheel. Nothing may draw over the title or the footer. A
+   screen with more entries than fit must show a scrollbar, must scroll the
+   selection into view, and after scrolling the mouse must select the row
+   actually under the pointer.
+2. Play until the log holds several long lines, then open LOG and read it top
+   to bottom. No line may be truncated; continuations are indented under the
+   speaker's name; the scrollbar must reach both the first and last entry.
+3. Check that each miner's messages are colour-coded and that the player's own
+   are white.
+
+Workbook IDs: VOX-QA-101 and 102.
+
+
+7. FRAME, AUDIO AND LAPTOP PARITY (3 MINUTES)
+----------------------------------------------
+
+1. In Options, inspect 15/30/60/90/120/144/Unlimited. Unsupported caps must be
+   visibly gated. Test 15, one qualified high cap, and Unlimited briefly.
+2. At each tested cap, navigate menus, zoom, fire, hear a bark and cause an
+   explosion. Pitch, duration and cadence must not follow presentation FPS.
+3. Set Master Volume 0 and confirm silence without a gameplay change.
+4. Restart the recorded seed/input setup with Laptop Mode Off then On. Compare
+   final state hashes. Presentation may change; terrain, damage, bots, effects
+   simulation and the hash may not.
+5. New in v0.0.4: the saved history must not reach the simulation. Run
+   `--load-self-test 600` on a pref path with a long history and on a fresh
+   one. Both must print the same canonical hash. A difference here is a
+   determinism defect and outranks everything else in this document.
+
+Workbook IDs: VOX-QA-061, 075 through 077, 084 when doing the long soak, and
+VOX-QA-094.
+
+
+8. THE RESET, LAST (2 MINUTES)
+-------------------------------
+
+Do this only after sections 2 and 5 are complete, because it destroys what
+they test.
+
+1. Open Options and select the memory reset entry. It must state what it
+   destroys and require a second deliberate press.
+2. Back out after the first press and confirm the history is intact.
+3. Now confirm it, and play one match. The miners must treat you as a stranger.
+
+The reset exists in the released build at the lead's explicit request. Note
+that docs/rfcs/0003 records the design intent that history be unrepeatable,
+so this entry is a deliberate exception rather than an oversight.
+
+Workbook IDs: VOX-QA-092 and 093.
+
+
+9. CONTROLLER ADD-ON (8 MINUTES PER TRANSPORT)
+-----------------------------------------------
+
+Never infer one controller family or transport from another. Capture the SDL
+name/GUID and prompt screenshot without recording a hardware serial number.
+
+Logitech F310:
+
+  - Unplug before moving the rear X/D switch; reconnect and calibrate centered.
+  - Run once in X mode and once in D mode. Lock CONTROLLER, then test AUTO.
+  - Check centered/noisy stick ownership, circular deadzone, diagonals, aim
+    slowdown, one reticle, fire, rope, steampack, bark, pause and ZL/LT plus
+    right-stick vertical zoom. Record whether D mode used raw fallback.
+
+Nintendo Switch Pro Controller:
+
+  - Run USB and Bluetooth as separate passes, including hotplug/reconnect.
+  - Confirm Nintendo A/B/X/Y, L/R, ZL/ZR, Plus/Minus and stick-click prompts
+    match the physical control used; do not accept Xbox-position labels.
+  - Test Off/Low/Normal/Heavy vibration for own fire, rope hit, rail charge and
+    release, nearby/distant explosion, damage, kill and crumble. Confirm Off is
+    silent, levels are distinct, distant bot-only action does not vibrate, and
+    no motor sticks. A driver that exposes no rumble is Blocked, not Pass.
+
+Workbook IDs: VOX-QA-033, 034, 042, 043, 070, and 078 through 082.
+
+
+10. TWO-PLAYER / BOT QUICK SOAK (5 MINUTES)
+--------------------------------------------
+
+Use two local players plus two bots, Carnage FX, rising lava and Full Works.
+With one pad, verify P1 keyboard/mouse and P2 controller stay isolated. With
+two pads, verify deterministic claims and no crossover. Separate humans so the
+shared camera must frame both, then combine explosions, rope, rail, steampack
+and barks. Look specifically for teleport, missed damage, debris towers, audio
+dropout, stuck rumble, black camera edges, tick debt or a crash.
+
+The release soak is 15 minutes and has explicit 5 ms average / 8 ms p95 /
+16.67 ms maximum simulation targets on the named i7-10750H power-saver bench.
+A five-minute quick soak is useful defect discovery but cannot pass that gate.
+
+Workbook IDs: VOX-QA-014, 030, 037, 043, 065 and 084.
+
+
+11. RETURN USEFUL FEEDBACK (2 MINUTES)
+---------------------------------------
+
+For each executed checkpoint select Pass, Fail, Blocked or Skip. Leave every
+other row Not Run. For each distinct defect add one Issues row with checkpoint
+ID, build/SHA, platform, exact seed/tick, controller/transport, minimal steps,
+expected behavior, actual behavior and the smallest useful evidence path.
+
+For anything in sections 2, 5 or 8, attach the log. The conversation system is
+judged on what was actually said, and a description of a bad line is much less
+useful than the line.
+
+If xleak is installed, package the reviewed workbook and automation logs:
+
+  ./qa-cockpit.sh --binary ./bin/digs_demo your-tester-copy.xlsx
+
+The cockpit writes only under qa/out/ and uploads nothing. Review its report,
+logs, screenshots and copied workbook for private information before sharing.
+The chronicle records what you and the miners said to each other; treat it as
+you would any other personal file before attaching it.
+
+
+PLATFORM EVIDENCE BOUNDARY
+--------------------------
+
+Linux x86-64 is the only playable package in v0.0.4. The repository CI defines
+modern Windows x64, macOS Intel and Linux i686 portable-core lanes with SDL/NASM
+disabled where appropriate. Until a particular CI run is green, each lane is
+only configured, not BUILDS or RUNS evidence. Even a green core lane does not
+prove that platform's SDL window, audio, input, haptics, packaging or native
+performance. DOS, Windows 3.x/9x/NT4/2000/XP, classic Mac, PowerPC, 68k and
+period graphics/audio adapters remain planned adapter/lab targets requiring
+QEMU, 86Box and eventually native-hardware evidence.

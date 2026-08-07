@@ -1,4 +1,4 @@
-DIGS v0.0.3 DEMO - Linux x86_64
+DIGS v0.0.4 DEMO - Linux x86_64
 ================================
 
 1. Extract the complete archive.

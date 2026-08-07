@@ -46,7 +46,15 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     if ($env:VOX_PACKAGE_VERSION) {
         $Version = $env:VOX_PACKAGE_VERSION
     } else {
-        $Version = 'v0.0.3'
+        # Same single source as CMake and the Linux packager: the VERSION file
+        # at the root of the tree.  Read directly rather than through
+        # tools/vox-version.sh, which needs a POSIX shell this host may not
+        # have.
+        $VersionFile = Join-Path $Root 'VERSION'
+        if (-not (Test-Path -LiteralPath $VersionFile)) {
+            Stop-Package "Cannot read $VersionFile"
+        }
+        $Version = 'v' + ((Get-Content -LiteralPath $VersionFile -Raw).Trim())
     }
 }
 if ([string]::IsNullOrWhiteSpace($DistDir)) {

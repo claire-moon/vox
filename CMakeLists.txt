@@ -1,5 +1,23 @@
 cmake_minimum_required(VERSION 3.16)
-project(vox VERSION 0.0.3 LANGUAGES C)
+
+# The version lives in one file and is read from it here, before project().
+# Packaging and CI read the same file through tools/vox-version.sh, and
+# tools/vox-version-check.sh fails if any product surface disagrees.  The
+# previous release had the number written out by hand in twenty-odd places.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" VOX_VERSION_FILE)
+string(STRIP "${VOX_VERSION_FILE}" VOX_VERSION_FILE)
+if (NOT VOX_VERSION_FILE MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    message(FATAL_ERROR
+        "VERSION must hold a bare MAJOR.MINOR.PATCH, got '${VOX_VERSION_FILE}'")
+endif()
+
+project(vox VERSION ${VOX_VERSION_FILE} LANGUAGES C)
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/engine/include/vox/vox_version.h.in"
+    "${CMAKE_BINARY_DIR}/include/vox/vox_version.h"
+    @ONLY
+)
 
 # v0.0.4 is ISO C only: every first-party translation unit is compiled as
 # ISO C90 (the C89 language profile).  Keep compiler extensions off globally
@@ -253,6 +271,7 @@ if (VOX_BUILD_WIN32_LEGACY_DEMO)
     target_include_directories(digs_win32_legacy PRIVATE
         engine/include
         ports/sdl2
+        "${CMAKE_BINARY_DIR}/include"
     )
     target_compile_definitions(digs_win32_legacy PRIVATE
         ${VOX_LEGACY_WORLD_DEFINITIONS}
@@ -343,7 +362,7 @@ if (VOX_BUILD_SDL2_DEMO)
     )
     target_link_libraries(digs_demo PRIVATE digs_game digs_miner_art vox_audio SDL2::SDL2)
     target_include_directories(digs_demo PRIVATE engine/include ports/sdl2
-        games/digs)
+        games/digs "${CMAKE_BINARY_DIR}/include")
     target_compile_definitions(digs_demo PRIVATE SDL_MAIN_HANDLED)
     # The chronicle is meant to be unrepeatable, so a released build has no
     # way to erase it.  Refining the feature needs one, so debug builds get

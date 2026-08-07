@@ -2,11 +2,11 @@
 
 ## Download and run
 
-Download a package from the [DIGS v0.0.3 release](https://github.com/claire-moon/vox/releases/tag/v0.0.3).
+Download a package from the [DIGS v0.0.4 release](https://github.com/claire-moon/vox/releases/tag/v0.0.4).
 
 ### Windows x86-64
 
-1. Download `vox-digs-v0.0.3-windows-x86_64.zip`.
+1. Download `vox-digs-v0.0.4-windows-x86_64.zip`.
 2. Extract the complete ZIP file.
 3. Open the extracted folder.
 4. Double-click `run-digs.bat`.
@@ -15,13 +15,13 @@ Keep `bin/` and `share/` in the extracted folder.
 
 ### Linux x86-64
 
-1. Download `vox-digs-v0.0.3-linux-x86_64.tar.gz`.
+1. Download `vox-digs-v0.0.4-linux-x86_64.tar.gz`.
 2. Open a terminal in the download folder.
 3. Run:
 
 ```sh
-tar -xzf vox-digs-v0.0.3-linux-x86_64.tar.gz
-cd vox-digs-v0.0.3-linux-x86_64
+tar -xzf vox-digs-v0.0.4-linux-x86_64.tar.gz
+cd vox-digs-v0.0.4-linux-x86_64
 ./run-digs.sh
 ```
 
