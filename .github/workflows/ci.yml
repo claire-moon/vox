@@ -32,7 +32,7 @@ jobs:
       - name: Build Linux x86-64 CI-only tester and source bundles
         env:
           # This is an ephemeral developer artifact from Ubuntu 24.04, not a
-          # public release: tagged release.yml builds the GLIBC_2.35 bundle.
+          # public release: tagged publish-release.yml builds the GLIBC_2.35 bundle.
           VOX_PACKAGE_VERSION: ${{ steps.version.outputs.tag }}-ci
           VOX_PACKAGE_GLIBC_MAX: '2.38'
           VOX_PACKAGE_BENCHMARK_FRAMES: 60
