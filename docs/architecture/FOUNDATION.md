@@ -6,24 +6,32 @@ materials and bodies to a lit graphical frame. It does not establish the final
 world scale, renderer backend, or platform matrix.
 
 ```text
-SDL2 input / deterministic bots
-              |
-              v
-      DIGS C89 match rules
-       |               |
-       v               v
-C89 material world   C89 fixed-point bodies 
-       |               |
-       +-------+-------+
-               v
-    render-only voxel snapshot
-               |
-               v
- C89 RGB Lightfield software renderer
-               |
-               v
- SDL2 texture / custom UI / VOX Audio v2
+        saved memory snapshot          SDL2 input / deterministic bots
+        (port-owned, versioned)                     |
+                     |                              |
+                     +--------------+---------------+
+                                    v
+                          DIGS C89 match rules
+                           |               |
+                           v               v
+                C89 material world   C89 fixed-point bodies
+                           |               |
+                           +-------+-------+
+                                   v
+                        render-only voxel snapshot
+                                   |
+                                   v
+                 C89 RGB Lightfield software renderer
+                                   |
+                                   v
+              SDL2 texture / custom UI / VOX Audio v2
 ```
+
+The memory snapshot enters at init and is read back at the end of the match.
+It is an opening condition, exactly like a seed: the simulation never reads
+the file, never reads a clock, and the port owns both. See
+`docs/rfcs/0003-digs-bot-memory-and-conversation.md` for the boundary and for
+the one time it was breached.
 
 The active v0.0.4 profile is `512 x 320 x 10`, split into 640
 `16 x 16 x 10` chunks. Its 1,638,400 cells are exactly forty times the

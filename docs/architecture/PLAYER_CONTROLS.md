@@ -17,24 +17,35 @@ lateral authority without replacing momentum; release lets gravity turn the
 motion into a glide. The solver then advances the body against the C89
 terrain.
 
-The SDL2 host maps controls as follows:
+Every action below is rebindable per device from the in-game CONTROLS screen,
+which is authoritative if it ever disagrees with this list. These are the
+defaults the host ships:
 
 - `A`/`D` move P1 and left/right arrows move P2;
-- `Space` jumps P1 and up arrow jumps P2;
+- `Space` jumps P1 and up arrow jumps P2; holding jump after leaving the
+  ground engages the steampack;
 - left Shift activates P1 steam and right Shift activates P2 steam;
-- `Q` for P1 and `/` for P2 operate the rope under per-player Hold/Toggle
-  policy; P1 uses `W`/`S` and P2
-  uses up/down while attached to reel it;
+- **right mouse** operates the P1 rope and `/` the P2 rope, under per-player
+  Hold/Toggle policy; P1 has no keyboard rope binding by default, though one
+  remains available through CONTROLS. P1 uses `W`/`S` and P2 up/down while
+  attached to reel it;
 - mouse position is transformed through the letterboxed logical viewport and
   active camera exactly once to an integer world target;
-- left mouse fires; `1` through `0` select the original weapon IDs and `-`
-  selects the Mining Rail; and
+- `E` or left mouse fires; `1` through `0` and `-` select weapon IDs directly,
+  and `Z`/`X` for P1 or `,`/`.` for P2 step through the arsenal;
 - the mouse wheel changes the player-locked camera zoom from 1x through 4x;
 - ZL/left-trigger plus vertical right-stick input changes the shared camera
   zoom on a controller;
 - Shift plus mouse wheel wraps through weapons allowed by the active arsenal
   mask; and
-- `C` for P1, `M` for P2, or controller R3 requests a presentation-only bark.
+- `C` for P1, `M` for P2, or controller R3 barks.
+
+**Bark is not presentation-only.** It was through v0.0.3. From v0.0.4 it is
+`VOX_DIGS_ACTION_BARK` in the authoritative input word, it is folded into the
+canonical hash like any other action, and it drives the whole conversation
+system: one press produces exactly one line, and the aim vector submitted with
+it decides who is being addressed. A port that treats it as a cosmetic
+keypress will desync.
 
 Host key repeat, desktop resolution, presentation frame cap, mouse sampling
 rate, and Lightfield tier never change the order of authoritative ticks. One

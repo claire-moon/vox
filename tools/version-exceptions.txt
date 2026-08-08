@@ -10,10 +10,11 @@
 # a stale exemption is a hole waiting for the next mistake to fall into, so
 # the list cannot quietly rot.
 #
-# The bar for adding one: the text is describing project history, not this
-# build.  "What changed since v0.0.3" has to be able to say v0.0.3.  If the
-# text tells a player what to download or what they are running, it is not an
-# exception; it is a bug.
+# The bar for adding one: the text is describing project history or a planned
+# future release, not this build.  "What changed since v0.0.3" has to be able
+# to say v0.0.3, and the plan for the next release has to be able to name it.
+# If the text tells a player what to download or what they are running, it is
+# not an exception; it is a bug.
 
 # ---------------------------------------------------------------------------
 # Whole files: records of previous releases, and documents organised by version
@@ -42,7 +43,7 @@ games/digs/digs_game.c :: v0.0.3 removed on purpose
 docs/architecture/ACCELERATION.md :: `v0.0.1` includes one deliberately small
 docs/architecture/CHUNKED_WORLD.md :: four times the v0.0.1 dense slab
 docs/architecture/FOUNDATION.md :: four times the v0.0.1 dense profile
-docs/architecture/TERRAIN_TOOLS.md :: DIGS `v0.0.1` defines ten stable weapon
+docs/architecture/TERRAIN_TOOLS.md :: were fixed in `v0.0.1` and have never been renumbered
 # The physics core stopped being C++98 in v0.0.4; the sentence dates that.
 docs/architecture/PHYSICS.md :: Through v0.0.3 this was
 
@@ -99,3 +100,20 @@ CG-README.TXT :: a v0.0.3 expectation applied here reads as a failure
 # the one thing a tester most needs told. Its own rule, matched on v0.0.4 text.
 docs/compatibility/MATRIX.md :: These counters differ from v0.0.3 principally
 docs/compatibility/MATRIX.md :: a v0.0.3 expectation applied here reads as a failure
+
+# ---------------------------------------------------------------------------
+# Forward references to the next release
+#
+# The gate was written to catch stale numbers and so treats every 0.0.x that
+# is not the current one as suspect.  A plan for the release after this one is
+# the legitimate opposite case.
+# ---------------------------------------------------------------------------
+
+# The plan document itself is not scanned -- planning documents are out of
+# scope by path, like the RFCs and the release checklists -- so it needs no
+# rule.  The README is in scope, and its index links to the plan by filename.
+README.md :: docs/ROADMAP_V0.0.5.md
+
+# Dates when bark stopped being a cosmetic keypress. A port carrying the old
+# assumption will desync, so the sentence has to say which release changed it.
+docs/architecture/PLAYER_CONTROLS.md :: It was through v0.0.3

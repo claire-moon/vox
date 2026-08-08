@@ -30,6 +30,23 @@ Keep `bin/`, `bin/share`, `share/`, and `libexec/` in the extracted folder.
 If the launcher says SDL2 is missing, install the SDL2 runtime from your Linux
 distribution and run `./run-digs.sh` again.
 
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [docs/DEMO.md](docs/DEMO.md) | What the current build does: menus, controls, arsenal, the miners |
+| [docs/ROADMAP_V0.0.5.md](docs/ROADMAP_V0.0.5.md) | What is planned next, and in what order |
+| [ROADMAP.txt](ROADMAP.txt) | Release-by-release support states |
+| [docs/architecture/](docs/architecture/) | How each subsystem works |
+| [docs/rfcs/](docs/rfcs/) | Why the load-bearing decisions were made |
+| [docs/compatibility/MATRIX.md](docs/compatibility/MATRIX.md) | What has actually been measured, and on what |
+| [docs/releasing/](docs/releasing/) | Per-release checklists |
+| [qa/](qa/) | The tester lane: checkpoints, workbook, quick-feedback guide |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Language boundaries, determinism rules, when an RFC is required |
+
+Start with `docs/DEMO.md` to know what the game is, and
+`docs/architecture/FOUNDATION.md` to know how it is put together.
+
 ## License
 
 DIGS and VOX are licensed under [GPL-3.0-or-later](LICENSE).
