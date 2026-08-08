@@ -340,6 +340,7 @@ Worth settling before the work starts, because each changes scope materially:
 
 | Thing | Where |
 |---|---|
+| Traps and unproven claims | `CONCERNS.md` — read before starting |
 | The lead's original notes | `v004changes.txt` |
 | What the current build does | `docs/DEMO.md` |
 | How the miners work | `docs/architecture/BOTS_AND_CONVERSATION.md` |

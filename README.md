@@ -34,6 +34,7 @@ distribution and run `./run-digs.sh` again.
 
 | Document | What it covers |
 |---|---|
+| [CONCERNS.md](CONCERNS.md) | Traps, unproven claims, and decisions most likely to be wrong — read first |
 | [docs/DEMO.md](docs/DEMO.md) | What the current build does: menus, controls, arsenal, the miners |
 | [docs/ROADMAP_V0.0.5.md](docs/ROADMAP_V0.0.5.md) | What is planned next, and in what order |
 | [ROADMAP.txt](ROADMAP.txt) | Release-by-release support states |

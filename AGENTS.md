@@ -1,5 +1,15 @@
 # VOX repository instructions
 
+## Read first
+
+`CONCERNS.md` — the traps in this codebase, which claims are proven less
+thoroughly than they look, and the decisions most likely to be wrong. Several
+entries describe defects that fail silently; you will not discover them from
+the tests passing.
+
+Then `docs/DEMO.md` for what the game currently is, and
+`docs/ROADMAP_V0.0.5.md` for what is planned next.
+
 ## Scope
 
 This is the independent VOX + DIGS repository. Do not copy PPD-COM runtime
