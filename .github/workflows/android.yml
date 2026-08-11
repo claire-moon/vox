@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 name: android-port
+run-name: "Android debug APK / ${{ github.ref_name }}"
 
 on:
   push:
