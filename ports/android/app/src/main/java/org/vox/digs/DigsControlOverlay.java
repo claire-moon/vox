@@ -54,8 +54,8 @@ public final class DigsControlOverlay extends FrameLayout {
                 "STEAM", "Use steam. In menus, move down.");
 
         AimPad aimPad = new AimPad(context);
-        styleControl(aimPad, "Aim pad. Drag to aim in the selected direction.");
-        addBottomEnd(aimPad, 92, 92, 105, 0);
+        addBottomEnd(aimPad, 92, 92, 105, 0,
+                "AIM", "Aim pad. Drag to aim in the selected direction.");
         addBottomEnd(new HeldButton(context, FIRE), 52, 52, 4, 108,
                 "FIRE", "Fire the selected tool. In menus, select.");
         addBottomEnd(new HeldButton(context, ROPE), 52, 52, 4, 54,
