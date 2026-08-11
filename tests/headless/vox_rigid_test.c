@@ -80,9 +80,9 @@ int main(void)
                         32768L, 32768L, 65536L,
                         VOX_RIGID_BODY_SCRAP) != VOX_OK ||
         vox_rigid_apply_impulse(&impulse_world, a, 3L << 16,
-                                -2L << 16) != VOX_OK ||
+                                -(2L << 16)) != VOX_OK ||
         impulse_world.bodies[a].velocity_x_q16 != 3L << 16 ||
-        impulse_world.bodies[a].velocity_y_q16 != -2L << 16 ||
+        impulse_world.bodies[a].velocity_y_q16 != -(2L << 16) ||
         (impulse_world.bodies[a].flags & VOX_RIGID_BODY_SLEEPING) != 0U) {
         fprintf(stderr, "rigid impulse interface failed\n");
         return 7;
