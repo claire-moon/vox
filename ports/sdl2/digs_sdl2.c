@@ -75,6 +75,13 @@
 #define DEMO_COSMETIC_COLOR_COUNT 6
 #define DEMO_RIGID_DEBRIS_VISUAL_CAP 32U
 #define DEMO_EFFECT_PARTICLE_CAP 320U
+/* Blood remains an authoritative fluid, but a side-on 320x200 view must
+ * render a settled film as marks on its supporting material rather than as a
+ * solid red cell hovering directly above the ground.  Bound the cosmetic
+ * pass independently from the simulation pool so a catastrophic match
+ * cannot turn gore into a presentation-time allocation or frame spike. */
+#define DEMO_BLOOD_STAIN_VISUAL_CAP 240U
+#define DEMO_BLOOD_STAIN_MARK_CAP 4U
 /* Replay frames are captured every four simulation ticks.  Holding each
  * picture for a bounded six presentation ticks makes the result reel read as
  * a deliberate slow-motion recap rather than racing through its ledger. */
@@ -4167,8 +4174,11 @@ static void demo_voxelize_rigid_bodies(void)
 }
 
 /* Fluids are authoritative volumes, but the software renderer owns their
- * visible top layer.  Without this bridge blood pooled correctly in the
- * simulation yet vanished beneath the terrain image. */
+ * visible top layer.  Water and lava are opaque enough to read as chunky
+ * cells.  Blood is deliberately excluded here: drawing it as a voxel above
+ * the terrain made every small deposit look like a red cap instead of a
+ * splatter soaked into the surface.  Blood gets a dedicated decal pass after
+ * lighting, where it can preserve the actual dirt or metal underneath. */
 static void demo_voxelize_fluids(void)
 {
     vox_u16 index;
@@ -4178,7 +4188,6 @@ static void demo_voxelize_fluids(void)
         if (fluid->active == 0U || fluid->volume_q16 <= 0L) continue;
         if (fluid->material == VOX_FLUID_WATER) material = VOX_MAT_WATER;
         else if (fluid->material == VOX_FLUID_LAVA) material = VOX_MAT_LAVA;
-        else if (fluid->material == VOX_FLUID_BLOOD) material = VOX_MAT_BLOOD;
         if (material != VOX_MAT_AIR) {
             demo_render_voxel((int)fluid->x, (int)fluid->y, material);
         }
@@ -4222,7 +4231,6 @@ static vox_u16 demo_replay_fluid_material(vox_u16 material)
 {
     if (material == VOX_FLUID_WATER) return VOX_MAT_WATER;
     if (material == VOX_FLUID_LAVA) return VOX_MAT_LAVA;
-    if (material == VOX_FLUID_BLOOD) return VOX_MAT_BLOOD;
     return VOX_MAT_AIR;
 }
 
@@ -4263,6 +4271,14 @@ static void demo_build_replay_render_world(const vox_digs_replay_frame *frame)
     }
     for (index = 0U; index < frame->effect_count; ++index) {
         const vox_digs_replay_effect *effect = &frame->effects[index];
+        /* Live effects are screen-space particles, not temporary terrain.
+         * Keep replay blood/flesh on that exact visual path as well; otherwise
+         * a captured droplet becomes a chunky red or pink world voxel only in
+         * the post-match reel. */
+        if (effect->material == VOX_MAT_BLOOD ||
+            effect->material == VOX_MAT_FLESH) {
+            continue;
+        }
         demo_render_voxel((int)(effect->position_x_q16 >> 16),
                           (int)(effect->position_y_q16 >> 16),
                           effect->material);
@@ -4532,19 +4548,20 @@ static void demo_blend_particle_pixel(int x, int y, vox_u8 red,
                          (vox_u16)blue * strength) / 3U);
 }
 
-static int demo_effect_view_position(const vox_software_view *view,
-                                     const vox_digs_effect *effect,
-                                     int *screen_x, int *screen_y)
+static int demo_world_view_position(const vox_software_view *view,
+                                    vox_i32 position_x_q16,
+                                    vox_i32 position_y_q16,
+                                    int *screen_x, int *screen_y)
 {
     double local_x;
     double local_y;
-    if (view == 0 || effect == 0 || screen_x == 0 || screen_y == 0 ||
+    if (view == 0 || screen_x == 0 || screen_y == 0 ||
         view->width_q16 <= 0L || view->height_q16 <= 0L) {
         return 0;
     }
-    local_x = (double)(effect->position_x_q16 - view->origin_x_q16) /
+    local_x = (double)(position_x_q16 - view->origin_x_q16) /
               (double)view->width_q16;
-    local_y = (double)(effect->position_y_q16 - view->origin_y_q16) /
+    local_y = (double)(position_y_q16 - view->origin_y_q16) /
               (double)view->height_q16;
     if (local_x < 0.0 || local_y < 0.0 || local_x >= 1.0 ||
         local_y >= 1.0) {
@@ -4556,32 +4573,228 @@ static int demo_effect_view_position(const vox_software_view *view,
            *screen_x < (int)DEMO_WIDTH && *screen_y < (int)DEMO_HEIGHT;
 }
 
-static void demo_effect_particle_colour(const vox_digs_effect *effect,
-                                        vox_u8 *red, vox_u8 *green,
-                                        vox_u8 *blue)
+static int demo_effect_view_position(const vox_software_view *view,
+                                     const vox_digs_effect *effect,
+                                     int *screen_x, int *screen_y)
 {
-    if (effect->material == VOX_MAT_BLOOD) {
+    if (effect == 0) return 0;
+    return demo_world_view_position(view, effect->position_x_q16,
+                                    effect->position_y_q16,
+                                    screen_x, screen_y);
+}
+
+/* The fluid solver owns a blood cell in open space. A splatter belongs on
+ * the first solid material that caught it: prefer its floor, then a wall or
+ * ceiling for a glancing hit. We read the front-most non-fluid cell because
+ * that is the same material the software renderer made visible. */
+static int demo_blood_stain_material_at(int x, int y, vox_u16 *material)
+{
+    vox_i16 depth;
+    const vox_cell *cell;
+    if (material == 0 || x < 0 || y < 0 ||
+        x >= (int)VOX_WORLD_WIDTH || y >= (int)VOX_WORLD_HEIGHT) {
+        return 0;
+    }
+    for (depth = (vox_i16)VOX_WORLD_DEPTH - 1; depth >= 0; --depth) {
+        cell = vox_world_cell(&demo_match.world, (vox_u32)x, (vox_u32)y,
+                              (vox_u32)depth);
+        if (cell == 0 || cell->material == VOX_MAT_AIR ||
+            cell->material == VOX_MAT_WATER ||
+            cell->material == VOX_MAT_LAVA ||
+            cell->material == VOX_MAT_BLOOD ||
+            cell->material == VOX_MAT_SMOKE ||
+            cell->material == VOX_MAT_FIREDAMP) {
+            continue;
+        }
+        *material = cell->material;
+        return 1;
+    }
+    return 0;
+}
+
+static int demo_blood_stain_surface(vox_u16 x, vox_u16 y,
+                                    int *surface_x, int *surface_y,
+                                    vox_u16 *surface_material)
+{
+    static const vox_i16 offsets[5][2] = {
+        {0, 1}, {-1, 0}, {1, 0}, {0, 0}, {0, -1}
+    };
+    vox_u16 candidate;
+    if (surface_x == 0 || surface_y == 0 || surface_material == 0) {
+        return 0;
+    }
+    for (candidate = 0U; candidate < 5U; ++candidate) {
+        int check_x = (int)x + offsets[candidate][0];
+        int check_y = (int)y + offsets[candidate][1];
+        vox_u16 material;
+        if (!demo_blood_stain_material_at(check_x, check_y, &material)) {
+            continue;
+        }
+        *surface_x = check_x;
+        *surface_y = check_y;
+        *surface_material = material;
+        return 1;
+    }
+    return 0;
+}
+
+static vox_u32 demo_blood_stain_noise(vox_u16 x, vox_u16 y, vox_u16 z,
+                                      vox_i32 volume_q16,
+                                      vox_i32 flow_q16)
+{
+    vox_u32 value = (vox_u32)x * 1103515245UL +
+                    (vox_u32)y * 12345UL;
+    value ^= (vox_u32)z * 2654435761UL;
+    value ^= (vox_u32)volume_q16 * 2246822519UL;
+    value ^= (vox_u32)flow_q16 * 3266489917UL;
+    value ^= value >> 16;
+    value *= 2246822519UL;
+    value ^= value >> 13;
+    return value;
+}
+
+static void demo_blood_stain_colour(vox_i32 volume_q16, vox_i32 flow_q16,
+                                    vox_u16 surface_material, vox_u8 *red,
+                                    vox_u8 *green, vox_u8 *blue,
+                                    vox_u16 *strength)
+{
+    int wet = volume_q16 >= 12288L || flow_q16 > 4096L;
+    if (red == 0 || green == 0 || blue == 0 || strength == 0) return;
+    if (surface_material == VOX_MAT_METAL) {
+        *red = wet ? 166U : 112U;
+        *green = wet ? 43U : 53U;
+        *blue = wet ? 36U : 42U;
+    } else {
+        *red = wet ? 174U : 118U;
+        *green = wet ? 38U : 37U;
+        *blue = wet ? 35U : 31U;
+    }
+    *strength = wet ? 2U : 1U;
+}
+
+static void demo_draw_blood_stain_sample(const vox_software_view *view,
+                                         vox_u16 x, vox_u16 y, vox_u16 z,
+                                         vox_i32 volume_q16,
+                                         vox_i32 flow_q16,
+                                         vox_u16 *drawn)
+{
+    static const vox_i16 marks[8][2] = {
+        {0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1},
+        {1, 1}, {-1, 1}, {1, -1}
+    };
+    vox_u32 noise;
+    vox_u16 mark_count;
+    vox_u16 mark;
+    vox_u16 surface_material;
+    vox_u8 red;
+    vox_u8 green;
+    vox_u8 blue;
+    vox_u16 strength;
+    int surface_x;
+    int surface_y;
+    int screen_x;
+    int screen_y;
+    if (drawn == 0 || *drawn >= DEMO_BLOOD_STAIN_VISUAL_CAP ||
+        volume_q16 <= 0L ||
+        !demo_world_view_position(view,
+            ((vox_i32)x << 16) + 32768L,
+            ((vox_i32)y << 16) + 32768L,
+            &screen_x, &screen_y) ||
+        !demo_blood_stain_surface(x, y, &surface_x, &surface_y,
+                                  &surface_material) ||
+        !demo_world_view_position(view,
+            ((vox_i32)surface_x << 16) + 32768L,
+            ((vox_i32)surface_y << 16) + 32768L,
+            &screen_x, &screen_y)) {
+        return;
+    }
+    noise = demo_blood_stain_noise(x, y, z, volume_q16, flow_q16);
+    mark_count = 1U;
+    if (volume_q16 >= 8192L) ++mark_count;
+    if (volume_q16 >= 24576L || flow_q16 > 8192L) ++mark_count;
+    if ((noise & 3U) == 0U) ++mark_count;
+    if (mark_count > DEMO_BLOOD_STAIN_MARK_CAP) {
+        mark_count = DEMO_BLOOD_STAIN_MARK_CAP;
+    }
+    demo_blood_stain_colour(volume_q16, flow_q16, surface_material,
+                            &red, &green, &blue, &strength);
+    for (mark = 0U; mark < mark_count; ++mark) {
+        vox_u16 offset = (vox_u16)((noise >> (mark * 3U)) & 7U);
+        demo_blend_particle_pixel(screen_x + marks[offset][0],
+                                  screen_y + marks[offset][1],
+                                  red, green, blue, strength);
+    }
+    ++*drawn;
+}
+
+/* This is intentionally a presentation read of the authoritative fluid
+ * state. It leaves the volume free to run through a basin, while the player
+ * sees a wet mark on the terrain that caught it. Replay frames carry their
+ * own fluid snapshots, so the same pass reconstructs splatter in the kill
+ * reel instead of substituting a red block. */
+static void demo_draw_blood_stains(const demo_app *app,
+                                   const vox_software_view *view)
+{
+    vox_u16 index;
+    vox_u16 drawn = 0U;
+    if (app == 0 || view == 0 || app->options.gore_level == 0) return;
+    if (app->replay_frame_valid != 0U) {
+        const vox_digs_replay_frame *frame = &app->replay_frame;
+        for (index = 0U; index < frame->fluid_count; ++index) {
+            const vox_digs_replay_fluid *fluid = &frame->fluids[index];
+            if (fluid->material != VOX_FLUID_BLOOD ||
+                fluid->volume_q16 <= 0L ||
+                (app->options.gore_level == 1 &&
+                 (demo_blood_stain_noise(fluid->x, fluid->y, fluid->z,
+                    fluid->volume_q16, fluid->flow_q16) & 1U) != 0U)) {
+                continue;
+            }
+            demo_draw_blood_stain_sample(view, fluid->x, fluid->y,
+                                         fluid->z, fluid->volume_q16,
+                                         fluid->flow_q16, &drawn);
+        }
+        return;
+    }
+    for (index = 0U; index < demo_match.fluids.active_cells; ++index) {
+        const vox_fluid_cell *fluid = &demo_match.fluids.cells[index];
+        if (fluid->active == 0U || fluid->material != VOX_FLUID_BLOOD ||
+            fluid->volume_q16 <= 0L ||
+            (app->options.gore_level == 1 &&
+             (demo_blood_stain_noise(fluid->x, fluid->y, fluid->z,
+                fluid->volume_q16, fluid->flow_q16) & 1U) != 0U)) {
+            continue;
+        }
+        demo_draw_blood_stain_sample(view, fluid->x, fluid->y, fluid->z,
+                                     fluid->volume_q16, fluid->flow_q16,
+                                     &drawn);
+    }
+}
+
+static void demo_effect_particle_colour(vox_u16 material, vox_u8 *red,
+                                        vox_u8 *green, vox_u8 *blue)
+{
+    if (material == VOX_MAT_BLOOD) {
         *red = 184U;
         *green = 44U;
         *blue = 39U;
-    } else if (effect->material == VOX_MAT_FLESH) {
+    } else if (material == VOX_MAT_FLESH) {
         *red = 165U;
         *green = 86U;
         *blue = 69U;
-    } else if (effect->material == VOX_MAT_LAVA) {
+    } else if (material == VOX_MAT_LAVA) {
         *red = 236U;
         *green = 84U;
         *blue = 22U;
-    } else if (effect->material == VOX_MAT_WATER) {
+    } else if (material == VOX_MAT_WATER) {
         *red = 58U;
         *green = 117U;
         *blue = 196U;
-    } else if (effect->material == VOX_MAT_SMOKE ||
-               effect->material == VOX_MAT_FIREDAMP) {
+    } else if (material == VOX_MAT_SMOKE ||
+               material == VOX_MAT_FIREDAMP) {
         *red = 104U;
         *green = 104U;
         *blue = 118U;
-    } else if (effect->material == VOX_MAT_METAL) {
+    } else if (material == VOX_MAT_METAL) {
         *red = 148U;
         *green = 155U;
         *blue = 166U;
@@ -4621,7 +4834,57 @@ static void demo_draw_effect_particles(const demo_app *app,
             !demo_effect_view_position(view, effect, &screen_x, &screen_y)) {
             continue;
         }
-        demo_effect_particle_colour(effect, &red, &green, &blue);
+        demo_effect_particle_colour(effect->material, &red, &green, &blue);
+        strength = gore ? 2U : 1U;
+        demo_blend_particle_pixel(screen_x, screen_y, red, green, blue,
+                                  strength);
+        if (effect->velocity_x_q16 > 4096L) tail_x = -1;
+        else if (effect->velocity_x_q16 < -4096L) tail_x = 1;
+        if (effect->velocity_y_q16 > 4096L) tail_y = -1;
+        else if (effect->velocity_y_q16 < -4096L) tail_y = 1;
+        if (tail_x != 0 || tail_y != 0) {
+            demo_blend_particle_pixel(screen_x + tail_x, screen_y + tail_y,
+                                      red, green, blue, 1U);
+        }
+        drawn++;
+    }
+}
+
+/* Replay effects carry the same compact motion data as live effects.  Draw
+ * them after lighting rather than injecting them into the replay terrain, so
+ * a blood drop stays a drop while the camera is revisiting the event. */
+static void demo_draw_replay_effect_particles(const demo_app *app,
+                                              const vox_software_view *view)
+{
+    const vox_digs_replay_frame *frame;
+    vox_u16 index;
+    vox_u16 drawn = 0U;
+    if (app == 0 || view == 0 || app->replay_frame_valid == 0U) return;
+    frame = &app->replay_frame;
+    for (index = 0U; index < frame->effect_count; ++index) {
+        const vox_digs_replay_effect *effect = &frame->effects[index];
+        int gore;
+        int screen_x;
+        int screen_y;
+        int tail_x = 0;
+        int tail_y = 0;
+        vox_u8 red;
+        vox_u8 green;
+        vox_u8 blue;
+        vox_u16 strength;
+        gore = effect->material == VOX_MAT_FLESH ||
+               effect->material == VOX_MAT_BLOOD;
+        if (gore && (app->options.gore_level == 0 ||
+            (app->options.gore_level == 1 && (index % 3U) != 0U))) {
+            continue;
+        }
+        if (drawn >= DEMO_EFFECT_PARTICLE_CAP ||
+            !demo_world_view_position(view, effect->position_x_q16,
+                                      effect->position_y_q16,
+                                      &screen_x, &screen_y)) {
+            continue;
+        }
+        demo_effect_particle_colour(effect->material, &red, &green, &blue);
         strength = gore ? 2U : 1U;
         demo_blend_particle_pixel(screen_x, screen_y, red, green, blue,
                                   strength);
@@ -5489,17 +5752,23 @@ static void demo_draw_play(demo_app *app)
     }
     render_status = vox_software_render_view_ex(&demo_match.world,
         &demo_target, &demo_render_config, &view);
-    demo_render_overlay_restore();
     if (render_status != VOX_OK) {
         /* A validated camera should never reach this path. Keep presentation
          * readable instead of exposing uninitialized or stale pixels. */
         memset(demo_pixels, 0, sizeof(demo_pixels));
     } else {
         demo_apply_atmosphere(app, &view);
-        if (!app->replay_frame_valid) {
+        /* Keep the temporary replay terrain available while surface stains
+         * choose the material they landed on. The overlay is restored before
+         * any gameplay/UI code can observe it. */
+        demo_draw_blood_stains(app, &view);
+        if (app->replay_frame_valid) {
+            demo_draw_replay_effect_particles(app, &view);
+        } else {
             demo_draw_effect_particles(app, &view);
         }
     }
+    demo_render_overlay_restore();
     app->scene_tick = demo_match.tick;
     app->scene_laptop = app->options.laptop_mode;
     app->scene_valid = render_status == VOX_OK;
@@ -8756,8 +9025,8 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench,
          * baseline, not a wall-clock performance claim. */
         } else if (ticks == 600U &&
                    (fired != 20U || explosions != 16U || crushes != 0U ||
-                    max_effects != 994U || max_awake != 3873U ||
-                    demo_match.state_hash != (vox_u32)0xD4E9C882UL)) {
+                    max_effects != 1009U || max_awake != 3873U ||
+                    demo_match.state_hash != (vox_u32)0x9E258AE8UL)) {
             fprintf(stderr,
                     "load self-test: canonical 600-tick activity/hash "
                     "mismatch\n");
@@ -9963,6 +10232,129 @@ static int demo_particle_overlay_self_test(void)
     return 0;
 }
 
+/* A pooled blood cell must not become a red terrain voxel. It is drawn after
+ * the software world pass as a bounded surface mark, and neither the mark nor
+ * its replay-safe colour selection may change canonical state. */
+static int demo_blood_stain_overlay_self_test(void)
+{
+    demo_app app;
+    vox_digs_rules rules;
+    vox_software_view view;
+    vox_u32 world_hash;
+    vox_u32 match_hash;
+    vox_u32 unstained_hash;
+    vox_u32 stained_hash;
+    vox_result render_status;
+    vox_u16 depth;
+    const vox_cell *cell;
+    memset(&app, 0, sizeof(app));
+    demo_prepare_targets();
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&demo_match, &rules) != VOX_OK) return 1;
+    for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+        if (vox_world_set(&demo_match.world, 160U, 99U, depth,
+                          VOX_MAT_AIR, 0L) != VOX_OK ||
+            vox_world_set(&demo_match.world, 160U, 100U, depth,
+                          VOX_MAT_AIR, 0L) != VOX_OK) {
+            return 2;
+        }
+    }
+    if (vox_world_set(&demo_match.world, 160U, 100U,
+                      VOX_WORLD_DEPTH - 1U, VOX_MAT_STONE,
+                      20L << 16) != VOX_OK ||
+        vox_fluid_add_at(&demo_match.fluids, 160U, 99U,
+                         VOX_WORLD_DEPTH - 1U, VOX_FLUID_BLOOD,
+                         32768L, 37L << 16) != VOX_OK) {
+        return 3;
+    }
+    demo_match.alive[0] = 0U;
+    app.options.gore_level = 2;
+    app.camera_zoom = DEMO_CAMERA_ZOOM_MAX;
+    app.camera_scale = (double)DEMO_CAMERA_ZOOM_MAX;
+    app.camera_world_x = 160.0;
+    app.camera_world_y = 100.0;
+    world_hash = vox_world_hash(&demo_match.world);
+    match_hash = vox_digs_hash(&demo_match);
+    demo_camera_view(&app, &view);
+    demo_render_config.gi_quality = VOX_GI_COMPATIBILITY;
+    demo_render_overlay_begin();
+    demo_build_render_world(&app);
+    cell = vox_world_cell(&demo_match.world, 160U, 99U,
+                          VOX_WORLD_DEPTH - 1U);
+    if (cell == 0 || cell->material != VOX_MAT_AIR) {
+        demo_render_overlay_restore();
+        return 4;
+    }
+    render_status = vox_software_render_view_ex(&demo_match.world,
+        &demo_target, &demo_render_config, &view);
+    if (render_status != VOX_OK) {
+        demo_render_overlay_restore();
+        return 5;
+    }
+    demo_apply_atmosphere(&app, &view);
+    unstained_hash = vox_software_hash(&demo_target);
+    demo_draw_blood_stains(&app, &view);
+    stained_hash = vox_software_hash(&demo_target);
+    demo_render_overlay_restore();
+    if (vox_world_hash(&demo_match.world) != world_hash ||
+        vox_digs_hash(&demo_match) != match_hash ||
+        unstained_hash == stained_hash) {
+        return 6;
+    }
+    /* Replay must use exactly the same surface/particle rule.  A captured
+     * blood effect used to overwrite this air cell as a red terrain block;
+     * keep the terrain untouched and require the post-lighting passes to
+     * change only the frame. */
+    app.replay_frame_valid = 1U;
+    app.replay_frame.fluid_count = 1U;
+    app.replay_frame.fluids[0].x = 160U;
+    app.replay_frame.fluids[0].y = 99U;
+    app.replay_frame.fluids[0].z = VOX_WORLD_DEPTH - 1U;
+    app.replay_frame.fluids[0].material = VOX_FLUID_BLOOD;
+    app.replay_frame.fluids[0].volume_q16 = 32768L;
+    app.replay_frame.fluids[0].temperature_q16 = 37L << 16;
+    app.replay_frame.fluids[0].flow_q16 = 0L;
+    app.replay_frame.effect_count = 1U;
+    app.replay_frame.effects[0].position_x_q16 = 160L << 16;
+    app.replay_frame.effects[0].position_y_q16 = 99L << 16;
+    app.replay_frame.effects[0].velocity_x_q16 = 16384L;
+    app.replay_frame.effects[0].velocity_y_q16 = -8192L;
+    app.replay_frame.effects[0].material = VOX_MAT_BLOOD;
+    app.replay_frame.effects[0].ttl_ticks = 20U;
+    demo_render_overlay_begin();
+    demo_build_render_world(&app);
+    demo_build_replay_render_world(&app.replay_frame);
+    cell = vox_world_cell(&demo_match.world, 160U, 99U,
+                          VOX_WORLD_DEPTH - 1U);
+    if (cell == 0 || cell->material != VOX_MAT_AIR) {
+        demo_render_overlay_restore();
+        return 7;
+    }
+    render_status = vox_software_render_view_ex(&demo_match.world,
+        &demo_target, &demo_render_config, &view);
+    if (render_status != VOX_OK) {
+        demo_render_overlay_restore();
+        return 8;
+    }
+    demo_apply_atmosphere(&app, &view);
+    unstained_hash = vox_software_hash(&demo_target);
+    demo_draw_blood_stains(&app, &view);
+    demo_draw_replay_effect_particles(&app, &view);
+    stained_hash = vox_software_hash(&demo_target);
+    demo_render_overlay_restore();
+    if (vox_world_hash(&demo_match.world) != world_hash ||
+        vox_digs_hash(&demo_match) != match_hash ||
+        unstained_hash == stained_hash) {
+        return 9;
+    }
+    printf("DIGS blood stain overlay self-test passed pre=%08lx post=%08lx\n",
+           (unsigned long)unstained_hash, (unsigned long)stained_hash);
+    return 0;
+}
+
 static void demo_wait_for_frame(Uint64 frequency, int frame_cap,
                                 int *last_frame_cap, Uint64 *deadline)
 {
@@ -10721,6 +11113,9 @@ int main(int argc, char **argv)
     }
     if (argc >= 2 && strcmp(argv[1], "--particle-overlay-self-test") == 0) {
         return demo_particle_overlay_self_test();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--blood-stain-self-test") == 0) {
+        return demo_blood_stain_overlay_self_test();
     }
     if (argc >= 2 && strcmp(argv[1], "--fixed-step-self-test") == 0) {
         return demo_fixed_step_self_test();

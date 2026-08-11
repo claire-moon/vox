@@ -58,7 +58,7 @@ The following decisions are locked for v0.0.5:
   appropriate. Authored fixtures are explicitly tagged rather than inferred
   from ordinary metal, so only FIRECRACKER/POPPER explosive fractures may
   turn them into non-anchor scrap.
-- The current implementation increment is covered by strict C90 builds, 31
+- The current implementation increment is covered by strict C90 builds, 32
   CTest tests including the long deterministic match gate, focused
   fluid/rigid/cluster/gameplay tests, and SDL settings/chronicle/haptic
   self-tests. Those are source/build gates, not a substitute for human QA.
@@ -68,6 +68,14 @@ The following decisions are locked for v0.0.5:
   the authoritative fluid world on impact and neither material remains a
   long-lived airborne cloud.  `CRACKING...` is debug-only; ordinary play
   reserves its alert text for an actual `CAVE-IN!`.
+- Settled blood no longer occupies a full opaque terrain voxel in the SDL
+  renderer.  The port projects each authoritative blood-fluid cell as a
+  bounded, deterministic wet/drying splatter on the dirt or metal that caught
+  it; the same pass reads replay-frame fluids and keeps replay blood/flesh
+  effects as screen-space particles, while the canonical fluid hash remains
+  untouched.  `digs_demo --blood-stain-self-test` proves that the visible
+  splat changes pixels without converting the air cell into blood or mutating
+  the match.
 
 Still open before calling v0.0.5 complete: complete connected-volume
 support/load analysis beyond the bounded cascade fragments, the recorded

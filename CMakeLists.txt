@@ -618,6 +618,8 @@ if (VOX_BUILD_TESTS)
             COMMAND digs_demo --rigid-overlay-self-test)
         add_test(NAME digs_particle_overlay
             COMMAND digs_demo --particle-overlay-self-test)
+        add_test(NAME digs_blood_stain_overlay
+            COMMAND digs_demo --blood-stain-self-test)
         add_test(NAME digs_fixed_step_debt
             COMMAND digs_demo --fixed-step-self-test)
         # v0.0.4 budgets the shipped payload (digs_demo plus the staged
