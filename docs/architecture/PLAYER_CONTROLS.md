@@ -2,8 +2,8 @@
 # DIGS input and bot contract
 
 Movement and combat are submitted through three small deterministic surfaces.
-`vox_digs_submit_input` records held movement, jump, steam, rope, and fire
-action bits plus the selected weapon for a living player. The game validates
+`vox_digs_submit_input` records held movement, jump, steam, rope, fire, bark,
+and dash action bits plus the selected weapon for a living player. The game validates
 life state, arsenal access, cooldown, charge state, and capacity before
 creating the authoritative action. `vox_digs_fire_weapon` remains an explicit
 headless/tool boundary, but the SDL host does not own rail-charge time.
@@ -25,8 +25,9 @@ defaults the host ships:
 - `Space` jumps P1 and up arrow jumps P2; holding jump after leaving the
   ground engages the steampack;
 - left Shift activates P1 steam and right Shift activates P2 steam;
-- **right mouse** operates the P1 rope and `/` the P2 rope, under per-player
-  Hold/Toggle policy; P1 has no keyboard rope binding by default, though one
+- **middle mouse** operates the P1 rope and `/` the P2 rope. Grapple is always
+  toggle: press to cast or attach, press again while attached to retarget, and
+  jump cancels it. P1 has no keyboard rope binding by default, though one
   remains available through CONTROLS. P1 uses `W`/`S` and P2 up/down while
   attached to reel it;
 - mouse position is transformed through the letterboxed logical viewport and
@@ -50,7 +51,19 @@ keypress will desync.
 Host key repeat, desktop resolution, presentation frame cap, mouse sampling
 rate, and Lightfield tier never change the order of authoritative ticks. One
 held-input record per player is sampled by the next tick; firing, rail
-charge/release, and rope cast level are bounded deterministic game actions.
+charge/release, and each physical rope rising edge are bounded deterministic
+game actions.
+
+At the beginning of an interactive match the host calls
+`vox_digs_dropship_begin` once, before the first tick. That stages every live
+miner on the authoritative launch ship while preserving the deterministic
+ground spawn as their later respawn target. Fire releases an onboard miner;
+bots make the same decision through their normal submitted action bits; and
+the route auto-releases anyone still aboard at its far in-world endpoint.
+Headless setup and analysis tools can intentionally omit this explicit host
+operation when they need a terrain-grounded initial condition. In that case
+`vox_digs_match_init` leaves the ship departed and `vox_digs_dropship_step`
+does nothing: an omitted host call never creates an invisible collision hull.
 
 Bots produce the same held-action bits consumed by player control and use the
 same weapon path; they have no alternate physics, damage, or
@@ -68,5 +81,6 @@ body transforms or presentation events.
 AUTO and locked keyboard/controller ownership are host policies and remain
 outside the match hash. In ON FIRE respawn mode the host requires Fire to be
 released after death and pressed again once the authoritative countdown is
-ready. Bark input never enters `vox_digs_input`: the portable feedback layer
-selects a deterministic phrase from current state without changing gameplay.
+ready. Bark does enter `vox_digs_input` as `VOX_DIGS_ACTION_BARK`, so its
+authored selection and relationship effect are replayable and hashed; only the
+host's bubble, audio, and camera response remain presentation-only.

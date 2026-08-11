@@ -3,6 +3,9 @@
 #define VOX_GAME_H
 
 #include "vox_physics.h"
+#include "vox_fluid.h"
+#include "vox_rigid.h"
+#include "vox_cluster.h"
 
 /*
  * Three bots fill a four-slot match alongside a single human, which is the
@@ -28,10 +31,11 @@
  * diverge from the match it was recorded from.
  */
 #define VOX_DIGS_ACTION_BARK 64U
+#define VOX_DIGS_ACTION_DASH 128U
 #define VOX_DIGS_ACTION_MASK (VOX_DIGS_ACTION_LEFT | VOX_DIGS_ACTION_RIGHT | \
                               VOX_DIGS_ACTION_JUMP | VOX_DIGS_ACTION_STEAM | \
                               VOX_DIGS_ACTION_ROPE | VOX_DIGS_ACTION_FIRE | \
-                              VOX_DIGS_ACTION_BARK)
+                              VOX_DIGS_ACTION_BARK | VOX_DIGS_ACTION_DASH)
 
 #define VOX_DIGS_MAX_HEALTH 100U
 #define VOX_DIGS_RESPAWN_TICKS 180U
@@ -45,6 +49,9 @@
  * at the authoritative 60 Hz rate.
  */
 #define VOX_DIGS_PROJECTILE_OWNER_CLEAR_TICKS 45U
+#define VOX_DIGS_DASH_COOLDOWN_TICKS 45U
+#define VOX_DIGS_DASH_INVULNERABILITY_TICKS 8U
+#define VOX_DIGS_DASH_SPEED_Q16 (5L << 16)
 #define VOX_DIGS_MAX_PROJECTILES 64U
 #define VOX_DIGS_FX_RETRO 768U
 #define VOX_DIGS_FX_STANDARD 1536U
@@ -55,6 +62,40 @@
 #define VOX_DIGS_ROPE_MAX_POINTS 12U
 #define VOX_DIGS_NO_PLAYER 65535U
 #define VOX_DIGS_NO_PART 65535U
+#define VOX_DIGS_ROPE_TARGET_TERRAIN 1U
+#define VOX_DIGS_ROPE_TARGET_FIXTURE 2U
+#define VOX_DIGS_ROPE_TARGET_SHIP 4U
+#define VOX_DIGS_MAX_AWARDS 5U
+#define VOX_DIGS_REPLAY_MAX_FRAMES 120U
+#define VOX_DIGS_REPLAY_CAPTURE_STRIDE 4U
+#define VOX_DIGS_REPLAY_WINDOW_RADIUS 6U
+#define VOX_DIGS_REPLAY_WINDOW_DIAMETER \
+    (VOX_DIGS_REPLAY_WINDOW_RADIUS * 2U + 1U)
+#define VOX_DIGS_REPLAY_WINDOW_CELLS \
+    (VOX_DIGS_REPLAY_WINDOW_DIAMETER * VOX_DIGS_REPLAY_WINDOW_DIAMETER)
+#define VOX_DIGS_REPLAY_MAX_RIGIDS 24U
+#define VOX_DIGS_REPLAY_MAX_FLUIDS 32U
+#define VOX_DIGS_REPLAY_MAX_EFFECTS 24U
+#define VOX_DIGS_REPLAY_MAX_EVENTS 12U
+#define VOX_DIGS_DROP_SHIP_ROUTE_TICKS 360U
+#define VOX_DIGS_DROPSHIP_PHASE_LAUNCH 0U
+#define VOX_DIGS_DROPSHIP_PHASE_WAITING 1U
+#define VOX_DIGS_DROPSHIP_PHASE_EXTRACTION 2U
+#define VOX_DIGS_DROPSHIP_PHASE_DEPARTED 3U
+#define VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16 (5L << 16)
+#define VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16 (1L << 16)
+#define VOX_DIGS_DROPSHIP_BOARD_RADIUS_Q16 (6L << 16)
+#define VOX_DIGS_DROPSHIP_LAUNCH_SPEED_Q16 (1L << 16)
+#define VOX_DIGS_DROPSHIP_COLLISION_COOLDOWN_TICKS 12U
+/* Keep the launch deck below the HUD-safe top edge while remaining above the
+ * minimum authored landform surface and its fixture clearance. */
+#define VOX_DIGS_DROPSHIP_CRUISE_Y_Q16 (42L << 16)
+/* Keep the launch route in legal world coordinates.  Miners are staged on
+ * the ship at the first simulation tick and auto-launch at the far endpoint
+ * only if they have not fired for themselves. */
+#define VOX_DIGS_DROPSHIP_LAUNCH_START_X_Q16 (32L << 16)
+#define VOX_DIGS_DROPSHIP_LAUNCH_END_X_Q16 \
+    (((vox_i32)VOX_WORLD_WIDTH - 32L) << 16)
 
 #define VOX_DIGS_WEAPON_MELEE 1U
 #define VOX_DIGS_WEAPON_PROJECTILE 2U
@@ -68,6 +109,7 @@
 #define VOX_DIGS_DAMAGE_BLUNT 2U
 #define VOX_DIGS_DAMAGE_EXPLOSIVE 4U
 #define VOX_DIGS_DAMAGE_HEAT 8U
+#define VOX_DIGS_DAMAGE_DROWNING 16U
 
 #define VOX_DIGS_PART_VITAL 1U
 #define VOX_DIGS_PART_LIMB 2U
@@ -244,7 +286,22 @@ typedef enum vox_digs_stimulus {
     VOX_DIGS_STIMULUS_MATCH_START = 24,
     VOX_DIGS_STIMULUS_MATCH_END = 25,
     VOX_DIGS_STIMULUS_IDLE = 26,
-    VOX_DIGS_STIMULUS_COUNT = 27
+    /*
+     * Player-authored context pools.  These are speech-selection state, not
+     * new persistent identities or relationship pairs: a chronicle remains
+     * format 1 and a match still has exactly four slots.
+     */
+    VOX_DIGS_STIMULUS_MOVE = 27,
+    VOX_DIGS_STIMULUS_WEAPON = 28,
+    VOX_DIGS_STIMULUS_MISS = 29,
+    VOX_DIGS_STIMULUS_HIT = 30,
+    VOX_DIGS_STIMULUS_NEAR_DEATH = 31,
+    VOX_DIGS_STIMULUS_CAVE_IN = 32,
+    VOX_DIGS_STIMULUS_GRAPPLE = 33,
+    VOX_DIGS_STIMULUS_KILL = 34,
+    VOX_DIGS_STIMULUS_HUMILIATION = 35,
+    VOX_DIGS_STIMULUS_ESCAPE = 36,
+    VOX_DIGS_STIMULUS_COUNT = 37
 } vox_digs_stimulus;
 
 /*
@@ -292,6 +349,19 @@ typedef enum vox_digs_ai_mode {
     VOX_DIGS_AI_RETREATING = 3
 } vox_digs_ai_mode;
 
+typedef enum vox_digs_tunnel_state {
+    VOX_DIGS_TUNNEL_NONE = 0,
+    VOX_DIGS_TUNNEL_PLANNING = 1,
+    VOX_DIGS_TUNNEL_EXCAVATING = 2,
+    VOX_DIGS_TUNNEL_AMBUSH = 3,
+    VOX_DIGS_TUNNEL_ESCAPE = 4,
+    VOX_DIGS_TUNNEL_TRAP = 5,
+    VOX_DIGS_TUNNEL_COLLAPSE_RISK = 6,
+    VOX_DIGS_TUNNEL_DROWNING = 7,
+    VOX_DIGS_TUNNEL_EXTRACTION = 8,
+    VOX_DIGS_TUNNEL_RECOVERY = 9
+} vox_digs_tunnel_state;
+
 typedef enum vox_digs_event_type {
     VOX_DIGS_EVENT_NONE = 0,
     VOX_DIGS_EVENT_SPAWN = 1,
@@ -314,8 +384,149 @@ typedef enum vox_digs_event_type {
     VOX_DIGS_EVENT_ROPE_HIT = 18,
     VOX_DIGS_EVENT_RAIL_CHARGE = 19,
     VOX_DIGS_EVENT_RAIL_TRACE = 20,
-    VOX_DIGS_EVENT_CRUSH = 21
+    VOX_DIGS_EVENT_CRUSH = 21,
+    VOX_DIGS_EVENT_DASH = 22,
+    VOX_DIGS_EVENT_HEADSHOT = 23,
+    VOX_DIGS_EVENT_AWARD = 24,
+    VOX_DIGS_EVENT_REPLAY_SELECT = 25,
+    VOX_DIGS_EVENT_SHIP_LAUNCH = 26,
+    VOX_DIGS_EVENT_SHIP_COLLISION = 27,
+    VOX_DIGS_EVENT_SHIP_GRAPPLE = 28,
+    VOX_DIGS_EVENT_SHIP_EXTRACT = 29,
+    VOX_DIGS_EVENT_SHIP_ALARM = 30,
+    VOX_DIGS_EVENT_SHIP_SPLATTER = 31,
+    VOX_DIGS_EVENT_CAVE_IN = 32,
+    VOX_DIGS_EVENT_DEBRIS_IMPACT = 33,
+    VOX_DIGS_EVENT_FIXTURE_BREAK = 34,
+    VOX_DIGS_EVENT_DROWN = 35
 } vox_digs_event_type;
+
+typedef enum vox_digs_award_id {
+    VOX_DIGS_AWARD_PYROMANIAC = 0,
+    VOX_DIGS_AWARD_GRAVE_DIGGER = 1,
+    VOX_DIGS_AWARD_HEADHUNTER = 2,
+    VOX_DIGS_AWARD_CAVE_IN_ARTIST = 3,
+    VOX_DIGS_AWARD_EXTRACTIONIST = 4
+} vox_digs_award_id;
+
+/*
+ * A replay frame is render-only state.  It deliberately contains bounded
+ * copies rather than pointers into the live match, so the results screen can
+ * inspect it after the authoritative match has ended without mutating or
+ * replaying the simulation. The window is the front side-view plane used by
+ * the current software renderer; fluids retain their real depth.
+ */
+typedef struct vox_digs_replay_rigid {
+    vox_i32 position_x_q16;
+    vox_i32 position_y_q16;
+    vox_i32 velocity_x_q16;
+    vox_i32 velocity_y_q16;
+    vox_i32 angle_q16;
+    vox_i32 angular_velocity_q16;
+    vox_i32 half_width_q16;
+    vox_i32 half_height_q16;
+    vox_u16 flags;
+    vox_u16 reserved;
+} vox_digs_replay_rigid;
+
+typedef struct vox_digs_replay_fluid {
+    vox_u16 x;
+    vox_u16 y;
+    vox_u16 z;
+    vox_u16 material;
+    vox_i32 volume_q16;
+    vox_i32 temperature_q16;
+    vox_i32 flow_q16;
+} vox_digs_replay_fluid;
+
+typedef struct vox_digs_replay_effect {
+    vox_i32 position_x_q16;
+    vox_i32 position_y_q16;
+    vox_i32 velocity_x_q16;
+    vox_i32 velocity_y_q16;
+    vox_u16 material;
+    vox_u16 ttl_ticks;
+    vox_u16 variant;
+    vox_u16 source;
+    vox_u16 depth;
+    vox_u16 flags;
+} vox_digs_replay_effect;
+
+typedef struct vox_digs_replay_event {
+    vox_u32 sequence;
+    vox_u32 tick;
+    vox_i32 position_x_q16;
+    vox_i32 position_y_q16;
+    vox_u16 type;
+    vox_u16 source;
+    vox_u16 target;
+    vox_u16 weapon;
+    vox_u16 material;
+    vox_u16 magnitude;
+    vox_u16 variant;
+    vox_u16 reserved;
+} vox_digs_replay_event;
+
+typedef struct vox_digs_replay_frame {
+    vox_u32 tick;
+    vox_i32 player_x_q16[VOX_DIGS_MAX_SLOTS];
+    vox_i32 player_y_q16[VOX_DIGS_MAX_SLOTS];
+    vox_u16 player_alive[VOX_DIGS_MAX_SLOTS];
+    vox_u16 player_health[VOX_DIGS_MAX_SLOTS];
+    vox_u32 fluid_hash;
+    vox_u32 rigid_hash;
+    vox_u32 event_sequence;
+    vox_u16 terrain_origin_x;
+    vox_u16 terrain_origin_y;
+    vox_u16 terrain_width;
+    vox_u16 terrain_height;
+    vox_i32 camera_x_q16;
+    vox_i32 camera_y_q16;
+    vox_i32 camera_zoom_q16;
+    vox_u16 terrain_material[VOX_DIGS_REPLAY_WINDOW_CELLS];
+    vox_u16 rigid_count;
+    vox_u16 fluid_count;
+    vox_u16 effect_count;
+    vox_u16 event_count;
+    vox_digs_replay_rigid rigids[VOX_DIGS_REPLAY_MAX_RIGIDS];
+    vox_digs_replay_fluid fluids[VOX_DIGS_REPLAY_MAX_FLUIDS];
+    vox_digs_replay_effect effects[VOX_DIGS_REPLAY_MAX_EFFECTS];
+    vox_digs_replay_event events[VOX_DIGS_REPLAY_MAX_EVENTS];
+} vox_digs_replay_frame;
+
+typedef struct vox_digs_replay_ledger {
+    vox_u16 active;
+    vox_u16 frame_count;
+    vox_u16 play_cursor;
+    vox_u16 capture_cursor;
+    vox_u16 killer;
+    vox_u16 victim;
+    vox_u16 headshot;
+    vox_u16 multi_kill;
+    vox_u16 award_value;
+    vox_u16 kill_streak;
+    vox_u16 cave_in_scale;
+    /* Distance in cells to the nearest selected blast, or 65535 when the
+     * kill did not have a bounded recent blast context. */
+    vox_u16 blast_distance;
+    vox_u16 reserved;
+    vox_u32 selected_tick;
+    vox_u32 seed;
+    vox_digs_replay_frame frames[VOX_DIGS_REPLAY_MAX_FRAMES];
+} vox_digs_replay_ledger;
+
+typedef struct vox_digs_dropship {
+    vox_i32 position_x_q16;
+    vox_i32 position_y_q16;
+    vox_i32 previous_position_x_q16;
+    vox_i32 velocity_x_q16;
+    vox_u16 phase;
+    vox_u16 route_ticks;
+    vox_u16 launched_mask;
+    vox_u16 extracted_mask;
+    vox_u16 alarmed;
+    vox_u16 collision_cooldown;
+} vox_digs_dropship;
 
 typedef struct vox_digs_weapon_properties {
     const char *name;
@@ -404,6 +615,10 @@ typedef struct vox_digs_rope {
     vox_u16 point_count;
     vox_u16 target_player;
     vox_u16 flags;
+    vox_u16 target_x;
+    vox_u16 target_y;
+    vox_u16 retarget_cursor;
+    vox_u16 reserved;
 } vox_digs_rope;
 
 typedef struct vox_digs_ai_state {
@@ -440,6 +655,10 @@ typedef struct vox_digs_ai_state {
     vox_u16 breach_ticks;
     vox_i32 last_seen_x_q16;
     vox_i32 last_seen_y_q16;
+    vox_u16 tunnel_state;
+    vox_u16 tunnel_safety_q8;
+    vox_u16 collapse_risk_q8;
+    vox_u16 extraction_ticks;
 } vox_digs_ai_state;
 
 typedef struct vox_digs_event {
@@ -547,6 +766,23 @@ typedef struct vox_digs_match {
     vox_u32 struct_size;
     vox_digs_rules rules;
     vox_world world;
+    vox_fluid_world fluids;
+    vox_rigid_world ragdolls;
+    vox_structure_state structure;
+    /* Gameplay provenance and compact material accounting for the generic
+     * rigid pool.  The physics library deliberately does not know about
+     * players, weapons, or terrain cells, but a detached terrain body still
+     * needs deterministic damage attribution and a bounded settling policy.
+     * A cooldown prevents a resting slab from dealing damage every solver
+     * tick; loose_cells records the material represented by a debris body. */
+    vox_u16 rigid_source[VOX_RIGID_MAX_BODIES];
+    vox_u16 rigid_weapon[VOX_RIGID_MAX_BODIES];
+    vox_u16 rigid_impact_cooldown[VOX_RIGID_MAX_BODIES];
+    vox_u16 rigid_material[VOX_RIGID_MAX_BODIES];
+    vox_u16 rigid_loose_cells[VOX_RIGID_MAX_BODIES];
+    /* Cells that could not be reintroduced under the fixed settling cap.
+     * This makes expiration observable and hashable rather than silent. */
+    vox_u32 rigid_settle_discarded;
     vox_u32 tick;
     vox_u32 state_hash;
     vox_digs_phase phase;
@@ -572,6 +808,8 @@ typedef struct vox_digs_match {
     vox_u16 coyote_ticks[VOX_DIGS_MAX_SLOTS];
     vox_u16 jump_buffer_ticks[VOX_DIGS_MAX_SLOTS];
     vox_u16 jump_hold_ticks[VOX_DIGS_MAX_SLOTS];
+    vox_u16 dash_cooldown[VOX_DIGS_MAX_SLOTS];
+    vox_u16 dash_invulnerability[VOX_DIGS_MAX_SLOTS];
     vox_u16 steam_q16[VOX_DIGS_MAX_SLOTS];
     vox_u16 weapon_cooldown[VOX_DIGS_MAX_SLOTS];
     vox_u16 selected_weapon[VOX_DIGS_MAX_SLOTS];
@@ -641,6 +879,10 @@ typedef struct vox_digs_match {
     vox_u16 speech_floor_ticks;
     vox_digs_bot_memory memory;   /* what they walked in remembering */
     vox_digs_contract contracts[VOX_DIGS_MAX_PAIRS];
+    vox_u16 awards[VOX_DIGS_MAX_SLOTS];
+    vox_u16 award_value[VOX_DIGS_MAX_SLOTS];
+    vox_digs_replay_ledger replay;
+    vox_digs_dropship dropship;
     vox_u32 lava_level_q16;
     vox_u16 lava_surface_y;
     vox_u16 projectile_count;
@@ -733,6 +975,19 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
                               vox_u16 victim, vox_u16 weapon,
                               vox_u16 part, vox_u16 damage,
                               vox_u16 damage_flags);
+vox_result vox_digs_award_note(vox_digs_match *match, vox_u16 player,
+                               vox_u16 award, vox_u16 value);
+/* match_init leaves the virtual hull departed.  Stage every active miner on
+ * the launch ship with this call before the first interactive match tick; the
+ * ground spawn retained by match_init remains the deterministic respawn
+ * target. */
+vox_result vox_digs_dropship_begin(vox_digs_match *match);
+vox_result vox_digs_dropship_launch(vox_digs_match *match, vox_u16 player);
+vox_result vox_digs_dropship_board(vox_digs_match *match, vox_u16 player);
+vox_result vox_digs_dropship_grapple(vox_digs_match *match, vox_u16 player);
+vox_result vox_digs_dropship_step(vox_digs_match *match);
+vox_result vox_digs_replay_step(vox_digs_match *match,
+                                vox_digs_replay_frame *frame);
 vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player);
 /* VOX_DIGS_ARCHETYPE_COUNT for a slot that is not a bot. */
 vox_u16 vox_digs_bot_archetype(const vox_digs_match *match, vox_u16 player);

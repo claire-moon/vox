@@ -36,6 +36,46 @@ DIGS owns the game-facing layer around those bodies:
   swept one-eighth-cell contact, visible-anatomy impacts, material deposits,
   and blasts.
 
+## v0.0.5 in-tree physics increment
+
+The v0.0.5 work adds three independent authoritative pools. `vox_fluid_world`
+stores global x/y/z coordinates, bounded Q16.16 volume, pressure/head,
+temperature, and flow for water, lava, and blood. A stable coordinate sort
+processes gravity-increasing-y transfer before lateral equalization, carries a
+bounded frontier cursor between ticks, and accounts water/lava reaction loss
+explicitly. Terrain blocking is checked at the exact destination x/y/z cell,
+so a solid in another depth slice cannot silently dam the current slice. DIGS
+deposits corpse blood and tool fluids through this API; the host does not
+synthesize a second liquid state.
+
+`vox_rigid_world` stores fixed-point oriented rectangular bodies with angle,
+angular velocity, mass, inertia, friction, restitution, sleep state, and
+bounded joints. Its deterministic solver uses a fixed iteration count, stable
+body-pair ordering, integer angle sectors, terrain contacts, body contacts,
+joint distance/angle limits, and fixed pool overflow. Killed miners become
+connected anatomy assemblies; smoke and tiny particles remain presentation
+effects, while debris and fixture scrap use the rigid pool. A body may sample
+the authoritative fluid pool for bounded drag and buoyancy, and long-sleeping
+corpse/debris/scrap bodies are recycled through a stable release policy;
+settled detached terrain restores up to sixteen loose cells of its recorded
+material in stable radius/depth order. Any compact remainder increments the
+authoritative, hashed discard counter instead of silently vanishing. Corpse
+and fixture-scrap slots expire without turning into terrain or new grapple
+anchors.
+
+`vox_cluster_extract` performs a stable six-neighbour structural extraction and
+`vox_cluster_spawn_debris` hands detached material to the rigid pool. The
+match-owned `vox_structure_state` tracks per-chunk support, load, collapse
+risk, and a bounded deferred frontier; invalidation is hashed and processed in
+stable chunk order. DIGS consumes up to two queued unsupported fragments per
+tick, attributes their cave-in events and awards to the invalidating miner, and
+re-invalidates each detached edge so a long cut proceeds through bounded,
+deterministic work. A wide-roof regression proves successive 128-cell
+fragments cross chunk boundaries rather than leaving a far half floating
+forever. This is a real deferred cascade, not a claim of an unbounded whole-map
+solver: complete connected-volume support/load analysis and exact mixed-material
+fragment reconstruction remain open acceptance work.
+
 Rope hooks and weapon rays use the same fixed-point swept-contact policy. The
 attached rope is a bounded segmented constraint with terrain wrapping; cable
 contact is presentation-only and non-damaging. A rejected wall correction may
@@ -49,24 +89,29 @@ collision immediately. External walls still collide, and blast self-damage is
 not globally disabled.
 
 Terrain destruction is never an implicit side effect of the body solver.
-The C89 world pass marks awake structural cells unstable when they lose direct
-or diagonal support, then moves them through the deterministic gravity solver.
-Weapons call bounded C89 world primitives after their authoritative collision
-or fuse condition. Conversely, liquids and gases can move without becoming
-rigid bodies; the cellular world remains their authority.
+Legacy world motion still marks awake structural cells and moves granular
+materials through the deterministic gravity solver. v0.0.5 weapons additionally
+query structural clusters before their blast, then hand detached groups to the
+rigid pool. Conversely, fluid volumes move through `vox_fluid_world` without
+becoming rigid bodies; the cellular world remains terrain authority.
 
 This gives DIGS a systemic collision and combat playground, but it is not a
 general rigid-body engine and must not be described as Havok-equivalent. The
-demo has no angular dynamics, constraints, joints, broadphase for arbitrary
-convex bodies, stable object stacking, continuous collision proof, or detached
-rigid voxel clusters. Those are future systems with their own bounded-memory,
-determinism, and low-core-count acceptance requirements.
+current pool has coarse integer angle sectors, bounded OBB contacts, and no
+general convex broadphase. It does have deterministic swept terrain contacts
+for its oriented-AABB bounds (including high-speed walls and ceilings), but no
+general continuous body/body collision proof. Full-volume fluid coupling under
+large-world pressure, exact mixed-material fragment reconstruction, and
+complete connected support/load analysis remain future bounded-memory and
+low-core-count acceptance work.
 
 Headless tests cover gravity landing, high-speed wall blocking, embedded-body
 recovery, failed-crush lifecycle, terrain read-only stepping, rope wall energy,
-swept projectile/anatomy contact, deposition, damage/respawn behavior, and
-canonical match hashes. Future SIMD or NASM collision paths must match these
-scalar results before they can be selected at runtime.
+swept projectile/anatomy contact, deposition, damage/respawn behavior,
+fluid conservation and ordering, drowning, rigid angular/joint state, local
+cluster extraction, fixture breakage, dropship transitions, and canonical match
+hashes. Future SIMD or NASM collision paths must match these scalar results
+before they can be selected at runtime.
 
 The current type policy requires 8-bit bytes, 16-bit shorts, and 32-bit ints at
 compile time. A true 16-bit target needs an explicit fixed-width type/profile

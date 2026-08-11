@@ -163,10 +163,11 @@ Three collisions, stated so they are decided rather than discovered:
   ragdolls, skeletal animation, a raymarched sky, a 256-colour palette and
   voxel weapon models. Budget per feature and measure as you go. If it comes to
   a choice, somebody has to say which features *are* the release.
-- **Ragdolls are research-scale under these constraints.** Angular rigid bodies
-  with joints, integer-only, deterministic, allocation-free, inside the size
-  budget. Jointed particle chains are the pragmatic scope; full rigid-body
-  parity is a different project.
+- **Ragdolls remain research-scale under these constraints.** The in-tree
+  bounded angular rigid bodies and joints satisfy the v0.0.5 direction, but
+  they are not a general convex solver and still need post-change performance
+  and human-acceptance evidence. Do not replace them with particle chains: the
+  locked v0.0.5 contract explicitly rejects that scope reduction.
 - **A fourth bot is a format change, not a constant.** Five slots means ten
   pairs, not six. It breaks chronicle format 1 and every existing player's
   history. Worth doing in a release that already breaks the format, not on its
@@ -174,6 +175,17 @@ Three collisions, stated so they are decided rather than discovered:
 
 ## 9. Smaller things worth knowing
 
+- **The dropship launch has a spatial ordering invariant.** A rider stages on
+  top of the hull, but FIRE must eject that body below the hull before the
+  next collision query. Giving the deck position a downward velocity instead
+  turns the ship into an invisible first-tick splatter. The core and SDL host
+  regressions deliberately step once after FIRE; preserve that test when
+  changing the launch deck, hull size, or collision rule.
+- **The dropship has an explicit lifecycle boundary.** `vox_digs_match_init`
+  starts with the virtual hull departed. Only `vox_digs_dropship_begin` at
+  tick zero activates and stages it. Restoring LAUNCH as the default makes
+  ground-based tools and tests acquire an invisible moving collision surface;
+  forgetting the begin call in a real host means there must be no ship at all.
 - **The Options memory reset contradicts RFC 0003's own design intent.** The
   RFC says the history should be unrepeatable; a reset makes it a save file.
   It exists at the lead's explicit request, behind a two-press confirm, and is

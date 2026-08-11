@@ -647,6 +647,193 @@ static const char *const digs_miner_doomed[] = {
     "OH, COME ON!"
 };
 
+/*
+ * The expanded miner bark corpus is deliberately contextual rather than a
+ * persona selector.  These are complete authored lines: no fragments are
+ * assembled at runtime and none require a named target, so they remain sound
+ * when a player is alone in the mine.
+ */
+
+static const char *const digs_any_move[] = {
+    "KEEP MOVING.",
+    "NEW TUNNEL. SAME PROBLEMS.",
+    "ONE BOOT IN FRONT OF THE OTHER.",
+    "MAKE ROOM."
+};
+
+static const char *const digs_any_weapon[] = {
+    "TOOLS OUT.",
+    "LET'S SEE WHAT THIS DOES.",
+    "MAKE IT COUNT.",
+    "LITTLE BIT OF PRESSURE."
+};
+
+static const char *const digs_any_miss[] = {
+    "WELL, THAT WENT SOMEWHERE.",
+    "THE ROCK HAD IT COMING.",
+    "ADJUSTING.",
+    "NOT MY BEST ANGLE."
+};
+
+static const char *const digs_any_hit[] = {
+    "THAT CONNECTED.",
+    "GOOD CONTACT.",
+    "THERE IT IS.",
+    "KEEP THE PRESSURE ON."
+};
+
+static const char *const digs_any_near_death[] = {
+    "NOT TODAY.",
+    "NEED A BETTER PLAN.",
+    "BREATH. MOVE.",
+    "TOO CLOSE."
+};
+
+static const char *const digs_any_cave_in[] = {
+    "THAT ROOF WASN'T THERE A SECOND AGO.",
+    "ROCK'S MOVING.",
+    "MIND THE CEILING.",
+    "THAT'S A LOT OF MINE."
+};
+
+static const char *const digs_any_grapple[] = {
+    "ROPE OUT.",
+    "HOLD FAST.",
+    "UP WE GO.",
+    "HOOK'S GOOD."
+};
+
+static const char *const digs_any_kill[] = {
+    "ONE LESS PROBLEM.",
+    "CLOCKED OUT.",
+    "THAT SETTLES IT.",
+    "BACK TO THE JOB."
+};
+
+static const char *const digs_any_humiliation[] = {
+    "THAT ONE'S GOING IN THE LOG.",
+    "SPECTACULAR.",
+    "HARD TO TOP THAT.",
+    "FOREMAN WOULD HAVE LOVED THAT."
+};
+
+static const char *const digs_any_escape[] = {
+    "OUT. NOW.",
+    "THIS WAY IS BETTER.",
+    "LEAVE THE ROCK TO IT.",
+    "RUN FIRST. EXPLAIN LATER."
+};
+
+static const char *const digs_miner_move[] = {
+    "KEEP THE LAMP AHEAD OF THE FEET.",
+    "SHIFT THE WEIGHT. KEEP GOING.",
+    "THE MINE CAN CHASE ME FOR ONCE.",
+    "MADE FOR A TIGHTER GAP THAN THIS.",
+    "DON'T LET THE ROCK PICK THE ROUTE.",
+    "A LITTLE FURTHER. ALWAYS A LITTLE FURTHER.",
+    "NO TIME TO ADMIRE THE SCENERY.",
+    "LEFT FOOT. RIGHT FOOT. NO ARGUMENTS."
+};
+
+static const char *const digs_miner_weapon[] = {
+    "LET'S GIVE THE TOOL SOMETHING TO DO.",
+    "THIS IS WHAT THEY ISSUED IT FOR.",
+    "THAT'S THE GOOD HANDLE.",
+    "MIND THE BACKBLAST. PROBABLY.",
+    "IF IT'S LOUD, IT'S WORKING.",
+    "NO DELICATE WAY TO DO THIS.",
+    "JUST A SMALL PROFESSIONAL DEMONSTRATION.",
+    "I PAID FOR THE WHOLE TOOL."
+};
+
+static const char *const digs_miner_miss[] = {
+    "THAT WAS A WARNING SHOT. TO THE ROCK.",
+    "SIGHT'S FINE. WORLD MOVED.",
+    "RIGHT. LESS OF THAT.",
+    "I MEANT TO OPEN A WINDOW.",
+    "THE CEILING JUMPED IN FRONT OF IT.",
+    "GOOD NEWS: NOBODY SAW THAT.",
+    "CALL IT A TEST CUT.",
+    "NEXT ONE HAS A NAME ON IT."
+};
+
+static const char *const digs_miner_hit[] = {
+    "THAT'S WHERE THE AIM WAS MEANT TO LAND.",
+    "SOLID. KEEP IT SOLID.",
+    "THERE'S THE OPENING.",
+    "I KNEW THE TOOL HAD MANNERS.",
+    "THAT GOT THEIR ATTENTION.",
+    "GOOD. NOW THEY'RE THINKING ABOUT IT.",
+    "RIGHT ON THE SEAM.",
+    "THAT ONE EARNS ITS NOISE."
+};
+
+static const char *const digs_miner_near_death[] = {
+    "NOT DONE YET. NOT EVEN CLOSE.",
+    "BREATHE FIRST. PANIC LATER.",
+    "THAT WAS FAR TOO NEAR THE CLOCK.",
+    "STILL HAVE A SHIFT TO FINISH.",
+    "NO. THE MINE DOESN'T GET ME FOR FREE.",
+    "LEGS WORK. USE THEM.",
+    "ONE GOOD EXIT. THAT'S ALL I NEED.",
+    "KEEP THE HEART INSIDE."
+};
+
+static const char *const digs_miner_cave_in[] = {
+    "THAT'S NOT DUST. THAT'S A DECISION.",
+    "ROOF'S CLOCKED OUT EARLY.",
+    "EVERYBODY CLEAR THE SPAN.",
+    "THAT TUNNEL HAS OPINIONS.",
+    "MIND YOUR HELMET. MIND EVERYTHING.",
+    "THE ROCK REMEMBERS WHO CUT IT.",
+    "THAT'S A WHOLE WALL COMING DOWN.",
+    "LET THE CEILING HAVE ITS MOMENT."
+};
+
+static const char *const digs_miner_grapple[] = {
+    "HOOK'S IN. DON'T LOOK DOWN.",
+    "ROPE'S GOT ME. FOR NOW.",
+    "UP AND OVER, NICE AND UGLY.",
+    "THAT'S A GOOD PIECE OF METAL.",
+    "HANG ON. LITERALLY.",
+    "THE LONG WAY IS FOR PEOPLE WITH TIME.",
+    "LET THE ROPE DO THE THINKING.",
+    "ONE TUG. THEN WE FLY."
+};
+
+static const char *const digs_miner_kill[] = {
+    "SHIFT ENDED FOR SOMEBODY.",
+    "ONE LESS LAMP IN THE DARK.",
+    "THAT'S THE LAST OF THAT NOISE.",
+    "CLOCK OUT. I'LL HOLD THE TUNNEL.",
+    "NOTHING PERSONAL. MOSTLY.",
+    "THE MINE CAN KEEP THE RECEIPT.",
+    "DONE. BACK TO BREATHING.",
+    "THAT'S ONE PROBLEM WITH A QUIET END."
+};
+
+static const char *const digs_miner_humiliation[] = {
+    "THAT'S GOING IN THE SHIFT REPORT.",
+    "SOMEBODY SAVE THAT MOMENT.",
+    "I'D APOLOGISE, BUT LOOK AT IT.",
+    "THE FOREMAN CAN'T TAKE THIS AWAY.",
+    "THAT WAS BEAUTIFUL IN A TERRIBLE WAY.",
+    "PUT A RIBBON ON THAT ONE.",
+    "I'M GOING TO BE ANNOYING ABOUT THAT ALL WEEK.",
+    "THAT'S WHY THEY GIVE US HELMETS. APPARENTLY."
+};
+
+static const char *const digs_miner_escape[] = {
+    "OUT OF THE HOLE. NOW.",
+    "LEAVE THE BRAVERY FOR THE PAYROLL.",
+    "RUNNING IS A PERFECTLY GOOD PLAN.",
+    "THE LAVA CAN HAVE THE TUNNEL.",
+    "NOT DROWNING FOR A BET.",
+    "THE EXIT'S STILL AN EXIT.",
+    "KEEP THE HEAT BEHIND ME.",
+    "LIVE FIRST. GLOAT LATER."
+};
+
 /* ---- tone-specific writing -------------------------------------------
  *
  * Where the mood changes what a miner would say.  These sit above the voice
@@ -3331,7 +3518,31 @@ static const digs_line_set digs_line_sets[] = {
     DIGS_SET(digs_rivet_thawing_truce_accepted),
     DIGS_SET(digs_rivet_thawing_truce_offered),
     DIGS_SET(digs_rivet_truce_truce_accepted),
-    DIGS_SET(digs_rivet_truce_truce_offered)
+    DIGS_SET(digs_rivet_truce_truce_offered),
+
+    /* Contextual bark fallback pools: 369 through 378. */
+    DIGS_SET(digs_any_move),
+    DIGS_SET(digs_any_weapon),
+    DIGS_SET(digs_any_miss),
+    DIGS_SET(digs_any_hit),
+    DIGS_SET(digs_any_near_death),
+    DIGS_SET(digs_any_cave_in),
+    DIGS_SET(digs_any_grapple),
+    DIGS_SET(digs_any_kill),
+    DIGS_SET(digs_any_humiliation),
+    DIGS_SET(digs_any_escape),
+
+    /* Authored player pools: 379 through 388. */
+    DIGS_SET(digs_miner_move),
+    DIGS_SET(digs_miner_weapon),
+    DIGS_SET(digs_miner_miss),
+    DIGS_SET(digs_miner_hit),
+    DIGS_SET(digs_miner_near_death),
+    DIGS_SET(digs_miner_cave_in),
+    DIGS_SET(digs_miner_grapple),
+    DIGS_SET(digs_miner_kill),
+    DIGS_SET(digs_miner_humiliation),
+    DIGS_SET(digs_miner_escape)
 };
 
 #define DIGS_LINE_SET_COUNT \
@@ -3345,23 +3556,28 @@ static const vox_u16
 digs_voice_sets[DIGS_VOICE_COUNT][VOX_DIGS_STIMULUS_COUNT] = {
     /* RIVET */
     {0U, 27U, 28U, 29U, 30U, 31U, 32U, 33U, 34U, 35U, 36U, 0U, 0U, 0U, 0U,
-     0U, 0U, 0U, 0U, 37U, 38U, 39U, 40U, 0U, 41U, 0U, 42U},
+     0U, 0U, 0U, 0U, 37U, 38U, 39U, 40U, 0U, 41U, 0U, 42U,
+     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U},
     /* CINDER */
     {0U, 43U, 44U, 45U, 46U, 47U, 48U, 49U, 50U, 51U, 52U, 0U, 0U, 0U, 0U,
-     0U, 0U, 0U, 0U, 53U, 54U, 55U, 56U, 0U, 57U, 0U, 58U},
+     0U, 0U, 0U, 0U, 53U, 54U, 55U, 56U, 0U, 57U, 0U, 58U,
+     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U},
     /* FLAMEY */
     {0U, 59U, 60U, 61U, 62U, 63U, 64U, 65U, 66U, 67U, 68U, 0U, 0U, 0U, 0U,
-     0U, 0U, 0U, 0U, 69U, 70U, 71U, 72U, 0U, 73U, 0U, 74U},
+     0U, 0U, 0U, 0U, 69U, 70U, 71U, 72U, 0U, 73U, 0U, 74U,
+     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U},
     /* the miner */
     {0U, 75U, 0U, 76U, 77U, 0U, 0U, 0U, 78U, 79U, 0U, 0U, 0U, 0U, 0U,
-     0U, 0U, 0U, 0U, 0U, 0U, 0U, 80U, 0U, 0U, 0U, 0U}
+     0U, 0U, 0U, 0U, 0U, 0U, 0U, 80U, 0U, 0U, 0U, 0U,
+     379U, 380U, 381U, 382U, 383U, 384U, 385U, 386U, 387U, 388U}
 };
 
 /* The floor: what anyone would say.  No entry here may be zero. */
 static const vox_u16 digs_any_sets[VOX_DIGS_STIMULUS_COUNT] = {
     0U,     /* NONE has nothing to say, by definition */
     1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U, 13U, 14U, 15U,
-    16U, 17U, 18U, 19U, 20U, 21U, 22U, 23U, 24U, 25U, 26U
+    16U, 17U, 18U, 19U, 20U, 21U, 22U, 23U, 24U, 25U, 26U,
+    369U, 370U, 371U, 372U, 373U, 374U, 375U, 376U, 377U, 378U
 };
 
 /*

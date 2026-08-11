@@ -117,3 +117,9 @@ README.md :: docs/ROADMAP_V0.0.5.md
 # Dates when bark stopped being a cosmetic keypress. A port carrying the old
 # assumption will desync, so the sentence has to say which release changed it.
 docs/architecture/PLAYER_CONTROLS.md :: It was through v0.0.3
+
+# The current checkout contains an untagged v0.0.5 implementation increment;
+# these lines describe that in-tree physics work while VERSION remains the
+# releasable v0.0.4 product identity.
+ports/sdl2/digs_sdl2.c :: v0.0.5 always uses toggle grapple behavior.
+docs/architecture/PHYSICS.md :: v0.0.5

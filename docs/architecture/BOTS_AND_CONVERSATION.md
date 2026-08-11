@@ -43,7 +43,7 @@ FEUD  HOSTILE  NEEDLING  NEUTRAL  WARY  THAWING  TRUCE  BONDED
   0      1         2        3      4      5        6      7
 ```
 
-Twenty-seven stimuli (`VOX_DIGS_STIMULUS_COUNT`) move valence. **Severity is
+Thirty-seven stimuli (`VOX_DIGS_STIMULUS_COUNT`) move valence. **Severity is
 expressed by which stimulus fires, never by scaling one**, so the mapping from
 event to feeling stays inspectable rather than becoming a tuning curve.
 
@@ -55,6 +55,13 @@ Two mechanisms keep tone from being noisy:
   read as unstable rather than as changing their minds.
 - **Decay.** Valence moves `DIGS_CONTRACT_DECAY_STEP` (4) toward zero every
   `DIGS_CONTRACT_DECAY_TICKS` (300), so a grudge fades if it is not fed.
+
+Chronicle memory is keyed by the four persistent identities, not local seats.
+Two human seats therefore share the PLAYER identity. On export, duplicate
+identity-pair contracts merge deterministically: the greatest match-local
+valence change wins (the lower slot pair wins an exact tie), a quiet second
+human cannot clear the active human's account, and a meeting is counted once
+per persistent pair per match.
 
 ## Choosing a line
 
@@ -78,7 +85,7 @@ overflowed past set 255 and silently aliased set 282 onto set 26.
 | Constant | Value | Meaning |
 |---|---:|---|
 | `DIGS_SPEECH_FLOOR_IN_EXCHANGE` | 42 | Minimum ticks between lines inside a row |
-| `DIGS_SPEECH_FLOOR_BETWEEN` | 480 | Minimum ticks between separate rows |
+| `DIGS_SPEECH_FLOOR_BETWEEN` | 600 | Minimum ticks between separate rows |
 | `DIGS_SPEECH_EXCHANGE_MAX` | 4 | Lines before an exchange must close |
 
 One bubble is on screen at a time and matches have quiet stretches. An
@@ -105,7 +112,10 @@ reads as "the bots are a bit quiet" rather than as a defect.
 Every player line comes from a press of the bark button; the player character
 never speaks unprompted. Playing alone, the player's own last line becomes the
 context for the next press, so repeated presses build a train of thought.
-Miners are always listening — including to themselves.
+Miners are always listening — including to themselves. The expanded authored
+pools cover movement, weapon use, misses, hits, near-deaths, cave-ins, grapple
+actions, kills, humiliation, escape, and relationship context; there is no
+selectable persona and no runtime mad-lib fallback.
 
 ## What crosses between sessions
 
@@ -141,4 +151,5 @@ see `ports/sdl2/digs_chronicle.h`.
 | `test_alone_you_talk_to_yourself` | Repeated barks chain instead of restarting |
 | `test_overhearing_takes_sides` | Miners react to conversations they are not in |
 | `test_talk_arrives_in_exchanges` | Lines cluster into rows rather than trickling |
+| `test_bark_pacing_and_variance` | Ambient speech stays inhabited without becoming commentary |
 | `test_init_leaves_nothing_uninitialised` | `vox_digs_match_init` has no `memset` and needs none |

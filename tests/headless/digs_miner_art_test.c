@@ -7,6 +7,24 @@
 
 #define DIGS_MINER_ICON_EXPECTED_FNV 0x459B1402U
 
+typedef struct digs_plot_digest {
+    vox_u32 hash;
+    vox_u32 count;
+} digs_plot_digest;
+
+static void digs_digest_plot(void *context, int x, int y, vox_u16 material)
+{
+    digs_plot_digest *digest = (digs_plot_digest *)context;
+    if (digest == 0) return;
+    digest->hash ^= (vox_u32)(vox_i32)x;
+    digest->hash *= 16777619U;
+    digest->hash ^= (vox_u32)(vox_i32)y;
+    digest->hash *= 16777619U;
+    digest->hash ^= (vox_u32)material;
+    digest->hash *= 16777619U;
+    digest->count++;
+}
+
 static int digs_read_file(const char *path, vox_u8 **bytes, size_t *size)
 {
     FILE *input;
@@ -49,14 +67,57 @@ static vox_u32 digs_hash_bytes(const vox_u8 *bytes, size_t size)
 
 int main(void)
 {
+    static vox_world cosmetic_world;
     const char *first_path = "digs-miner-art-a.xpm";
     const char *second_path = "digs-miner-art-b.xpm";
+    digs_miner_pose cosmetic_pose;
+    digs_miner_pose idle_pose;
+    digs_miner_pose walk_pose;
+    digs_plot_digest idle_digest;
+    digs_plot_digest walk_digest;
     vox_u8 *first = 0;
     vox_u8 *second = 0;
     size_t first_size = 0U;
     size_t second_size = 0U;
     vox_u32 hash;
     int result = 1;
+    /* Outfit and helmet colours are a renderer-facing choice.  Exercise both
+     * independently so a new helmet field cannot silently reuse the coat or
+     * alter the canonical default icon below. */
+    vox_world_init(&cosmetic_world);
+    digs_miner_pose_default(&cosmetic_pose);
+    cosmetic_pose.coat_material = VOX_MAT_BIOMASS;
+    cosmetic_pose.helmet_material = VOX_MAT_COAL;
+    if (digs_miner_voxelize(&cosmetic_world,
+                            (int)(VOX_WORLD_WIDTH / 2U),
+                            (int)(VOX_WORLD_HEIGHT / 2U),
+                            &cosmetic_pose) != VOX_OK ||
+        vox_world_cell(&cosmetic_world, VOX_WORLD_WIDTH / 2U,
+                       VOX_WORLD_HEIGHT / 2U - 8U,
+                       VOX_WORLD_DEPTH - 1U)->material != VOX_MAT_COAL ||
+        vox_world_cell(&cosmetic_world, VOX_WORLD_WIDTH / 2U,
+                       VOX_WORLD_HEIGHT / 2U,
+                       VOX_WORLD_DEPTH - 1U)->material != VOX_MAT_BIOMASS) {
+        fprintf(stderr, "miner cosmetics did not reach the art layer\n");
+        goto cleanup;
+    }
+    digs_miner_pose_default(&idle_pose);
+    walk_pose = idle_pose;
+    walk_pose.animation = DIGS_MINER_ANIMATION_WALK;
+    walk_pose.animation_phase = 0U;
+    idle_digest.hash = 2166136261U;
+    idle_digest.count = 0U;
+    walk_digest.hash = 2166136261U;
+    walk_digest.count = 0U;
+    if (digs_miner_plot(100, 100, &idle_pose, digs_digest_plot,
+                        &idle_digest) != VOX_OK ||
+        digs_miner_plot(100, 100, &walk_pose, digs_digest_plot,
+                        &walk_digest) != VOX_OK ||
+        idle_digest.count == 0U || walk_digest.count == 0U ||
+        idle_digest.hash == walk_digest.hash) {
+        fprintf(stderr, "miner renderer-only walk pose did not animate\n");
+        goto cleanup;
+    }
     if (digs_miner_write_icon_xpm(first_path) != VOX_OK ||
         digs_miner_write_icon_xpm(second_path) != VOX_OK ||
         !digs_read_file(first_path, &first, &first_size) ||

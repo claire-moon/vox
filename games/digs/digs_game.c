@@ -35,6 +35,34 @@
  */
 #define DIGS_BURIED_DAMAGE_PER_TICK 2U
 #define DIGS_BURIED_LETHAL_TICKS 180U
+#define DIGS_RIGID_IMPACT_COOLDOWN_TICKS 12U
+#define DIGS_RIGID_IMPACT_MIN_SPEED_Q16 16384L
+#define DIGS_RIGID_IMPACT_MAX_DAMAGE 60U
+/* A detached cluster can hold 128 cells, but reintroducing all of them in
+ * one tick would turn one sleeping rigid body into an unbounded terrain edit.
+ * The first sixteen available slots become loose material in stable local
+ * order; the remainder is accounted as an explicit expiration. */
+#define DIGS_RIGID_SETTLE_MAX_CELLS 16U
+#define DIGS_RIGID_SETTLE_RADIUS 3U
+#define DIGS_REPLAY_CONTEXT_TICKS 180U
+#define DIGS_REPLAY_BLAST_TICKS 45U
+#define DIGS_REPLAY_BLAST_MAX_DISTANCE_CELLS 64U
+#define DIGS_REPLAY_NO_BLAST_DISTANCE 65535U
+#define DIGS_REPLAY_AWARD_VALUE_CAP 2047U
+#define DIGS_REPLAY_HEADSHOT_VALUE 4096U
+#define DIGS_REPLAY_KILL_STREAK_VALUE 32U
+#define DIGS_REPLAY_MULTI_KILL_VALUE 64U
+#define DIGS_REPLAY_CAVE_IN_VALUE 4U
+#define DIGS_REPLAY_BLAST_PROXIMITY_VALUE 8U
+#define DIGS_DROPSHIP_ROUTE_SPEED_Q16 \
+    ((VOX_DIGS_DROPSHIP_LAUNCH_END_X_Q16 - \
+      VOX_DIGS_DROPSHIP_LAUNCH_START_X_Q16) / \
+     (vox_i32)VOX_DIGS_DROP_SHIP_ROUTE_TICKS)
+/* Riders stand on the deck above the hull.  A launch uses the open hold below
+ * it, leaving a full cell of deterministic clearance before gravity takes
+ * over.  Without this, a positive launch velocity carried a newly launched
+ * miner through the ship's own lethal collision volume on the next tick. */
+#define DIGS_DROPSHIP_EJECT_CLEARANCE_Q16 (1L << 16)
 #define DIGS_STEAM_ACCEL_Q16 11264L
 #define DIGS_STEAM_MAX_RISE_Q16 (-98304L)
 #define DIGS_STEAM_LATERAL_Q16 3072L
@@ -260,7 +288,7 @@
  * floor buys the silence that makes the next one feel like it started.
  */
 #define DIGS_SPEECH_FLOOR_IN_EXCHANGE 42U
-#define DIGS_SPEECH_FLOOR_BETWEEN 480U
+#define DIGS_SPEECH_FLOOR_BETWEEN 600U
 /* How long a conversation stays live after the last thing said in it. */
 /*
  * How long an exchange stays live after a line, on top of how long that line
@@ -316,6 +344,11 @@
 #define DIGS_SPEECH_AIM_CELLS 14U
 /* How long your own last line stays available as context for your next. */
 #define DIGS_SPEECH_SELF_WINDOW 420U
+/* Recent authored actions remain bark context briefly, but never become a
+ * second persistent conversation or a wall-clock-dependent state channel. */
+#define DIGS_BARK_CONTEXT_WINDOW 180U
+#define DIGS_BARK_NEAR_DEATH_HEALTH 25U
+#define DIGS_BARK_LAVA_MARGIN_CELLS 8L
 
 /*
  * Pacing.
@@ -407,6 +440,127 @@ static int digs_speech_roll(const vox_digs_match *match, vox_u16 player,
 static vox_u16 digs_stimulus_mirror(vox_u16 stimulus);
 static vox_u16 digs_speech_chime_in(vox_u16 heard, int defends);
 static vox_u16 digs_speech_self_next(vox_u16 previous);
+static vox_u16 digs_speech_player_action_context(const vox_digs_match *match,
+                                                  vox_u16 player);
+
+/*
+ * Pick a player-only bark topic from authoritative state already present in
+ * the match.  No extra timer, random draw, or presentation callback is
+ * stored: events, held input, health, rope state, and the lava surface are
+ * all hashed already.  That keeps a bark reproducible from the same input
+ * stream while leaving chronicle format 1 and relationship storage alone.
+ */
+static vox_u16 digs_speech_player_action_context(const vox_digs_match *match,
+                                                  vox_u16 player)
+{
+    vox_u16 actions;
+    vox_u16 event_index;
+    vox_u32 latest_fire = 0xFFFFFFFFUL;
+    vox_u32 latest_hit = 0xFFFFFFFFUL;
+    vox_u32 latest_kill = 0xFFFFFFFFUL;
+    vox_u32 latest_headshot = 0xFFFFFFFFUL;
+    vox_u32 latest_cave_in = 0xFFFFFFFFUL;
+    vox_u32 latest_grapple = 0xFFFFFFFFUL;
+    vox_i32 feet;
+    const vox_digs_event *event;
+    vox_u32 age;
+    if (match == 0 || player >= match->rules.player_count) {
+        return (vox_u16)VOX_DIGS_STIMULUS_NONE;
+    }
+    actions = match->player_actions[player];
+    if (match->health[player] <= DIGS_BARK_NEAR_DEATH_HEALTH) {
+        return (vox_u16)VOX_DIGS_STIMULUS_NEAR_DEATH;
+    }
+    if (match->buried_ticks[player] != 0U) {
+        return (vox_u16)VOX_DIGS_STIMULUS_CAVE_IN;
+    }
+    if (match->ropes[player].state != VOX_DIGS_ROPE_IDLE ||
+        (actions & VOX_DIGS_ACTION_ROPE) != 0U) {
+        return (vox_u16)VOX_DIGS_STIMULUS_GRAPPLE;
+    }
+    for (event_index = 0U; event_index < match->event_count; ++event_index) {
+        event = &match->events[(match->event_head + match->event_count -
+                                1U - event_index) % VOX_DIGS_MAX_EVENTS];
+        if (event->tick > match->tick) {
+            continue;
+        }
+        age = match->tick - event->tick;
+        if (age > DIGS_BARK_CONTEXT_WINDOW) {
+            continue;
+        }
+        if (event->source == player) {
+            switch (event->type) {
+            case VOX_DIGS_EVENT_HEADSHOT:
+                if (age < latest_headshot) latest_headshot = age;
+                break;
+            case VOX_DIGS_EVENT_KILL:
+                if (age < latest_kill) latest_kill = age;
+                break;
+            case VOX_DIGS_EVENT_CAVE_IN:
+                if (age < latest_cave_in) latest_cave_in = age;
+                break;
+            case VOX_DIGS_EVENT_ROPE_ATTACH:
+            case VOX_DIGS_EVENT_ROPE_CAST:
+            case VOX_DIGS_EVENT_SHIP_GRAPPLE:
+                if (age < latest_grapple) latest_grapple = age;
+                break;
+            case VOX_DIGS_EVENT_DAMAGE:
+            case VOX_DIGS_EVENT_DEBRIS_IMPACT:
+                if (age < latest_hit) latest_hit = age;
+                break;
+            case VOX_DIGS_EVENT_WEAPON_FIRE:
+                if (age < latest_fire) latest_fire = age;
+                break;
+            default:
+                break;
+            }
+        }
+        if (event->target == player &&
+            (event->type == VOX_DIGS_EVENT_CRUSH ||
+             event->type == VOX_DIGS_EVENT_CAVE_IN)) {
+            if (age < latest_cave_in) latest_cave_in = age;
+        }
+    }
+    if (latest_headshot != 0xFFFFFFFFUL) {
+        return (vox_u16)VOX_DIGS_STIMULUS_HUMILIATION;
+    }
+    if (latest_kill != 0xFFFFFFFFUL) {
+        return (vox_u16)VOX_DIGS_STIMULUS_KILL;
+    }
+    if (latest_cave_in != 0xFFFFFFFFUL) {
+        return (vox_u16)VOX_DIGS_STIMULUS_CAVE_IN;
+    }
+    if (latest_grapple != 0xFFFFFFFFUL) {
+        return (vox_u16)VOX_DIGS_STIMULUS_GRAPPLE;
+    }
+    if (latest_hit != 0xFFFFFFFFUL &&
+        (latest_fire == 0xFFFFFFFFUL || latest_hit <= latest_fire)) {
+        return (vox_u16)VOX_DIGS_STIMULUS_HIT;
+    }
+    if (latest_fire != 0xFFFFFFFFUL &&
+        (actions & VOX_DIGS_ACTION_FIRE) == 0U) {
+        return (vox_u16)VOX_DIGS_STIMULUS_MISS;
+    }
+    feet = (match->players[player].position_y.value_q16 +
+            match->players[player].half_height_q16) >> 16;
+    if ((feet + DIGS_BARK_LAVA_MARGIN_CELLS >=
+         (vox_i32)match->lava_surface_y ||
+         match->tick >= match->rules.lava_start_tick) &&
+        (actions & (VOX_DIGS_ACTION_LEFT | VOX_DIGS_ACTION_RIGHT |
+                    VOX_DIGS_ACTION_JUMP | VOX_DIGS_ACTION_STEAM |
+                    VOX_DIGS_ACTION_DASH)) != 0U) {
+        return (vox_u16)VOX_DIGS_STIMULUS_ESCAPE;
+    }
+    if ((actions & VOX_DIGS_ACTION_FIRE) != 0U) {
+        return (vox_u16)VOX_DIGS_STIMULUS_WEAPON;
+    }
+    if ((actions & (VOX_DIGS_ACTION_LEFT | VOX_DIGS_ACTION_RIGHT |
+                    VOX_DIGS_ACTION_JUMP | VOX_DIGS_ACTION_STEAM |
+                    VOX_DIGS_ACTION_DASH)) != 0U) {
+        return (vox_u16)VOX_DIGS_STIMULUS_MOVE;
+    }
+    return (vox_u16)VOX_DIGS_STIMULUS_NONE;
+}
 
 /*
  * What the miner you are driving would say if you pressed bark right now.
@@ -422,6 +576,13 @@ static void digs_speech_player_context(vox_digs_match *match, vox_u16 player)
     vox_u32 freshest = 0U;
     vox_u32 nearest = 0xFFFFFFFFUL;
     vox_u16 stimulus = (vox_u16)VOX_DIGS_STIMULUS_IDLE;
+    vox_u16 action_context = digs_speech_player_action_context(match, player);
+    if (action_context != VOX_DIGS_STIMULUS_NONE) {
+        match->speech_stimulus[player] = action_context;
+        match->speech_subject[player] = VOX_DIGS_NO_PLAYER;
+        match->speech_delay[player] = 0U;
+        return;
+    }
     for (other = 0U; other < match->rules.player_count; ++other) {
         const vox_digs_contract *contract;
         vox_i32 gap;
@@ -533,6 +694,7 @@ static void digs_step_speech(vox_digs_match *match);
 static void digs_step_reactions(vox_digs_match *match);
 static void digs_update_lava(vox_digs_match *match);
 static void digs_apply_lava_hazards(vox_digs_match *match);
+static void digs_apply_fluid_hazards(vox_digs_match *match);
 static void digs_environment_defeat(vox_digs_match *match, vox_u16 victim);
 static void digs_spawn_effect(vox_digs_match *match, vox_u16 material,
                               vox_i32 x_q16, vox_i32 y_q16,
@@ -552,8 +714,35 @@ static void digs_emit_event(vox_digs_match *match, vox_u16 type,
 static void digs_init_anatomy(vox_digs_match *match, vox_u16 player);
 static void digs_step_bleeding(vox_digs_match *match);
 static void digs_step_rope(vox_digs_match *match, vox_u16 player);
+static void digs_replay_frame_init(vox_digs_replay_frame *frame);
+static void digs_replay_capture(vox_digs_match *match);
+static void digs_spawn_corpse_assembly(vox_digs_match *match,
+                                       vox_u16 victim, vox_u16 killer);
+static void digs_spawn_blast_debris(vox_digs_match *match, vox_u32 x,
+                                    vox_u32 y, vox_u16 radius,
+                                    vox_u16 scrap, vox_u16 source,
+                                    vox_u16 weapon);
+static void digs_step_structural_cascades(vox_digs_match *match);
+static void digs_step_rigid_impacts(vox_digs_match *match);
+static vox_result digs_blast(vox_digs_match *match, vox_u32 x, vox_u32 y,
+                             vox_u32 z, vox_u16 radius, vox_i32 heat_q16,
+                             vox_u16 source, vox_u16 weapon);
+static void digs_recycle_sleeping_rigids(vox_digs_match *match);
 static void digs_detach_rope(vox_digs_match *match, vox_u16 player,
                              vox_u16 event_type);
+static int digs_player_extracted(const vox_digs_match *match,
+                                 vox_u16 player);
+static int digs_dropship_contains_point(const vox_digs_match *match,
+                                        vox_i32 x_q16, vox_i32 y_q16,
+                                        vox_i32 margin_q16);
+static void digs_dropship_stage_player(vox_digs_match *match,
+                                       vox_u16 player);
+static int digs_dropship_player_near(const vox_digs_match *match,
+                                     vox_u16 player, vox_i32 radius_q16);
+static int digs_dropship_player_on_deck(const vox_digs_match *match,
+                                        vox_u16 player);
+static void digs_dropship_follow_player(vox_digs_match *match,
+                                        vox_u16 player);
 static vox_u32 digs_abs_i32(vox_i32 value);
 static vox_i32 digs_div_trunc_positive(vox_i32 value, vox_u32 divisor);
 static vox_i32 digs_q16_to_cell(vox_i32 value);
@@ -614,6 +803,12 @@ int vox_digs_player_is_bot(const vox_digs_match *match, vox_u16 player)
 {
     return vox_digs_player_is_active(match, player) &&
            (match->rules.bot_mask & (vox_u16)(1U << player)) != 0U;
+}
+
+static int digs_player_extracted(const vox_digs_match *match, vox_u16 player)
+{
+    return vox_digs_player_is_active(match, player) &&
+           (match->dropship.extracted_mask & (vox_u16)(1U << player)) != 0U;
 }
 
 static vox_u16 digs_count_bits(vox_u16 value)
@@ -739,7 +934,7 @@ static int digs_point_hits_player(const vox_digs_match *match,
     vox_u16 part;
     vox_i32 center_x = match->players[player].position_x.value_q16;
     vox_i32 center_y = match->players[player].position_y.value_q16;
-    if (!match->alive[player]) {
+    if (!match->alive[player] || digs_player_extracted(match, player)) {
         return 0;
     }
     for (part = 0U; part < VOX_DIGS_ANATOMY_PART_COUNT; ++part) {
@@ -1179,6 +1374,21 @@ static vox_result digs_set_column(vox_world *world, vox_u32 x, vox_u32 y,
     return VOX_OK;
 }
 
+static void digs_write_map_column(vox_world *world, vox_u32 x, vox_u32 y,
+                                  vox_u16 material)
+{
+    vox_u32 z;
+    for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+        vox_cell *cell = &world->cells[(z * VOX_WORLD_HEIGHT *
+                                        VOX_WORLD_WIDTH) +
+                                       (y * VOX_WORLD_WIDTH) + x];
+        cell->material = material;
+        cell->flags = 0U;
+        cell->temperature_q16 = 20L << 16;
+        cell->damage_q16 = 0L;
+    }
+}
+
 static vox_result digs_add_metal_span(vox_world *world, vox_u32 left,
                                       vox_u32 right, vox_u32 y)
 {
@@ -1326,12 +1536,12 @@ vox_result vox_digs_generate_map(vox_world *world, vox_u16 map_style,
     for (y = 0U; y < VOX_WORLD_HEIGHT; ++y) {
         for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
             vox_u16 material = digs_map_material(map_style, seed, x, y);
-            if (material != VOX_MAT_AIR &&
-                digs_set_column(world, x, y, material) != VOX_OK) {
-                return VOX_ERR_INVALID;
+            if (material != VOX_MAT_AIR) {
+                digs_write_map_column(world, x, y, material);
             }
         }
     }
+    if (vox_world_rebuild(world) != VOX_OK) return VOX_ERR_INVALID;
     if (digs_add_overhead_fixtures(world, map_style, seed) != VOX_OK) {
         return VOX_ERR_INVALID;
     }
@@ -1454,14 +1664,116 @@ static int digs_cell_is_rope_anchor(const vox_world *world,
         const vox_cell *cell = vox_world_cell(world, x, y, z);
         if (cell != 0 &&
             (cell->flags & VOX_CELL_LOOSE) == 0U &&
-            (cell->material == VOX_MAT_BEDROCK ||
-             cell->material == VOX_MAT_STONE ||
-             cell->material == VOX_MAT_METAL ||
-             cell->material == VOX_MAT_COAL)) {
+            cell->material == VOX_MAT_METAL) {
             return 1;
         }
     }
     return 0;
+}
+
+static int digs_dropship_contains_point(const vox_digs_match *match,
+                                        vox_i32 x_q16, vox_i32 y_q16,
+                                        vox_i32 margin_q16)
+{
+    vox_i32 delta_x;
+    vox_i32 delta_y;
+    if (match == 0 || match->dropship.phase ==
+        VOX_DIGS_DROPSHIP_PHASE_DEPARTED) {
+        return 0;
+    }
+    delta_x = x_q16 - match->dropship.position_x_q16;
+    delta_y = y_q16 - match->dropship.position_y_q16;
+    if (delta_x < 0L) delta_x = -delta_x;
+    if (delta_y < 0L) delta_y = -delta_y;
+    return delta_x <= VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16 + margin_q16 &&
+           delta_y <= VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16 + margin_q16;
+}
+
+static int digs_dropship_player_near(const vox_digs_match *match,
+                                     vox_u16 player, vox_i32 radius_q16)
+{
+    if (!vox_digs_player_is_active(match, player)) {
+        return 0;
+    }
+    return digs_dropship_contains_point(
+        match, match->players[player].position_x.value_q16,
+        match->players[player].position_y.value_q16, radius_q16);
+}
+
+/* Ejection is only for an actual launch-deck rider.  Boarding and grapple
+ * reach intentionally extend beyond the hull, so using that broader radius
+ * here would teleport a nearby miner and could put their rope through rock. */
+static int digs_dropship_player_on_deck(const vox_digs_match *match,
+                                        vox_u16 player)
+{
+    vox_i32 deck_y;
+    if (match == 0 || !vox_digs_player_is_active(match, player) ||
+        !match->alive[player] || digs_player_extracted(match, player)) {
+        return 0;
+    }
+    deck_y = match->dropship.position_y_q16 -
+             VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16 -
+             match->players[player].half_height_q16;
+    return match->players[player].position_x.value_q16 >=
+               match->dropship.position_x_q16 -
+               VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16 &&
+           match->players[player].position_x.value_q16 <=
+               match->dropship.position_x_q16 +
+               VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16 &&
+           match->players[player].position_y.value_q16 == deck_y;
+}
+
+/* The ground spawn finder still records a safe respawn target.  The initial
+ * live body rides on the moving dropship deck with a compact slot offset.
+ * No terrain platform is synthesized for this vehicle-only state. */
+static void digs_dropship_stage_player(vox_digs_match *match,
+                                       vox_u16 player)
+{
+    vox_i32 offset_x;
+    if (match == 0 || !vox_digs_player_is_active(match, player) ||
+        !match->alive[player] || digs_player_extracted(match, player) ||
+        (match->dropship.launched_mask & (vox_u16)(1U << player)) != 0U) {
+        return;
+    }
+    offset_x = ((vox_i32)player * 2L -
+                (vox_i32)(match->rules.player_count - 1U)) * 49152L;
+    match->players[player].position_x.value_q16 =
+        match->dropship.position_x_q16 + offset_x;
+    match->players[player].position_y.value_q16 =
+        match->dropship.position_y_q16 -
+        VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16 -
+        match->players[player].half_height_q16;
+    match->players[player].velocity_x.value_q16 =
+        match->dropship.velocity_x_q16;
+    match->players[player].velocity_y.value_q16 = 0L;
+    match->players[player].flags = VOX_PHYSICS_BODY_GROUNDED;
+}
+
+static void digs_dropship_follow_player(vox_digs_match *match,
+                                        vox_u16 player)
+{
+    if (!vox_digs_player_is_active(match, player) ||
+        digs_player_extracted(match, player) ||
+        (match->dropship.launched_mask & (vox_u16)(1U << player)) != 0U ||
+        !digs_dropship_player_near(match, player,
+                                   VOX_DIGS_DROPSHIP_BOARD_RADIUS_Q16)) {
+        return;
+    }
+    digs_dropship_stage_player(match, player);
+}
+
+static vox_u16 digs_rope_cell_material(const vox_world *world,
+                                       vox_u32 x, vox_u32 y)
+{
+    vox_u32 z;
+    vox_u16 fallback = VOX_MAT_STONE;
+    for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+        const vox_cell *cell = vox_world_cell(world, x, y, z);
+        if (cell == 0 || cell->material == VOX_MAT_AIR) continue;
+        if (cell->material == VOX_MAT_METAL) return VOX_MAT_METAL;
+        fallback = cell->material;
+    }
+    return fallback;
 }
 
 static vox_i32 digs_distance_approx(vox_i32 delta_x, vox_i32 delta_y)
@@ -1487,6 +1799,7 @@ static void digs_detach_rope(vox_digs_match *match, vox_u16 player,
     rope->state = VOX_DIGS_ROPE_IDLE;
     rope->point_count = 0U;
     rope->target_player = VOX_DIGS_NO_PLAYER;
+    rope->flags = 0U;
     rope->tension_q16 = 0L;
     digs_emit_event(match, event_type, player, VOX_DIGS_NO_PLAYER,
                     VOX_DIGS_TOOL_PICK, VOX_MAT_METAL,
@@ -1557,22 +1870,179 @@ static int digs_segment_is_clear(const vox_world *world,
     return 1;
 }
 
+/*
+ * Choose a visible terrain target from a bounded aim cone.  The eight best
+ * candidates are retained in score order so a second press can deterministically
+ * choose the next target instead of merely casting at the same cell again.
+ */
+static int digs_select_rope_target(const vox_digs_match *match, vox_u16 player,
+                                   vox_u16 skip, vox_u16 *target_x,
+                                   vox_u16 *target_y, vox_u16 avoid_x,
+                                   vox_u16 avoid_y)
+{
+    vox_i32 source_x = match->players[player].position_x.value_q16;
+    vox_i32 source_y = match->players[player].position_y.value_q16;
+    vox_i32 source_cell_x = digs_q16_to_cell(source_x);
+    vox_i32 source_cell_y = digs_q16_to_cell(source_y);
+    vox_i32 aim_x = (vox_i32)match->aim_x[player] - source_cell_x;
+    vox_i32 aim_y = (vox_i32)match->aim_y[player] - source_cell_y;
+    vox_i32 score[8];
+    vox_u16 candidate_x[8];
+    vox_u16 candidate_y[8];
+    vox_u16 count = 0U;
+    vox_i32 min_x;
+    vox_i32 max_x;
+    vox_i32 min_y;
+    vox_i32 max_y;
+    vox_i32 x;
+    vox_i32 y;
+    vox_u16 i;
+    if (aim_x == 0L && aim_y == 0L) {
+        aim_x = match->facing_right[player] ? 1L : -1L;
+    }
+    min_x = source_cell_x - (DIGS_ROPE_MAX_LENGTH_Q16 >> 16);
+    max_x = source_cell_x + (DIGS_ROPE_MAX_LENGTH_Q16 >> 16);
+    min_y = source_cell_y - (DIGS_ROPE_MAX_LENGTH_Q16 >> 16);
+    max_y = source_cell_y + (DIGS_ROPE_MAX_LENGTH_Q16 >> 16);
+    if (min_x < 0L) min_x = 0L;
+    if (min_y < 0L) min_y = 0L;
+    if (max_x >= (vox_i32)VOX_WORLD_WIDTH)
+        max_x = (vox_i32)VOX_WORLD_WIDTH - 1L;
+    if (max_y >= (vox_i32)VOX_WORLD_HEIGHT)
+        max_y = (vox_i32)VOX_WORLD_HEIGHT - 1L;
+    for (y = min_y; y <= max_y; ++y) {
+        for (x = min_x; x <= max_x; ++x) {
+            vox_i32 delta_x = x - source_cell_x;
+            vox_i32 delta_y = y - source_cell_y;
+            vox_i32 dot = delta_x * aim_x + delta_y * aim_y;
+            vox_i32 cross;
+            vox_i32 distance_q16;
+            vox_i32 distance_cells;
+            vox_i32 value;
+            vox_u16 material;
+            vox_u16 insert;
+            if ((delta_x == 0L && delta_y == 0L) || dot <= 0L ||
+                ((vox_u16)x == avoid_x && (vox_u16)y == avoid_y) ||
+                !digs_cell_is_solid(&match->world, (vox_u32)x,
+                                    (vox_u32)y)) continue;
+            distance_q16 = digs_distance_approx(delta_x << 16,
+                                                delta_y << 16);
+            if (distance_q16 < DIGS_ROPE_MIN_LENGTH_Q16 ||
+                distance_q16 > DIGS_ROPE_MAX_LENGTH_Q16 ||
+                !digs_segment_is_clear(&match->world, source_x, source_y,
+                    (x << 16) + 32768L, (y << 16) + 32768L, 0, 0)) continue;
+            distance_cells = distance_q16 >> 16;
+            cross = delta_x * aim_y - delta_y * aim_x;
+            if (cross < 0L) cross = -cross;
+            value = (cross * 1024L) / (dot + 1L) + distance_cells * 4L;
+            material = digs_rope_cell_material(&match->world,
+                                               (vox_u32)x, (vox_u32)y);
+            if (material == VOX_MAT_METAL) value -= 512L;
+            insert = 0U;
+            while (insert < count &&
+                   (score[insert] < value ||
+                    (score[insert] == value && candidate_x[insert] <=
+                     (vox_u16)x))) insert++;
+            if (insert >= 8U) continue;
+            if (count < 8U) count++;
+            for (i = (vox_u16)(count - 1U); i > insert; --i) {
+                score[i] = score[i - 1U];
+                candidate_x[i] = candidate_x[i - 1U];
+                candidate_y[i] = candidate_y[i - 1U];
+            }
+            score[insert] = value;
+            candidate_x[insert] = (vox_u16)x;
+            candidate_y[insert] = (vox_u16)y;
+        }
+    }
+    /* The dropship is a virtual solid target; it is not written into terrain. */
+    if (match->dropship.phase != VOX_DIGS_DROPSHIP_PHASE_DEPARTED) {
+        vox_i32 ship_x = digs_q16_to_cell(match->dropship.position_x_q16);
+        vox_i32 ship_y = digs_q16_to_cell(match->dropship.position_y_q16);
+        vox_i32 delta_x = ship_x - source_cell_x;
+        vox_i32 delta_y = ship_y - source_cell_y;
+        vox_i32 dot = delta_x * aim_x + delta_y * aim_y;
+        vox_i32 distance_q16 = digs_distance_approx(delta_x << 16,
+                                                     delta_y << 16);
+        if (ship_x >= 0L && ship_y >= 0L &&
+            ship_x < (vox_i32)VOX_WORLD_WIDTH &&
+            ship_y < (vox_i32)VOX_WORLD_HEIGHT &&
+            dot > 0L && distance_q16 >= DIGS_ROPE_MIN_LENGTH_Q16 &&
+            distance_q16 <= DIGS_ROPE_MAX_LENGTH_Q16 &&
+            ((vox_u16)ship_x != avoid_x || (vox_u16)ship_y != avoid_y) &&
+            digs_segment_is_clear(&match->world, source_x, source_y,
+                match->dropship.position_x_q16,
+                match->dropship.position_y_q16, 0, 0)) {
+            vox_i32 cross = delta_x * aim_y - delta_y * aim_x;
+            vox_i32 value;
+            vox_u16 insert;
+            if (cross < 0L) cross = -cross;
+            value = (cross * 1024L) / (dot + 1L) +
+                    (distance_q16 >> 16) * 4L - 768L;
+            insert = 0U;
+            while (insert < count &&
+                   (score[insert] < value ||
+                    (score[insert] == value && candidate_x[insert] <=
+                     (vox_u16)ship_x))) insert++;
+            if (insert < 8U) {
+                if (count < 8U) count++;
+                for (i = (vox_u16)(count - 1U); i > insert; --i) {
+                    score[i] = score[i - 1U];
+                    candidate_x[i] = candidate_x[i - 1U];
+                    candidate_y[i] = candidate_y[i - 1U];
+                }
+                score[insert] = value;
+                candidate_x[insert] = (vox_u16)ship_x;
+                candidate_y[insert] = (vox_u16)ship_y;
+            }
+        }
+    }
+    if (count == 0U) return 0;
+    i = (vox_u16)(skip % count);
+    *target_x = candidate_x[i];
+    *target_y = candidate_y[i];
+    return 1;
+}
+
 static int digs_begin_rope_cast(vox_digs_match *match, vox_u16 player)
 {
     vox_digs_rope *rope = &match->ropes[player];
     vox_i32 source_x = match->players[player].position_x.value_q16;
     vox_i32 source_y = match->players[player].position_y.value_q16;
-    vox_i32 delta_x = ((vox_i32)match->aim_x[player] << 16) + 32768L -
-                      source_x;
-    vox_i32 delta_y = ((vox_i32)match->aim_y[player] << 16) + 32768L -
-                      source_y;
-    vox_i32 distance = digs_distance_approx(delta_x, delta_y);
+    vox_u16 target_x = match->aim_x[player];
+    vox_u16 target_y = match->aim_y[player];
+    vox_i32 delta_x;
+    vox_i32 delta_y;
+    vox_i32 distance;
+    vox_u16 avoid_x = 65535U;
+    vox_u16 avoid_y = 65535U;
+    vox_u16 skip = 0U;
     vox_i32 divisor;
     vox_i32 direction_x_q8;
     vox_i32 direction_y_q8;
-    if (distance <= 0 || rope->state != VOX_DIGS_ROPE_IDLE) {
+    if (rope->state != VOX_DIGS_ROPE_IDLE) {
         return 0;
     }
+    if (rope->retarget_cursor != 0U) {
+        avoid_x = rope->target_x;
+        avoid_y = rope->target_y;
+        /* The current target is removed from the sorted candidate list.  A
+         * cursor of one therefore selects the first alternative; later
+         * presses advance through the remaining stable list instead of
+         * repeatedly returning to the best target. */
+        skip = (vox_u16)(rope->retarget_cursor - 1U);
+    }
+    if (!digs_select_rope_target(match, player, skip, &target_x, &target_y,
+                                 avoid_x, avoid_y)) {
+        /* A cast without a visible terrain, fixture, ship, or miner target
+         * is a real miss.  Never turn an arbitrary aim coordinate into a
+         * phantom anchor. */
+        return 0;
+    }
+    delta_x = ((vox_i32)target_x << 16) + 32768L - source_x;
+    delta_y = ((vox_i32)target_y << 16) + 32768L - source_y;
+    distance = digs_distance_approx(delta_x, delta_y);
+    if (distance <= 0) return 0;
     divisor = distance / 256L;
     if (divisor <= 0L) {
         divisor = 1L;
@@ -1595,6 +2065,11 @@ static int digs_begin_rope_cast(vox_digs_match *match, vox_u16 player)
     rope->integrity = 100U;
     rope->point_count = 0U;
     rope->target_player = VOX_DIGS_NO_PLAYER;
+    rope->flags = 0U;
+    rope->target_x = 0U;
+    rope->target_y = 0U;
+    rope->target_x = target_x;
+    rope->target_y = target_y;
     digs_emit_event(match, VOX_DIGS_EVENT_ROPE_CAST, player,
                     VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK,
                     VOX_MAT_METAL, source_x, source_y, 0U,
@@ -1635,6 +2110,8 @@ static void digs_rope_hook_player(vox_digs_match *match, vox_u16 owner,
     rope->state = VOX_DIGS_ROPE_IDLE;
     rope->point_count = 0U;
     rope->target_player = VOX_DIGS_NO_PLAYER;
+    rope->target_x = 0U;
+    rope->target_y = 0U;
 }
 
 static void digs_step_rope_cast(vox_digs_match *match, vox_u16 player)
@@ -1665,12 +2142,59 @@ static void digs_step_rope_cast(vox_digs_match *match, vox_u16 player)
             digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_BREAK);
             return;
         }
+        if (digs_dropship_contains_point(match, rope->hook_x_q16,
+                                         rope->hook_y_q16, 0L)) {
+            vox_digs_rope_point *point = &rope->points[0];
+            rope->anchor_x_q16 = match->dropship.position_x_q16;
+            rope->anchor_y_q16 = match->dropship.position_y_q16;
+            rope->length_q16 = digs_distance_approx(
+                rope->anchor_x_q16 -
+                    match->players[player].position_x.value_q16,
+                rope->anchor_y_q16 -
+                    match->players[player].position_y.value_q16);
+            if (rope->length_q16 < DIGS_ROPE_MIN_LENGTH_Q16) {
+                rope->length_q16 = DIGS_ROPE_MIN_LENGTH_Q16;
+            }
+            point->position_x_q16 = rope->anchor_x_q16;
+            point->position_y_q16 = rope->anchor_y_q16;
+            point->previous_x_q16 = rope->anchor_x_q16;
+            point->previous_y_q16 = rope->anchor_y_q16;
+            rope->point_count = 1U;
+            rope->state = VOX_DIGS_ROPE_ATTACHED;
+            rope->tension_q16 = 0L;
+            rope->flags = VOX_DIGS_ROPE_TARGET_SHIP;
+            rope->target_x = (vox_u16)x_cell;
+            rope->target_y = (vox_u16)y_cell;
+            digs_emit_event(match, VOX_DIGS_EVENT_ROPE_ATTACH, player,
+                            VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK,
+                            VOX_MAT_METAL, rope->anchor_x_q16,
+                            rope->anchor_y_q16,
+                            (vox_u16)(rope->length_q16 >> 16),
+                            (vox_u16)(digs_noise(match->rules.seed,
+                                match->tick, player,
+                                0x524F5045U) & 7U));
+            digs_emit_event(match, VOX_DIGS_EVENT_SHIP_GRAPPLE, player,
+                            VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK,
+                            VOX_MAT_METAL, rope->anchor_x_q16,
+                            rope->anchor_y_q16,
+                            (vox_u16)(rope->length_q16 >> 16), 0U);
+            return;
+        }
         /* Terrain wins a same-sample tie, preventing hooks through cover. */
         if (digs_cell_is_solid(&match->world, (vox_u32)x_cell,
                                (vox_u32)y_cell)) {
-            if (digs_cell_is_rope_anchor(&match->world, (vox_u32)x_cell,
-                                         (vox_u32)y_cell)) {
-                vox_digs_rope_point *point = &rope->points[0];
+            vox_digs_rope_point *point = &rope->points[0];
+                const vox_cell *target_cell = 0;
+                vox_u32 target_z;
+                for (target_z = 0U; target_z < VOX_WORLD_DEPTH; ++target_z) {
+                    const vox_cell *sample = vox_world_cell(
+                        &match->world, (vox_u32)x_cell, (vox_u32)y_cell,
+                        target_z);
+                    if (sample != 0 && sample->material != VOX_MAT_AIR) {
+                        target_cell = sample;
+                        break;
+                    }
+                }
                 rope->anchor_x_q16 = (x_cell << 16) + 32768L;
                 rope->anchor_y_q16 = (y_cell << 16) + 32768L;
                 rope->length_q16 = digs_distance_approx(
@@ -1688,18 +2212,21 @@ static void digs_step_rope_cast(vox_digs_match *match, vox_u16 player)
                 rope->point_count = 1U;
                 rope->state = VOX_DIGS_ROPE_ATTACHED;
                 rope->tension_q16 = 0L;
+                rope->flags = digs_cell_is_rope_anchor(
+                    &match->world, (vox_u32)x_cell, (vox_u32)y_cell) ?
+                    VOX_DIGS_ROPE_TARGET_FIXTURE :
+                    VOX_DIGS_ROPE_TARGET_TERRAIN;
+                rope->target_x = (vox_u16)x_cell;
+                rope->target_y = (vox_u16)y_cell;
                 digs_emit_event(match, VOX_DIGS_EVENT_ROPE_ATTACH, player,
                                 VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK,
-                                VOX_MAT_METAL, rope->anchor_x_q16,
+                                target_cell != 0 ? target_cell->material :
+                                VOX_MAT_STONE, rope->anchor_x_q16,
                                 rope->anchor_y_q16,
                                 (vox_u16)(rope->length_q16 >> 16),
                                 (vox_u16)(digs_noise(match->rules.seed,
                                     match->tick, player,
                                     0x524F5045U) & 7U));
-            } else {
-                digs_detach_rope(match, player,
-                                 VOX_DIGS_EVENT_ROPE_BREAK);
-            }
             return;
         }
         for (victim = 0U; victim < match->rules.player_count; ++victim) {
@@ -1740,11 +2267,24 @@ static void digs_step_rope(vox_digs_match *match, vox_u16 player)
     }
     anchor_x = rope->anchor_x_q16 >> 16;
     anchor_y = rope->anchor_y_q16 >> 16;
-    if (anchor_x < 0 || anchor_y < 0 ||
-        anchor_x >= (vox_i32)VOX_WORLD_WIDTH ||
-        anchor_y >= (vox_i32)VOX_WORLD_HEIGHT ||
-        !digs_cell_is_rope_anchor(&match->world, (vox_u32)anchor_x,
-                                  (vox_u32)anchor_y)) {
+    if (rope->flags == VOX_DIGS_ROPE_TARGET_SHIP) {
+        if (match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_DEPARTED) {
+            digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_BREAK);
+            return;
+        }
+        rope->anchor_x_q16 = match->dropship.position_x_q16;
+        rope->anchor_y_q16 = match->dropship.position_y_q16;
+        rope->target_x = (vox_u16)digs_q16_to_cell(
+            match->dropship.position_x_q16);
+        rope->target_y = (vox_u16)digs_q16_to_cell(
+            match->dropship.position_y_q16);
+        rope->points[0].position_x_q16 = rope->anchor_x_q16;
+        rope->points[0].position_y_q16 = rope->anchor_y_q16;
+    } else if (anchor_x < 0 || anchor_y < 0 ||
+               anchor_x >= (vox_i32)VOX_WORLD_WIDTH ||
+               anchor_y >= (vox_i32)VOX_WORLD_HEIGHT ||
+               digs_cell_is_solid(&match->world, (vox_u32)anchor_x,
+                                  (vox_u32)anchor_y) == 0) {
         digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_BREAK);
         return;
     }
@@ -1825,6 +2365,11 @@ static void digs_step_rope(vox_digs_match *match, vox_u16 player)
             digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_BREAK);
         }
     }
+    if (rope->flags == VOX_DIGS_ROPE_TARGET_SHIP &&
+        digs_dropship_player_near(match, player,
+                                  VOX_DIGS_DROPSHIP_BOARD_RADIUS_Q16)) {
+        (void)vox_digs_dropship_board(match, player);
+    }
 }
 
 static vox_i32 digs_run_speed(const vox_digs_match *match, vox_u16 player)
@@ -1869,6 +2414,14 @@ static int digs_player_on_slippery_material(const vox_digs_match *match,
                           cell->material == VOX_MAT_WATER)) {
             return 1;
         }
+        {
+            const vox_fluid_cell *fluid = vox_fluid_cell_get_at(
+                &match->fluids, (vox_u16)x, (vox_u16)y, (vox_u16)z);
+            if (fluid != 0 && (fluid->material == VOX_FLUID_BLOOD ||
+                               fluid->material == VOX_FLUID_WATER)) {
+                return 1;
+            }
+        }
     }
     return 0;
 }
@@ -1883,6 +2436,16 @@ static void digs_apply_player_controls(vox_digs_match *match, vox_u16 player)
     vox_i16 analog_x = match->move_x_q15[player];
     vox_i32 acceleration;
     vox_i32 deceleration;
+    if (digs_player_extracted(match, player)) {
+        match->player_actions[player] = 0U;
+        return;
+    }
+    if ((pressed & VOX_DIGS_ACTION_FIRE) != 0U &&
+        match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_LAUNCH &&
+        digs_dropship_player_near(match, player,
+                                  VOX_DIGS_DROPSHIP_BOARD_RADIUS_Q16)) {
+        (void)vox_digs_dropship_launch(match, player);
+    }
     if (body->flags & VOX_PHYSICS_BODY_GROUNDED) {
         match->coyote_ticks[player] = DIGS_COYOTE_TICKS;
     } else if (match->coyote_ticks[player] > 0U) {
@@ -1930,6 +2493,18 @@ static void digs_apply_player_controls(vox_digs_match *match, vox_u16 player)
     } else if (!(actions & VOX_DIGS_ACTION_JUMP)) {
         match->jump_hold_ticks[player] = 0U;
     }
+    if ((pressed & VOX_DIGS_ACTION_DASH) &&
+        match->dash_cooldown[player] == 0U) {
+        vox_i32 direction = match->facing_right[player] ? 1L : -1L;
+        body->velocity_x.value_q16 = direction * VOX_DIGS_DASH_SPEED_Q16;
+        match->dash_cooldown[player] = VOX_DIGS_DASH_COOLDOWN_TICKS;
+        match->dash_invulnerability[player] =
+            VOX_DIGS_DASH_INVULNERABILITY_TICKS;
+        digs_emit_event(match, VOX_DIGS_EVENT_DASH, player,
+                        VOX_DIGS_NO_PLAYER, match->selected_weapon[player],
+                        VOX_MAT_SMOKE, body->position_x.value_q16,
+                        body->position_y.value_q16, 0U, 0U);
+    }
     if ((actions & VOX_DIGS_ACTION_STEAM) &&
         match->steam_q16[player] != 0U) {
         if (body->velocity_y.value_q16 >
@@ -1961,12 +2536,23 @@ static void digs_apply_player_controls(vox_digs_match *match, vox_u16 player)
                                                   DIGS_STEAM_RECHARGE_Q16);
         }
     }
-    if ((actions & VOX_DIGS_ACTION_ROPE) &&
-        match->ropes[player].state == VOX_DIGS_ROPE_IDLE) {
+    if (actions & VOX_DIGS_ACTION_JUMP) {
+        /* Jump is the explicit, reliable rope cancellation gesture. */
+        if (match->ropes[player].state != VOX_DIGS_ROPE_IDLE) {
+            match->ropes[player].retarget_cursor = 0U;
+            digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_DETACH);
+        }
+    } else if ((pressed & VOX_DIGS_ACTION_ROPE) &&
+               match->ropes[player].state == VOX_DIGS_ROPE_IDLE) {
         (void)digs_begin_rope_cast(match, player);
-    } else if (!(actions & VOX_DIGS_ACTION_ROPE) &&
-               match->ropes[player].state != VOX_DIGS_ROPE_IDLE) {
+    } else if ((pressed & VOX_DIGS_ACTION_ROPE) &&
+               match->ropes[player].state == VOX_DIGS_ROPE_ATTACHED) {
+        /* Pressing again retargets; holding no longer owns attachment. */
+        if (match->ropes[player].retarget_cursor < 65535U) {
+            match->ropes[player].retarget_cursor++;
+        }
         digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_DETACH);
+        (void)digs_begin_rope_cast(match, player);
     }
 }
 
@@ -2206,6 +2792,10 @@ vox_result vox_digs_match_export_memory(const vox_digs_match *match,
 {
     vox_u16 a;
     vox_u16 b;
+    vox_u16 pair_seen[VOX_DIGS_MAX_PAIRS];
+    vox_u16 truce_seen[VOX_DIGS_MAX_PAIRS];
+    vox_u16 betrayal_seen[VOX_DIGS_MAX_PAIRS];
+    vox_u32 strongest_change[VOX_DIGS_MAX_PAIRS];
     if (match == 0 || memory == 0) {
         return VOX_ERR_INVALID;
     }
@@ -2213,6 +2803,12 @@ vox_result vox_digs_match_export_memory(const vox_digs_match *match,
     memory->abi_version = VOX_ABI_VERSION;
     memory->struct_size = (vox_u32)sizeof(*memory);
     memory->memory_version = VOX_DIGS_MEMORY_VERSION;
+    for (a = 0U; a < VOX_DIGS_MAX_PAIRS; ++a) {
+        pair_seen[a] = 0U;
+        truce_seen[a] = 0U;
+        betrayal_seen[a] = 0U;
+        strongest_change[a] = 0U;
+    }
     for (a = 0U; a < match->rules.player_count; ++a) {
         vox_u16 identity = vox_digs_memory_identity(match, a);
         vox_digs_identity_record *record;
@@ -2302,23 +2898,46 @@ vox_result vox_digs_match_export_memory(const vox_digs_match *match,
                 vox_digs_memory_identity(match, b));
             const vox_digs_contract *contract;
             vox_digs_regard *regard;
+            vox_i32 change;
+            vox_u32 magnitude;
             if (pair >= VOX_DIGS_MAX_PAIRS || slot >= VOX_DIGS_MAX_PAIRS) {
                 continue;
             }
             contract = &match->contracts[pair];
             regard = &memory->regard[slot];
-            regard->tone = contract->tone;
-            regard->valence = contract->valence;
-            if (contract->met && regard->matches_met < 65535U) {
+            /* Two human slots share the PLAYER identity.  A quiet second
+             * seat must not overwrite the first seat's live relationship
+             * with a bot merely because it appears later in slot order.
+             * Merge by persistent identity instead: retain the greatest
+             * match-local change, retaining the first slot on an exact tie
+             * for stable deterministic ordering. */
+            if (!contract->met) {
+                continue;
+            }
+            change = (vox_i32)contract->valence -
+                     (vox_i32)match->memory.regard[slot].valence;
+            magnitude = change < 0L ? (vox_u32)(-change) :
+                        (vox_u32)change;
+            if (pair_seen[slot] == 0U || magnitude > strongest_change[slot]) {
+                regard->tone = contract->tone;
+                regard->valence = contract->valence;
+                strongest_change[slot] = magnitude;
+            }
+            if (pair_seen[slot] == 0U && regard->matches_met < 65535U) {
                 regard->matches_met++;
             }
+            pair_seen[slot] = 1U;
             if (contract->tone >= VOX_DIGS_TONE_TRUCE &&
+                truce_seen[slot] == 0U &&
                 regard->truces < 65535U) {
                 regard->truces++;
+                truce_seen[slot] = 1U;
             }
             if (contract->last_stimulus == VOX_DIGS_STIMULUS_BETRAYED &&
+                betrayal_seen[slot] == 0U &&
                 regard->betrayals < 65535U) {
                 regard->betrayals++;
+                betrayal_seen[slot] = 1U;
             }
         }
     }
@@ -2331,6 +2950,7 @@ vox_result vox_digs_match_init_ex(vox_digs_match *match,
                                   const vox_digs_bot_memory *memory)
 {
     vox_u16 i;
+    vox_u16 frame;
     vox_digs_bot_memory canonical;
     vox_result result = digs_validate_rules(rules);
     if (match == 0 || result != VOX_OK) {
@@ -2356,6 +2976,28 @@ vox_result vox_digs_match_init_ex(vox_digs_match *match,
                               rules->seed) != VOX_OK) {
         return VOX_ERR_INVALID;
     }
+    vox_fluid_init(&match->fluids);
+    vox_rigid_init(&match->ragdolls);
+    for (i = 0U; i < VOX_RIGID_MAX_BODIES; ++i) {
+        match->rigid_source[i] = VOX_DIGS_NO_PLAYER;
+        match->rigid_weapon[i] = VOX_DIGS_TOOL_PICK;
+        match->rigid_impact_cooldown[i] = 0U;
+        match->rigid_material[i] = VOX_MAT_AIR;
+        match->rigid_loose_cells[i] = 0U;
+    }
+    match->rigid_settle_discarded = 0U;
+    vox_structure_init(&match->structure);
+    /* Establish the authored map's support/load baseline before the first
+     * gameplay tick.  Initial analysis intentionally has no armed chunks, so
+     * natural overhangs are measured but not detached; a later blast can then
+     * enter its affected frontier immediately instead of waiting behind the
+     * 640-chunk startup scan. */
+    if (vox_structure_step(&match->structure, &match->world,
+                           VOX_STRUCTURE_FRONTIER_CAPACITY) != VOX_OK) {
+        return VOX_ERR_INVALID;
+    }
+    match->structure.tick = 0U;
+    match->structure.cascade_count = 0U;
     {
         vox_u16 pair;
         for (pair = 0U; pair < VOX_DIGS_MAX_PAIRS; ++pair) {
@@ -2423,6 +3065,44 @@ vox_result vox_digs_match_init_ex(vox_digs_match *match,
     match->event_head = 0U;
     match->event_count = 0U;
     match->event_sequence = 0U;
+    match->replay.active = 0U;
+    match->replay.frame_count = 0U;
+    match->replay.play_cursor = 0U;
+    match->replay.capture_cursor = 0U;
+    match->replay.killer = VOX_DIGS_NO_PLAYER;
+    match->replay.victim = VOX_DIGS_NO_PLAYER;
+    match->replay.headshot = 0U;
+    match->replay.multi_kill = 0U;
+    match->replay.award_value = 0U;
+    match->replay.kill_streak = 0U;
+    match->replay.cave_in_scale = 0U;
+    match->replay.blast_distance = DIGS_REPLAY_NO_BLAST_DISTANCE;
+    match->replay.reserved = 0U;
+    match->replay.selected_tick = 0U;
+    match->replay.seed = rules->seed;
+    for (frame = 0U; frame < VOX_DIGS_REPLAY_MAX_FRAMES; ++frame) {
+        digs_replay_frame_init(&match->replay.frames[frame]);
+    }
+    match->dropship.position_x_q16 =
+        VOX_DIGS_DROPSHIP_LAUNCH_START_X_Q16;
+    match->dropship.position_y_q16 = VOX_DIGS_DROPSHIP_CRUISE_Y_Q16;
+    match->dropship.previous_position_x_q16 =
+        match->dropship.position_x_q16;
+    /* `match_init` supplies a terrain-grounded core fixture.  A playable
+     * host explicitly calls vox_digs_dropship_begin before its first tick;
+     * until then the virtual hull must neither move nor collide with a
+     * simulation that deliberately omitted the launch sequence. */
+    match->dropship.velocity_x_q16 = 0L;
+    match->dropship.phase = VOX_DIGS_DROPSHIP_PHASE_DEPARTED;
+    match->dropship.route_ticks = 0U;
+    match->dropship.launched_mask = 0U;
+    match->dropship.extracted_mask = 0U;
+    match->dropship.alarmed = 0U;
+    match->dropship.collision_cooldown = 0U;
+    for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
+        match->awards[i] = 0U;
+        match->award_value[i] = 0U;
+    }
     match->terrain_hash = vox_world_hash(&match->world);
     vox_physics_step_config_default(&match->physics_config);
     match->physics_config.gravity_q16 *= (vox_i32)DIGS_DENSITY_SCALE;
@@ -2462,6 +3142,8 @@ vox_result vox_digs_match_init_ex(vox_digs_match *match,
         match->coyote_ticks[i] = 0U;
         match->jump_buffer_ticks[i] = 0U;
         match->jump_hold_ticks[i] = 0U;
+        match->dash_cooldown[i] = 0U;
+        match->dash_invulnerability[i] = 0U;
         match->steam_q16[i] = 65535U;
         match->weapon_cooldown[i] = 0U;
         match->selected_weapon[i] = VOX_DIGS_TOOL_PICK;
@@ -2507,6 +3189,10 @@ vox_result vox_digs_match_init_ex(vox_digs_match *match,
         match->ropes[i].point_count = 0U;
         match->ropes[i].target_player = VOX_DIGS_NO_PLAYER;
         match->ropes[i].flags = 0U;
+        match->ropes[i].target_x = 0U;
+        match->ropes[i].target_y = 0U;
+        match->ropes[i].retarget_cursor = 0U;
+        match->ropes[i].reserved = 0U;
         {
             vox_u16 point;
             for (point = 0U; point < VOX_DIGS_ROPE_MAX_POINTS; ++point) {
@@ -2530,6 +3216,10 @@ vox_result vox_digs_match_init_ex(vox_digs_match *match,
         match->bots[i].breach_ticks = 0U;
         match->bots[i].last_seen_x_q16 = 0L;
         match->bots[i].last_seen_y_q16 = 0L;
+        match->bots[i].tunnel_state = VOX_DIGS_TUNNEL_NONE;
+        match->bots[i].tunnel_safety_q8 = 255U;
+        match->bots[i].collapse_risk_q8 = 0U;
+        match->bots[i].extraction_ticks = 0U;
         digs_init_anatomy(match, i);
         vox_physics_body_init(&match->players[i]);
         if (match->alive[i] &&
@@ -2589,6 +3279,1104 @@ vox_result vox_digs_match_init_ex(vox_digs_match *match,
         match->effects[i].flags = 0U;
     }
     match->state_hash = vox_digs_hash(match);
+    return VOX_OK;
+}
+
+static void digs_replay_frame_init(vox_digs_replay_frame *frame)
+{
+    vox_u16 i;
+    if (frame == 0) return;
+    frame->tick = 0U;
+    frame->fluid_hash = 0U;
+    frame->rigid_hash = 0U;
+    frame->event_sequence = 0U;
+    frame->terrain_origin_x = 0U;
+    frame->terrain_origin_y = 0U;
+    frame->terrain_width = 0U;
+    frame->terrain_height = 0U;
+    frame->camera_x_q16 = 0L;
+    frame->camera_y_q16 = 0L;
+    frame->camera_zoom_q16 = 65536L;
+    frame->rigid_count = 0U;
+    frame->fluid_count = 0U;
+    frame->effect_count = 0U;
+    frame->event_count = 0U;
+    for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
+        frame->player_x_q16[i] = 0L;
+        frame->player_y_q16[i] = 0L;
+        frame->player_alive[i] = 0U;
+        frame->player_health[i] = 0U;
+    }
+    for (i = 0U; i < VOX_DIGS_REPLAY_WINDOW_CELLS; ++i) {
+        frame->terrain_material[i] = VOX_MAT_AIR;
+    }
+    for (i = 0U; i < VOX_DIGS_REPLAY_MAX_RIGIDS; ++i) {
+        frame->rigids[i].position_x_q16 = 0L;
+        frame->rigids[i].position_y_q16 = 0L;
+        frame->rigids[i].velocity_x_q16 = 0L;
+        frame->rigids[i].velocity_y_q16 = 0L;
+        frame->rigids[i].angle_q16 = 0L;
+        frame->rigids[i].angular_velocity_q16 = 0L;
+        frame->rigids[i].half_width_q16 = 0L;
+        frame->rigids[i].half_height_q16 = 0L;
+        frame->rigids[i].flags = 0U;
+        frame->rigids[i].reserved = 0U;
+    }
+    for (i = 0U; i < VOX_DIGS_REPLAY_MAX_FLUIDS; ++i) {
+        frame->fluids[i].x = 0U;
+        frame->fluids[i].y = 0U;
+        frame->fluids[i].z = 0U;
+        frame->fluids[i].material = VOX_FLUID_NONE;
+        frame->fluids[i].volume_q16 = 0L;
+        frame->fluids[i].temperature_q16 = 0L;
+        frame->fluids[i].flow_q16 = 0L;
+    }
+    for (i = 0U; i < VOX_DIGS_REPLAY_MAX_EFFECTS; ++i) {
+        frame->effects[i].position_x_q16 = 0L;
+        frame->effects[i].position_y_q16 = 0L;
+        frame->effects[i].velocity_x_q16 = 0L;
+        frame->effects[i].velocity_y_q16 = 0L;
+        frame->effects[i].material = VOX_MAT_AIR;
+        frame->effects[i].ttl_ticks = 0U;
+        frame->effects[i].variant = 0U;
+        frame->effects[i].source = VOX_DIGS_NO_PLAYER;
+        frame->effects[i].depth = 0U;
+        frame->effects[i].flags = 0U;
+    }
+    for (i = 0U; i < VOX_DIGS_REPLAY_MAX_EVENTS; ++i) {
+        frame->events[i].sequence = 0U;
+        frame->events[i].tick = 0U;
+        frame->events[i].position_x_q16 = 0L;
+        frame->events[i].position_y_q16 = 0L;
+        frame->events[i].type = VOX_DIGS_EVENT_NONE;
+        frame->events[i].source = VOX_DIGS_NO_PLAYER;
+        frame->events[i].target = VOX_DIGS_NO_PLAYER;
+        frame->events[i].weapon = VOX_DIGS_TOOL_PICK;
+        frame->events[i].material = VOX_MAT_AIR;
+        frame->events[i].magnitude = 0U;
+        frame->events[i].variant = 0U;
+        frame->events[i].reserved = 0U;
+    }
+}
+
+static int digs_replay_in_window(vox_u16 x, vox_u16 y,
+                                 vox_u16 origin_x, vox_u16 origin_y)
+{
+    return x >= origin_x && y >= origin_y &&
+           x < (vox_u16)(origin_x + VOX_DIGS_REPLAY_WINDOW_DIAMETER) &&
+           y < (vox_u16)(origin_y + VOX_DIGS_REPLAY_WINDOW_DIAMETER);
+}
+
+static void digs_replay_capture(vox_digs_match *match)
+{
+    vox_u16 frame_index;
+    vox_digs_replay_frame *frame;
+    vox_u16 player;
+    vox_u16 row;
+    vox_u16 column;
+    vox_u16 index;
+    vox_i32 focus_x;
+    vox_i32 focus_y;
+    vox_u16 focus_player = 0U;
+    vox_u16 origin_x;
+    vox_u16 origin_y;
+    if ((match->tick % VOX_DIGS_REPLAY_CAPTURE_STRIDE) != 0U) return;
+    frame_index = match->replay.capture_cursor;
+    frame = &match->replay.frames[frame_index];
+    match->replay.capture_cursor = (vox_u16)(
+        (frame_index + 1U) % VOX_DIGS_REPLAY_MAX_FRAMES);
+    digs_replay_frame_init(frame);
+    frame->tick = match->tick;
+    frame->fluid_hash = vox_fluid_hash(&match->fluids);
+    frame->rigid_hash = vox_rigid_hash(&match->ragdolls);
+    frame->event_sequence = match->event_sequence;
+    for (player = 0U; player < VOX_DIGS_MAX_SLOTS; ++player) {
+        frame->player_x_q16[player] =
+            match->players[player].position_x.value_q16;
+        frame->player_y_q16[player] =
+            match->players[player].position_y.value_q16;
+        frame->player_alive[player] = match->alive[player];
+        frame->player_health[player] = match->health[player];
+    }
+    if (match->replay.killer < VOX_DIGS_MAX_SLOTS &&
+        vox_digs_player_is_active(match, match->replay.killer)) {
+        focus_player = match->replay.killer;
+    }
+    focus_x = frame->player_x_q16[focus_player] >> 16;
+    focus_y = frame->player_y_q16[focus_player] >> 16;
+    if (focus_x < (vox_i32)VOX_DIGS_REPLAY_WINDOW_RADIUS) {
+        origin_x = 0U;
+    } else if (focus_x + (vox_i32)VOX_DIGS_REPLAY_WINDOW_RADIUS >=
+               (vox_i32)VOX_WORLD_WIDTH) {
+        origin_x = (vox_u16)(VOX_WORLD_WIDTH -
+                             VOX_DIGS_REPLAY_WINDOW_DIAMETER);
+    } else {
+        origin_x = (vox_u16)(focus_x -
+                             (vox_i32)VOX_DIGS_REPLAY_WINDOW_RADIUS);
+    }
+    if (focus_y < (vox_i32)VOX_DIGS_REPLAY_WINDOW_RADIUS) {
+        origin_y = 0U;
+    } else if (focus_y + (vox_i32)VOX_DIGS_REPLAY_WINDOW_RADIUS >=
+               (vox_i32)VOX_WORLD_HEIGHT) {
+        origin_y = (vox_u16)(VOX_WORLD_HEIGHT -
+                             VOX_DIGS_REPLAY_WINDOW_DIAMETER);
+    } else {
+        origin_y = (vox_u16)(focus_y -
+                             (vox_i32)VOX_DIGS_REPLAY_WINDOW_RADIUS);
+    }
+    frame->terrain_origin_x = origin_x;
+    frame->terrain_origin_y = origin_y;
+    frame->terrain_width = VOX_DIGS_REPLAY_WINDOW_DIAMETER;
+    frame->terrain_height = VOX_DIGS_REPLAY_WINDOW_DIAMETER;
+    frame->camera_x_q16 = frame->player_x_q16[focus_player];
+    frame->camera_y_q16 = frame->player_y_q16[focus_player];
+    frame->camera_zoom_q16 = 65536L;
+    for (row = 0U; row < VOX_DIGS_REPLAY_WINDOW_DIAMETER; ++row) {
+        for (column = 0U; column < VOX_DIGS_REPLAY_WINDOW_DIAMETER;
+             ++column) {
+            const vox_cell *cell = vox_world_cell(
+                &match->world, (vox_u32)(origin_x + column),
+                (vox_u32)(origin_y + row), VOX_WORLD_DEPTH - 1U);
+            frame->terrain_material[row * VOX_DIGS_REPLAY_WINDOW_DIAMETER +
+                                    column] = cell == 0 ? VOX_MAT_AIR :
+                                    cell->material;
+        }
+    }
+    for (index = 0U; index < match->ragdolls.body_count &&
+         frame->rigid_count < VOX_DIGS_REPLAY_MAX_RIGIDS; ++index) {
+        const vox_rigid_body *body = &match->ragdolls.bodies[index];
+        vox_u16 x = (vox_u16)(body->position_x_q16 >> 16);
+        vox_u16 y = (vox_u16)(body->position_y_q16 >> 16);
+        vox_digs_replay_rigid *snapshot;
+        if ((body->flags & VOX_RIGID_BODY_ACTIVE) == 0U ||
+            !digs_replay_in_window(x, y, origin_x, origin_y)) continue;
+        snapshot = &frame->rigids[frame->rigid_count];
+        snapshot->position_x_q16 = body->position_x_q16;
+        snapshot->position_y_q16 = body->position_y_q16;
+        snapshot->velocity_x_q16 = body->velocity_x_q16;
+        snapshot->velocity_y_q16 = body->velocity_y_q16;
+        snapshot->angle_q16 = body->angle_q16;
+        snapshot->angular_velocity_q16 = body->angular_velocity_q16;
+        snapshot->half_width_q16 = body->half_width_q16;
+        snapshot->half_height_q16 = body->half_height_q16;
+        snapshot->flags = body->flags;
+        snapshot->reserved = 0U;
+        frame->rigid_count++;
+    }
+    for (index = 0U; index < match->fluids.active_cells &&
+         frame->fluid_count < VOX_DIGS_REPLAY_MAX_FLUIDS; ++index) {
+        const vox_fluid_cell *fluid = &match->fluids.cells[index];
+        vox_digs_replay_fluid *snapshot;
+        if (fluid->active == 0U || !digs_replay_in_window(
+                fluid->x, fluid->y, origin_x, origin_y)) continue;
+        snapshot = &frame->fluids[frame->fluid_count];
+        snapshot->x = fluid->x;
+        snapshot->y = fluid->y;
+        snapshot->z = fluid->z;
+        snapshot->material = fluid->material;
+        snapshot->volume_q16 = fluid->volume_q16;
+        snapshot->temperature_q16 = fluid->temperature_q16;
+        snapshot->flow_q16 = fluid->flow_q16;
+        frame->fluid_count++;
+    }
+    for (index = 0U; index < VOX_DIGS_MAX_EFFECTS &&
+         frame->effect_count < VOX_DIGS_REPLAY_MAX_EFFECTS; ++index) {
+        const vox_digs_effect *effect = &match->effects[index];
+        vox_u16 x = (vox_u16)(effect->position_x_q16 >> 16);
+        vox_u16 y = (vox_u16)(effect->position_y_q16 >> 16);
+        vox_digs_replay_effect *snapshot;
+        if (effect->active == 0U || !digs_replay_in_window(
+                x, y, origin_x, origin_y)) continue;
+        snapshot = &frame->effects[frame->effect_count];
+        snapshot->position_x_q16 = effect->position_x_q16;
+        snapshot->position_y_q16 = effect->position_y_q16;
+        snapshot->velocity_x_q16 = effect->velocity_x_q16;
+        snapshot->velocity_y_q16 = effect->velocity_y_q16;
+        snapshot->material = effect->material;
+        snapshot->ttl_ticks = effect->ttl_ticks;
+        snapshot->variant = effect->variant;
+        snapshot->source = effect->source;
+        snapshot->depth = effect->depth;
+        snapshot->flags = effect->flags;
+        frame->effect_count++;
+    }
+    {
+        vox_u16 available = match->event_count;
+        vox_u16 first = available > VOX_DIGS_REPLAY_MAX_EVENTS ?
+                        (vox_u16)(available - VOX_DIGS_REPLAY_MAX_EVENTS) : 0U;
+        for (index = first; index < available &&
+             frame->event_count < VOX_DIGS_REPLAY_MAX_EVENTS; ++index) {
+            const vox_digs_event *event = vox_digs_event_get(match, index);
+            vox_digs_replay_event *snapshot;
+            if (event == 0) continue;
+            snapshot = &frame->events[frame->event_count];
+            snapshot->sequence = event->sequence;
+            snapshot->tick = event->tick;
+            snapshot->position_x_q16 = event->position_x_q16;
+            snapshot->position_y_q16 = event->position_y_q16;
+            snapshot->type = event->type;
+            snapshot->source = event->source;
+            snapshot->target = event->target;
+            snapshot->weapon = event->weapon;
+            snapshot->material = event->material;
+            snapshot->magnitude = event->magnitude;
+            snapshot->variant = event->variant;
+            snapshot->reserved = event->reserved;
+            frame->event_count++;
+        }
+    }
+    if (match->replay.frame_count < VOX_DIGS_REPLAY_MAX_FRAMES) {
+        match->replay.frame_count++;
+    }
+}
+
+vox_result vox_digs_replay_step(vox_digs_match *match,
+                                vox_digs_replay_frame *frame)
+{
+    vox_u16 start;
+    vox_u16 index;
+    if (match == 0 || frame == 0 || match->phase != VOX_DIGS_RESULTS ||
+        match->replay.active == 0U || match->replay.frame_count == 0U) {
+        return VOX_ERR_INVALID;
+    }
+    start = match->replay.frame_count < VOX_DIGS_REPLAY_MAX_FRAMES ?
+            0U : match->replay.capture_cursor;
+    index = (vox_u16)((start + match->replay.play_cursor) %
+                      VOX_DIGS_REPLAY_MAX_FRAMES);
+    *frame = match->replay.frames[index];
+    match->replay.play_cursor++;
+    if (match->replay.play_cursor >= match->replay.frame_count) {
+        match->replay.active = 0U;
+    }
+    return VOX_OK;
+}
+
+static vox_u16 digs_rigid_free_slot(const vox_digs_match *match)
+{
+    vox_u16 body_index;
+    if (match == 0) return VOX_RIGID_MAX_BODIES;
+    for (body_index = 0U; body_index < VOX_RIGID_MAX_BODIES;
+         ++body_index) {
+        if ((match->ragdolls.bodies[body_index].flags &
+             VOX_RIGID_BODY_ACTIVE) == 0U) {
+            return body_index;
+        }
+    }
+    return VOX_RIGID_MAX_BODIES;
+}
+
+static void digs_note_rigid_spawn(vox_digs_match *match, vox_u16 body_index,
+                                  vox_u16 source, vox_u16 weapon,
+                                  vox_u16 material, vox_u16 loose_cells)
+{
+    if (match == 0 || body_index >= VOX_RIGID_MAX_BODIES) return;
+    match->rigid_source[body_index] =
+        source < VOX_DIGS_MAX_SLOTS ? source : VOX_DIGS_NO_PLAYER;
+    match->rigid_weapon[body_index] = weapon < VOX_DIGS_TOOL_COUNT ?
+                                      weapon : VOX_DIGS_TOOL_PICK;
+    match->rigid_impact_cooldown[body_index] = 0U;
+    match->rigid_material[body_index] = material < VOX_MAT_COUNT ?
+                                        material : VOX_MAT_STONE;
+    match->rigid_loose_cells[body_index] =
+        (match->ragdolls.bodies[body_index].flags &
+         VOX_RIGID_BODY_DEBRIS) != 0U ? loose_cells : 0U;
+}
+
+static void digs_spawn_blast_debris(vox_digs_match *match, vox_u32 x,
+                                    vox_u32 y, vox_u16 radius,
+                                    vox_u16 scrap, vox_u16 source,
+                                    vox_u16 weapon)
+{
+    vox_u16 piece;
+    for (piece = 0U; piece < 4U; ++piece) {
+        vox_u16 body_index;
+        vox_u32 noise = digs_noise(match->rules.seed, match->tick,
+                                   piece, x + y * 17U);
+        vox_i32 offset_x = (vox_i32)(noise % (radius * 2U + 1U)) -
+                           (vox_i32)radius;
+        vox_i32 offset_y = (vox_i32)((noise >> 8) % (radius + 1U));
+        if (vox_rigid_spawn(&match->ragdolls, &body_index,
+                            ((vox_i32)x + offset_x) << 16,
+                            ((vox_i32)y - offset_y) << 16,
+                            scrap != 0U ? 8192L : 12288L,
+                            scrap != 0U ? 8192L : 12288L,
+                            scrap != 0U ? 16384L : 32768L,
+                            scrap != 0U ? VOX_RIGID_BODY_SCRAP :
+                            VOX_RIGID_BODY_DEBRIS) != VOX_OK) {
+            break; /* stable pool order: least-important later pieces drop. */
+        }
+        digs_note_rigid_spawn(match, body_index, source, weapon,
+                              scrap != 0U ? VOX_MAT_METAL : VOX_MAT_STONE,
+                              scrap != 0U ? 0U : 1U);
+        match->ragdolls.bodies[body_index].velocity_x_q16 =
+            ((vox_i32)((noise >> 16) % 9U) - 4L) * 8192L;
+        match->ragdolls.bodies[body_index].velocity_y_q16 =
+            -((vox_i32)((noise >> 20) % 5U) + 1L) * 4096L;
+        match->ragdolls.bodies[body_index].angular_velocity_q16 =
+            ((vox_i32)((noise >> 24) % 17U) - 8L) * 4096L;
+    }
+}
+
+/*
+ * Blast terrain and handle overhead hooks as structural objects.  Metal
+ * fixtures are found before the blast because the world kernel quite
+ * correctly has no knowledge of grappling semantics.  A fixture hit by the
+ * fracture envelope loses every remaining anchor cell in its column and
+ * becomes a bounded radial scrap body.  The scan and pool insertion are
+ * stable: row-major fixture order wins, and later pieces are discarded when
+ * the rigid pool is full rather than being teleported into the sky.
+ */
+static vox_result digs_blast(vox_digs_match *match, vox_u32 x, vox_u32 y,
+                             vox_u32 z, vox_u16 radius, vox_i32 heat_q16,
+                             vox_u16 source, vox_u16 weapon)
+{
+    vox_u16 fixture_x[16];
+    vox_u16 fixture_y[16];
+    vox_u16 fixture_count = 0U;
+    long min_x;
+    long max_x;
+    long min_y;
+    long max_y;
+    long sample_x;
+    long sample_y;
+    long fracture_radius;
+    long fracture_squared;
+    vox_result result;
+    vox_u16 i;
+    if (match == 0 || radius == 0U || radius > VOX_BLAST_MAX_RADIUS) {
+        return VOX_ERR_INVALID;
+    }
+    fracture_radius = (long)radius + 2L;
+    fracture_squared = fracture_radius * fracture_radius;
+    min_x = (long)x - fracture_radius;
+    max_x = (long)x + fracture_radius;
+    min_y = (long)y - fracture_radius;
+    max_y = (long)y + fracture_radius;
+    if (min_x < 0L) min_x = 0L;
+    if (min_y < 0L) min_y = 0L;
+    if (max_x >= (long)VOX_WORLD_WIDTH) {
+        max_x = (long)VOX_WORLD_WIDTH - 1L;
+    }
+    if (max_y >= (long)VOX_WORLD_HEIGHT) {
+        max_y = (long)VOX_WORLD_HEIGHT - 1L;
+    }
+    for (sample_y = min_y; sample_y <= max_y; ++sample_y) {
+        for (sample_x = min_x; sample_x <= max_x; ++sample_x) {
+            long delta_x = sample_x - (long)x;
+            long delta_y = sample_y - (long)y;
+            if (delta_x * delta_x + delta_y * delta_y > fracture_squared ||
+                !digs_cell_is_rope_anchor(&match->world,
+                                           (vox_u32)sample_x,
+                                           (vox_u32)sample_y)) {
+                continue;
+            }
+            if (fixture_count < 16U) {
+                fixture_x[fixture_count] = (vox_u16)sample_x;
+                fixture_y[fixture_count] = (vox_u16)sample_y;
+                fixture_count++;
+            }
+        }
+    }
+    result = vox_world_blast(&match->world, x, y, z, radius, heat_q16);
+    if (result != VOX_OK) return result;
+    /* Every blast invalidates the same deterministic support frontier.  This
+     * lives here rather than only in direct-tool use so fused projectiles,
+     * hitscan bores, and AI weapons cannot bypass cave-in scheduling. */
+    (void)vox_structure_invalidate_with_cause(
+        &match->structure, x, y,
+        (vox_u32)radius + VOX_STRUCTURE_COHESION_CELLS,
+        source, weapon);
+    for (i = 0U; i < fixture_count; ++i) {
+        vox_u32 depth;
+        vox_u32 noise;
+        vox_u16 body_index;
+        vox_i32 delta_x = (vox_i32)fixture_x[i] - (vox_i32)x;
+        vox_i32 delta_y = (vox_i32)fixture_y[i] - (vox_i32)y;
+        /* The fracture mask may leave an outer metal cell intact.  It is
+         * still part of the destroyed fixture, so remove it explicitly. */
+        for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+            const vox_cell *cell = vox_world_cell(&match->world,
+                                                   fixture_x[i],
+                                                   fixture_y[i], depth);
+            if (cell != 0 && cell->material == VOX_MAT_METAL) {
+                (void)vox_world_set(&match->world, fixture_x[i],
+                                    fixture_y[i], depth, VOX_MAT_AIR, 0L);
+            }
+        }
+        noise = digs_noise(match->rules.seed, match->tick, i,
+                           (vox_u32)fixture_x[i] * 17U + fixture_y[i]);
+        if (delta_x == 0L && delta_y == 0L) {
+            delta_x = (noise & 1U) != 0U ? 1L : -1L;
+        }
+        if (vox_rigid_spawn(&match->ragdolls, &body_index,
+                            ((vox_i32)fixture_x[i] << 16) + 32768L,
+                            ((vox_i32)fixture_y[i] << 16) + 32768L,
+                            8192L, 8192L, 16384L,
+                            VOX_RIGID_BODY_SCRAP) == VOX_OK) {
+            digs_note_rigid_spawn(match, body_index, source, weapon,
+                                  VOX_MAT_METAL, 0U);
+            match->ragdolls.bodies[body_index].velocity_x_q16 =
+                delta_x * 8192L +
+                ((vox_i32)((noise >> 8) % 5U) - 2L) * 2048L;
+            match->ragdolls.bodies[body_index].velocity_y_q16 =
+                delta_y * 8192L - 32768L -
+                (vox_i32)((noise >> 12) % 4U) * 2048L;
+            match->ragdolls.bodies[body_index].angular_velocity_q16 =
+                ((vox_i32)((noise >> 16) % 17U) - 8L) * 4096L;
+        }
+        digs_emit_event(match, VOX_DIGS_EVENT_FIXTURE_BREAK, source,
+                        VOX_DIGS_NO_PLAYER, weapon, VOX_MAT_METAL,
+                        (vox_i32)fixture_x[i] << 16,
+                        (vox_i32)fixture_y[i] << 16, 1U,
+                        (vox_u16)(noise & 15U));
+    }
+    return VOX_OK;
+}
+
+/* Consume a small, stable number of collapse seeds per tick.  The structure
+ * scheduler finds unsupported terrain; this game-facing bridge is where it
+ * becomes a rigid debris fragment and a normal authoritative event.  A full
+ * rigid pool restores the fragment as loose terrain instead of deleting it,
+ * leaving the existing bounded gravity solver as the explicit overflow path. */
+static void digs_step_structural_cascades(vox_digs_match *match)
+{
+    vox_u16 fragment;
+    for (fragment = 0U; fragment < 2U; ++fragment) {
+        vox_structure_collapse collapse;
+        vox_structure_cluster detached;
+        vox_result result;
+        vox_u16 weapon;
+        vox_u16 material;
+        vox_u32 noise;
+        vox_i32 impulse_x;
+        vox_i32 impulse_y;
+        vox_u16 body_index;
+        if (vox_structure_pop_collapse(&match->structure, &collapse) !=
+            VOX_OK) {
+            break;
+        }
+        result = vox_cluster_extract_unsupported(&match->world, collapse.x,
+                                                 collapse.y, collapse.z,
+                                                 &detached);
+        if (result != VOX_OK || detached.count == 0U) {
+            continue;
+        }
+        weapon = collapse.weapon < VOX_DIGS_TOOL_COUNT ? collapse.weapon :
+                 VOX_DIGS_TOOL_PICK;
+        material = detached.cells[0].material;
+        noise = digs_noise(match->rules.seed, match->tick, fragment,
+                           (vox_u32)collapse.x * 257U + collapse.y);
+        impulse_x = ((vox_i32)((noise >> 8) % 17U) - 8L) * 4096L;
+        impulse_y = -((vox_i32)((noise >> 16) % 9U) + 2L) * 4096L;
+        body_index = digs_rigid_free_slot(match);
+        if (vox_cluster_spawn_debris(&detached, &match->ragdolls,
+                                     impulse_x, impulse_y) != VOX_OK) {
+            /* Capacity is visible in hashed state and recoverable in terrain;
+             * later fragments never get silently moved to the ceiling. */
+            if (vox_cluster_restore(&match->world, &detached, 1U) == VOX_OK) {
+                match->structure.discarded_collapse++;
+                (void)vox_structure_invalidate_with_cause(
+                    &match->structure, collapse.x, collapse.y,
+                    VOX_STRUCTURE_COHESION_CELLS + 2U,
+                    collapse.source, weapon);
+            }
+            continue;
+        }
+        digs_note_rigid_spawn(match, body_index, collapse.source, weapon,
+                              material, detached.count);
+        digs_emit_event(match, VOX_DIGS_EVENT_CAVE_IN, collapse.source,
+                        VOX_DIGS_NO_PLAYER, weapon, material,
+                        ((vox_i32)collapse.x << 16) + 32768L,
+                        ((vox_i32)collapse.y << 16) + 32768L,
+                        detached.count,
+                        detached.complete == 0U ? 1U : collapse.risk_q8);
+        if (collapse.source != VOX_STRUCTURE_NO_SOURCE &&
+            vox_digs_player_is_active(match, collapse.source)) {
+            (void)vox_digs_award_note(match, collapse.source,
+                                      VOX_DIGS_AWARD_CAVE_IN_ARTIST,
+                                      detached.count);
+        }
+        /* Re-evaluate both edges of the removed fragment.  This carries an
+         * overlong roof through the fixed chunk frontier without a single
+         * unbounded cross-map traversal. */
+        (void)vox_structure_invalidate_with_cause(
+            &match->structure, detached.min_x, detached.min_y,
+            VOX_STRUCTURE_COHESION_CELLS + 2U, collapse.source, weapon);
+        (void)vox_structure_invalidate_with_cause(
+            &match->structure, detached.max_x, detached.max_y,
+            VOX_STRUCTURE_COHESION_CELLS + 2U, collapse.source, weapon);
+    }
+}
+
+/* Rigid terrain stays in the generic physics pool, so collision with miners
+ * is resolved here in stable body/slot order.  This makes a falling cave-in
+ * consequential without teaching the C89 physics library about game rules or
+ * letting a resting slab repeatedly score damage. */
+static void digs_step_rigid_impacts(vox_digs_match *match)
+{
+    vox_u16 body_index;
+    if (match == 0 || match->phase != VOX_DIGS_RUNNING) return;
+    for (body_index = 0U; body_index < VOX_RIGID_MAX_BODIES;
+         ++body_index) {
+        vox_rigid_body *body = &match->ragdolls.bodies[body_index];
+        vox_u32 speed_x;
+        vox_u32 speed_y;
+        vox_u32 speed;
+        vox_u32 damage_value;
+        vox_u32 mass_units;
+        vox_i32 extent_x;
+        vox_i32 extent_y;
+        vox_u16 player;
+        vox_u16 source;
+        vox_u16 weapon;
+        vox_u16 material;
+        if (match->rigid_impact_cooldown[body_index] > 0U) {
+            match->rigid_impact_cooldown[body_index]--;
+        }
+        if ((body->flags & VOX_RIGID_BODY_ACTIVE) == 0U ||
+            (body->flags & (VOX_RIGID_BODY_DEBRIS |
+                            VOX_RIGID_BODY_SCRAP)) == 0U ||
+            match->rigid_impact_cooldown[body_index] != 0U) {
+            continue;
+        }
+        speed_x = digs_abs_i32(body->velocity_x_q16);
+        speed_y = digs_abs_i32(body->velocity_y_q16);
+        if (speed_x > 4294967295U - speed_y) {
+            speed = 4294967295U;
+        } else {
+            speed = speed_x + speed_y;
+        }
+        if (speed < (vox_u32)DIGS_RIGID_IMPACT_MIN_SPEED_Q16) {
+            continue;
+        }
+        extent_x = body->half_width_q16 + body->half_height_q16;
+        extent_y = extent_x;
+        if (extent_x < 0L || extent_y < 0L) {
+            continue;
+        }
+        mass_units = body->mass_q16 > 0L ?
+                     (vox_u32)(body->mass_q16 / 65536L) : 0U;
+        if (mass_units > 32U) mass_units = 32U;
+        damage_value = 4U + speed / 16384U + mass_units / 4U;
+        if (damage_value > DIGS_RIGID_IMPACT_MAX_DAMAGE) {
+            damage_value = DIGS_RIGID_IMPACT_MAX_DAMAGE;
+        }
+        source = match->rigid_source[body_index];
+        if (!vox_digs_player_is_active(match, source)) {
+            source = VOX_DIGS_NO_PLAYER;
+        }
+        weapon = match->rigid_weapon[body_index] < VOX_DIGS_TOOL_COUNT ?
+                 match->rigid_weapon[body_index] : VOX_DIGS_TOOL_PICK;
+        material = match->rigid_material[body_index] < VOX_MAT_COUNT ?
+                   match->rigid_material[body_index] :
+                   ((body->flags & VOX_RIGID_BODY_SCRAP) != 0U ?
+                    VOX_MAT_METAL : VOX_MAT_STONE);
+        for (player = 0U; player < match->rules.player_count; ++player) {
+            vox_i32 player_extent_x;
+            vox_i32 player_extent_y;
+            if (!match->alive[player] || digs_player_extracted(match, player)) {
+                continue;
+            }
+            player_extent_x = match->players[player].half_width_q16;
+            player_extent_y = match->players[player].half_height_q16;
+            if (digs_abs_i32(body->position_x_q16 -
+                             match->players[player].position_x.value_q16) >
+                (vox_u32)(extent_x + player_extent_x) ||
+                digs_abs_i32(body->position_y_q16 -
+                             match->players[player].position_y.value_q16) >
+                (vox_u32)(extent_y + player_extent_y)) {
+                continue;
+            }
+            match->rigid_impact_cooldown[body_index] =
+                DIGS_RIGID_IMPACT_COOLDOWN_TICKS;
+            digs_emit_event(match, VOX_DIGS_EVENT_DEBRIS_IMPACT, source,
+                            player, weapon, material,
+                            body->position_x_q16, body->position_y_q16,
+                            (vox_u16)damage_value, body_index);
+            (void)vox_digs_apply_hit(match, source, player, weapon,
+                                     VOX_DIGS_PART_TORSO,
+                                     (vox_u16)damage_value,
+                                     VOX_DIGS_DAMAGE_BLUNT);
+            body->velocity_x_q16 /= 2L;
+            body->velocity_y_q16 /= 2L;
+            if (match->phase != VOX_DIGS_RUNNING) return;
+            break;
+        }
+    }
+}
+
+/* Return the number of compact debris cells reintroduced near a sleeping
+ * rigid body.  The ring/depth order is stable, the cells are loose so they
+ * re-enter the ordinary deterministic terrain gravity path, and the caller
+ * accounts any cells that did not fit the fixed budget. */
+static vox_u16 digs_settle_rigid_debris(vox_digs_match *match,
+                                        vox_u16 body_index)
+{
+    vox_rigid_body *body;
+    vox_i32 center_x;
+    vox_i32 center_y;
+    vox_u16 material;
+    vox_u16 wanted;
+    vox_u16 placed = 0U;
+    vox_u16 radius;
+    vox_i32 offset_x;
+    vox_i32 offset_y;
+    vox_u32 depth;
+    if (match == 0 || body_index >= VOX_RIGID_MAX_BODIES) return 0U;
+    body = &match->ragdolls.bodies[body_index];
+    material = match->rigid_material[body_index];
+    wanted = match->rigid_loose_cells[body_index];
+    if (wanted == 0U || material == VOX_MAT_AIR || material >= VOX_MAT_COUNT) {
+        return 0U;
+    }
+    if (wanted > DIGS_RIGID_SETTLE_MAX_CELLS) {
+        wanted = DIGS_RIGID_SETTLE_MAX_CELLS;
+    }
+    center_x = body->position_x_q16 >> 16;
+    center_y = body->position_y_q16 >> 16;
+    for (radius = 0U; radius <= DIGS_RIGID_SETTLE_RADIUS && placed < wanted;
+         ++radius) {
+        for (offset_y = -(vox_i32)radius;
+             offset_y <= (vox_i32)radius && placed < wanted; ++offset_y) {
+            for (offset_x = -(vox_i32)radius;
+                 offset_x <= (vox_i32)radius && placed < wanted; ++offset_x) {
+                vox_i32 cell_x;
+                vox_i32 cell_y;
+                if (radius != 0U && offset_x != -(vox_i32)radius &&
+                    offset_x != (vox_i32)radius &&
+                    offset_y != -(vox_i32)radius &&
+                    offset_y != (vox_i32)radius) {
+                    continue;
+                }
+                cell_x = center_x + offset_x;
+                cell_y = center_y + offset_y;
+                if (cell_x < 0L || cell_y < 0L ||
+                    cell_x >= (vox_i32)VOX_WORLD_WIDTH ||
+                    cell_y >= (vox_i32)VOX_WORLD_HEIGHT) {
+                    continue;
+                }
+                for (depth = 0U; depth < VOX_WORLD_DEPTH && placed < wanted;
+                     ++depth) {
+                    const vox_cell *cell = vox_world_cell(
+                        &match->world, (vox_u32)cell_x, (vox_u32)cell_y,
+                        depth);
+                    if (cell == 0 || cell->material != VOX_MAT_AIR) {
+                        continue;
+                    }
+                    if (vox_world_set(&match->world, (vox_u32)cell_x,
+                                      (vox_u32)cell_y, depth, material,
+                                      20L << 16) != VOX_OK ||
+                        vox_world_set_loose(&match->world, (vox_u32)cell_x,
+                                            (vox_u32)cell_y, depth, 1U) !=
+                            VOX_OK) {
+                        continue;
+                    }
+                    placed++;
+                }
+            }
+        }
+    }
+    if (placed != 0U) {
+        (void)vox_structure_invalidate(&match->structure,
+                                       (vox_u32)center_x,
+                                       (vox_u32)center_y,
+                                       DIGS_RIGID_SETTLE_RADIUS);
+    }
+    return placed;
+}
+
+static void digs_recycle_sleeping_rigids(vox_digs_match *match)
+{
+    vox_u16 body_index;
+    for (body_index = 0U; body_index < match->ragdolls.body_count;
+         ++body_index) {
+        vox_rigid_body *body = &match->ragdolls.bodies[body_index];
+        vox_u16 material;
+        vox_u16 settle_total;
+        vox_u16 settle_placed;
+        vox_u16 settle_discarded;
+        if ((body->flags & VOX_RIGID_BODY_ACTIVE) == 0U ||
+            (body->flags & VOX_RIGID_BODY_SLEEPING) == 0U ||
+            body->sleep_ticks < 180U ||
+            (body->flags & (VOX_RIGID_BODY_CORPSE |
+                            VOX_RIGID_BODY_DEBRIS |
+                            VOX_RIGID_BODY_SCRAP)) == 0U) {
+            continue;
+        }
+        material = match->rigid_material[body_index] < VOX_MAT_COUNT ?
+                   match->rigid_material[body_index] :
+                   ((body->flags & VOX_RIGID_BODY_SCRAP) != 0U ?
+                    VOX_MAT_METAL : VOX_MAT_STONE);
+        settle_total = 0U;
+        settle_placed = 0U;
+        settle_discarded = 0U;
+        if ((body->flags & VOX_RIGID_BODY_DEBRIS) != 0U) {
+            settle_total = match->rigid_loose_cells[body_index];
+            settle_placed = digs_settle_rigid_debris(match, body_index);
+            if (settle_placed < settle_total) {
+                settle_discarded = (vox_u16)(settle_total - settle_placed);
+                if ((vox_u32)settle_discarded >
+                    4294967295U - match->rigid_settle_discarded) {
+                    match->rigid_settle_discarded = 4294967295U;
+                } else {
+                    match->rigid_settle_discarded += settle_discarded;
+                }
+            }
+        }
+        digs_emit_event(match, VOX_DIGS_EVENT_DEBRIS_IMPACT,
+                        VOX_DIGS_NO_PLAYER, VOX_DIGS_NO_PLAYER,
+                        VOX_DIGS_TOOL_PICK, material,
+                        body->position_x_q16, body->position_y_q16,
+                        settle_placed, settle_discarded);
+        (void)vox_rigid_release(&match->ragdolls, body_index);
+        match->rigid_source[body_index] = VOX_DIGS_NO_PLAYER;
+        match->rigid_weapon[body_index] = VOX_DIGS_TOOL_PICK;
+        match->rigid_impact_cooldown[body_index] = 0U;
+        match->rigid_material[body_index] = VOX_MAT_AIR;
+        match->rigid_loose_cells[body_index] = 0U;
+    }
+}
+
+vox_result vox_digs_award_note(vox_digs_match *match, vox_u16 player,
+                               vox_u16 award, vox_u16 value)
+{
+    vox_u16 bit;
+    if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
+        !vox_digs_player_is_active(match, player) ||
+        award >= VOX_DIGS_MAX_AWARDS) return VOX_ERR_INVALID;
+    bit = (vox_u16)(1U << award);
+    if ((match->awards[player] & bit) == 0U) {
+        vox_u16 other;
+        match->awards[player] = (vox_u16)(match->awards[player] | bit);
+        if (match->award_value[player] <= (vox_u16)(65535U - value)) {
+            match->award_value[player] = (vox_u16)(match->award_value[player] +
+                                                   value);
+        } else {
+            match->award_value[player] = 65535U;
+        }
+        /* Awards are part of the miners' existing social memory, not a new
+         * identity record.  Everyone active in the mine can react to the
+         * deed through the ordinary deterministic contract path. */
+        for (other = 0U; other < match->rules.player_count; ++other) {
+            if (other != player && match->alive[other] &&
+                !digs_player_extracted(match, other)) {
+                digs_contract_note(match, player, other,
+                                   (vox_u16)VOX_DIGS_STIMULUS_STREAK);
+            }
+        }
+        digs_emit_event(match, VOX_DIGS_EVENT_AWARD, player,
+                        VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK,
+                        VOX_MAT_AIR, match->players[player].position_x.value_q16,
+                        match->players[player].position_y.value_q16,
+                        value, award);
+    }
+    return VOX_OK;
+}
+
+static int digs_dropship_hits_player(const vox_digs_match *match,
+                                     vox_u16 player)
+{
+    vox_i32 body_min_x;
+    vox_i32 body_max_x;
+    vox_i32 body_min_y;
+    vox_i32 body_max_y;
+    vox_i32 ship_min_x;
+    vox_i32 ship_max_x;
+    vox_i32 ship_min_y;
+    vox_i32 ship_max_y;
+    vox_i32 previous_min_x;
+    vox_i32 previous_max_x;
+    if (!match->alive[player] || digs_player_extracted(match, player) ||
+        (match->dropship.launched_mask & (vox_u16)(1U << player)) == 0U) {
+        return 0;
+    }
+    body_min_x = match->players[player].position_x.value_q16 -
+                 match->players[player].half_width_q16;
+    body_max_x = match->players[player].position_x.value_q16 +
+                 match->players[player].half_width_q16;
+    body_min_y = match->players[player].position_y.value_q16 -
+                 match->players[player].half_height_q16;
+    body_max_y = match->players[player].position_y.value_q16 +
+                 match->players[player].half_height_q16;
+    ship_min_x = match->dropship.position_x_q16 -
+                 VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16;
+    ship_max_x = match->dropship.position_x_q16 +
+                 VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16;
+    ship_min_y = match->dropship.position_y_q16 -
+                 VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16;
+    ship_max_y = match->dropship.position_y_q16 +
+                 VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16;
+    if (body_max_y < ship_min_y || body_min_y > ship_max_y) {
+        return 0;
+    }
+    if (body_max_x >= ship_min_x && body_min_x <= ship_max_x) {
+        return 1;
+    }
+    previous_min_x = match->dropship.previous_position_x_q16 -
+                     VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16;
+    previous_max_x = match->dropship.previous_position_x_q16 +
+                     VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16;
+    return body_max_x >= previous_min_x && body_min_x <= previous_max_x;
+}
+
+vox_result vox_digs_dropship_launch(vox_digs_match *match, vox_u16 player)
+{
+    vox_u16 bit;
+    if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
+        !vox_digs_player_is_active(match, player) ||
+        !match->alive[player] || digs_player_extracted(match, player) ||
+        match->dropship.phase != VOX_DIGS_DROPSHIP_PHASE_LAUNCH ||
+        match->dropship.route_ticks > VOX_DIGS_DROP_SHIP_ROUTE_TICKS) {
+        return VOX_ERR_INVALID;
+    }
+    bit = (vox_u16)(1U << player);
+    if ((match->dropship.launched_mask & bit) != 0U) return VOX_OK;
+    match->dropship.launched_mask = (vox_u16)(match->dropship.launched_mask |
+                                              bit);
+    /* A player pressing FIRE while staged is on top of the hull.  Move that
+     * body through the ship's open hold before giving it a downward launch;
+     * the next dropship collision query must see a clear vertical interval.
+     * Do not teleport an independently positioned auto-releasee. */
+    if (digs_dropship_player_on_deck(match, player)) {
+        match->players[player].position_y.value_q16 =
+            match->dropship.position_y_q16 +
+            VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16 +
+            match->players[player].half_height_q16 +
+            DIGS_DROPSHIP_EJECT_CLEARANCE_Q16;
+        match->players[player].flags = (vox_u16)(
+            match->players[player].flags &
+            (vox_u16)~VOX_PHYSICS_BODY_GROUNDED);
+    }
+    match->players[player].velocity_x.value_q16 =
+        match->dropship.velocity_x_q16;
+    match->players[player].velocity_y.value_q16 =
+        VOX_DIGS_DROPSHIP_LAUNCH_SPEED_Q16;
+    digs_emit_event(match, VOX_DIGS_EVENT_SHIP_LAUNCH, player,
+                    VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK, VOX_MAT_METAL,
+                    match->dropship.position_x_q16,
+                    match->dropship.position_y_q16, 0U, 0U);
+    return VOX_OK;
+}
+
+vox_result vox_digs_dropship_begin(vox_digs_match *match)
+{
+    vox_u16 player;
+    if (match == 0 || match->abi_version != VOX_ABI_VERSION ||
+        match->struct_size < (vox_u32)sizeof(*match) ||
+        match->phase != VOX_DIGS_RUNNING ||
+        match->tick != 0U ||
+        match->dropship.phase != VOX_DIGS_DROPSHIP_PHASE_DEPARTED ||
+        match->dropship.route_ticks != 0U) {
+        return VOX_ERR_INVALID;
+    }
+    match->dropship.position_x_q16 = VOX_DIGS_DROPSHIP_LAUNCH_START_X_Q16;
+    match->dropship.position_y_q16 = VOX_DIGS_DROPSHIP_CRUISE_Y_Q16;
+    match->dropship.previous_position_x_q16 =
+        match->dropship.position_x_q16;
+    match->dropship.velocity_x_q16 = DIGS_DROPSHIP_ROUTE_SPEED_Q16;
+    match->dropship.phase = VOX_DIGS_DROPSHIP_PHASE_LAUNCH;
+    match->dropship.launched_mask = 0U;
+    match->dropship.extracted_mask = 0U;
+    match->dropship.alarmed = 0U;
+    match->dropship.collision_cooldown = 0U;
+    for (player = 0U; player < match->rules.player_count; ++player) {
+        digs_dropship_stage_player(match, player);
+    }
+    match->state_hash = vox_digs_hash(match);
+    return VOX_OK;
+}
+
+vox_result vox_digs_dropship_board(vox_digs_match *match, vox_u16 player)
+{
+    vox_u16 bit;
+    if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
+        !vox_digs_player_is_active(match, player) ||
+        !match->alive[player] || digs_player_extracted(match, player) ||
+        match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_DEPARTED ||
+        (match->dropship.launched_mask & (vox_u16)(1U << player)) == 0U ||
+        !digs_dropship_player_near(match, player,
+                                   VOX_DIGS_DROPSHIP_BOARD_RADIUS_Q16)) {
+        return VOX_ERR_INVALID;
+    }
+    bit = (vox_u16)(1U << player);
+    match->dropship.extracted_mask =
+        (vox_u16)(match->dropship.extracted_mask | bit);
+    match->player_actions[player] = 0U;
+    match->previous_actions[player] = 0U;
+    match->players[player].position_x.value_q16 =
+        match->dropship.position_x_q16;
+    match->players[player].position_y.value_q16 =
+        match->dropship.position_y_q16 -
+        VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16 -
+        match->players[player].half_height_q16;
+    match->players[player].velocity_x.value_q16 =
+        match->dropship.velocity_x_q16;
+    match->players[player].velocity_y.value_q16 = 0L;
+    match->players[player].flags = VOX_PHYSICS_BODY_GROUNDED;
+    digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_DETACH);
+    (void)vox_digs_award_note(match, player,
+                              VOX_DIGS_AWARD_EXTRACTIONIST, 100U);
+    digs_emit_event(match, VOX_DIGS_EVENT_SHIP_EXTRACT, player,
+                    VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK, VOX_MAT_METAL,
+                    match->dropship.position_x_q16,
+                    match->dropship.position_y_q16, 0U, 0U);
+    return VOX_OK;
+}
+
+vox_result vox_digs_dropship_grapple(vox_digs_match *match, vox_u16 player)
+{
+    vox_digs_rope *rope;
+    vox_i32 length;
+    if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
+        !vox_digs_player_is_active(match, player) ||
+        !match->alive[player] || digs_player_extracted(match, player) ||
+        match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_DEPARTED ||
+        !digs_segment_is_clear(&match->world,
+            match->players[player].position_x.value_q16,
+            match->players[player].position_y.value_q16,
+            match->dropship.position_x_q16,
+            match->dropship.position_y_q16, 0, 0)) {
+        return VOX_ERR_INVALID;
+    }
+    length = digs_distance_approx(
+        match->dropship.position_x_q16 -
+            match->players[player].position_x.value_q16,
+        match->dropship.position_y_q16 -
+            match->players[player].position_y.value_q16);
+    if (length < DIGS_ROPE_MIN_LENGTH_Q16 ||
+        length > DIGS_ROPE_MAX_LENGTH_Q16) {
+        return VOX_ERR_INVALID;
+    }
+    rope = &match->ropes[player];
+    if (rope->state != VOX_DIGS_ROPE_IDLE) {
+        digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_DETACH);
+    }
+    rope->anchor_x_q16 = match->dropship.position_x_q16;
+    rope->anchor_y_q16 = match->dropship.position_y_q16;
+    rope->length_q16 = length;
+    rope->tension_q16 = 0L;
+    rope->hook_x_q16 = rope->anchor_x_q16;
+    rope->hook_y_q16 = rope->anchor_y_q16;
+    rope->active = 1U;
+    rope->integrity = 100U;
+    rope->state = VOX_DIGS_ROPE_ATTACHED;
+    rope->point_count = 1U;
+    rope->target_player = VOX_DIGS_NO_PLAYER;
+    rope->flags = VOX_DIGS_ROPE_TARGET_SHIP;
+    rope->target_x = (vox_u16)digs_q16_to_cell(
+        match->dropship.position_x_q16);
+    rope->target_y = (vox_u16)digs_q16_to_cell(
+        match->dropship.position_y_q16);
+    rope->points[0].position_x_q16 = rope->anchor_x_q16;
+    rope->points[0].position_y_q16 = rope->anchor_y_q16;
+    rope->points[0].previous_x_q16 = rope->anchor_x_q16;
+    rope->points[0].previous_y_q16 = rope->anchor_y_q16;
+    digs_emit_event(match, VOX_DIGS_EVENT_ROPE_ATTACH, player,
+                    VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK, VOX_MAT_METAL,
+                    rope->anchor_x_q16, rope->anchor_y_q16,
+                    (vox_u16)(length >> 16), 0U);
+    digs_emit_event(match, VOX_DIGS_EVENT_SHIP_GRAPPLE, player,
+                    VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK, VOX_MAT_METAL,
+                    rope->anchor_x_q16, rope->anchor_y_q16,
+                    (vox_u16)(length >> 16), 0U);
+    return VOX_OK;
+}
+
+vox_result vox_digs_dropship_step(vox_digs_match *match)
+{
+    vox_u16 player;
+    if (match == 0 || match->phase != VOX_DIGS_RUNNING) return VOX_ERR_INVALID;
+    /* The launch ship is opt-in at the host boundary.  This makes a plain
+     * match_init useful for deterministic terrain, AI, and tooling scenarios
+     * without an invisible virtual hull changing their simulation. */
+    if (match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_DEPARTED) {
+        return VOX_OK;
+    }
+    if (match->dropship.collision_cooldown > 0U) {
+        match->dropship.collision_cooldown--;
+    }
+    match->dropship.previous_position_x_q16 =
+        match->dropship.position_x_q16;
+    if (match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_LAUNCH ||
+        match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_EXTRACTION) {
+        match->dropship.position_x_q16 += match->dropship.velocity_x_q16;
+        match->dropship.route_ticks++;
+        if (match->dropship.route_ticks >= VOX_DIGS_DROP_SHIP_ROUTE_TICKS) {
+            if (match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_LAUNCH) {
+                for (player = 0U; player < match->rules.player_count; ++player) {
+                    if ((match->dropship.launched_mask &
+                         (vox_u16)(1U << player)) == 0U) {
+                        (void)vox_digs_dropship_launch(match, player);
+                    }
+                }
+                match->dropship.position_x_q16 =
+                    VOX_DIGS_DROPSHIP_LAUNCH_END_X_Q16;
+                match->dropship.phase = VOX_DIGS_DROPSHIP_PHASE_WAITING;
+                match->dropship.route_ticks = 0U;
+                match->dropship.velocity_x_q16 = 0L;
+            } else {
+                match->dropship.position_x_q16 =
+                    VOX_DIGS_DROPSHIP_LAUNCH_START_X_Q16;
+                match->dropship.phase = VOX_DIGS_DROPSHIP_PHASE_DEPARTED;
+                match->dropship.route_ticks = VOX_DIGS_DROP_SHIP_ROUTE_TICKS;
+                match->dropship.velocity_x_q16 = 0L;
+            }
+        }
+    }
+    if (match->tick >= match->rules.lava_start_tick &&
+        match->dropship.alarmed == 0U) {
+        if (match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_LAUNCH) {
+            for (player = 0U; player < match->rules.player_count; ++player) {
+                if ((match->dropship.launched_mask &
+                     (vox_u16)(1U << player)) == 0U) {
+                    (void)vox_digs_dropship_launch(match, player);
+                }
+            }
+        }
+        match->dropship.alarmed = 1U;
+        match->dropship.phase = VOX_DIGS_DROPSHIP_PHASE_EXTRACTION;
+        match->dropship.route_ticks = 0U;
+        match->dropship.velocity_x_q16 = -DIGS_DROPSHIP_ROUTE_SPEED_Q16;
+        digs_emit_event(match, VOX_DIGS_EVENT_SHIP_ALARM,
+                        VOX_DIGS_NO_PLAYER, VOX_DIGS_NO_PLAYER,
+                        VOX_DIGS_TOOL_PICK, VOX_MAT_METAL,
+                        match->dropship.position_x_q16,
+                        match->dropship.position_y_q16, 0U, 0U);
+    }
+    for (player = 0U; player < match->rules.player_count; ++player) {
+        if (match->alive[player] && !digs_player_extracted(match, player)) {
+            digs_dropship_follow_player(match, player);
+        }
+    }
+    if (match->dropship.collision_cooldown == 0U) {
+        for (player = 0U; player < match->rules.player_count; ++player) {
+            if (!digs_dropship_hits_player(match, player)) {
+                continue;
+            }
+            match->dropship.collision_cooldown =
+                VOX_DIGS_DROPSHIP_COLLISION_COOLDOWN_TICKS;
+            digs_emit_event(match, VOX_DIGS_EVENT_SHIP_COLLISION, player,
+                            VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_SLEDGE,
+                            VOX_MAT_METAL,
+                            match->players[player].position_x.value_q16,
+                            match->players[player].position_y.value_q16,
+                            100U, 0U);
+            (void)vox_digs_apply_hit(match, VOX_DIGS_NO_PLAYER, player,
+                                     VOX_DIGS_TOOL_SLEDGE,
+                                     VOX_DIGS_PART_TORSO, 100U,
+                                     VOX_DIGS_DAMAGE_BLUNT |
+                                     VOX_DIGS_DAMAGE_EXPLOSIVE);
+            if (!match->alive[player]) {
+                digs_emit_event(match, VOX_DIGS_EVENT_SHIP_SPLATTER, player,
+                                VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_SLEDGE,
+                                VOX_MAT_BLOOD,
+                                match->players[player].position_x.value_q16,
+                                match->players[player].position_y.value_q16,
+                                100U, 0U);
+            }
+            break; /* stable one-impact-per-cooldown policy */
+        }
+    }
     return VOX_OK;
 }
 
@@ -2760,8 +4548,16 @@ vox_result vox_digs_match_step(vox_digs_match *match)
         match->state_hash = vox_digs_hash(match);
         return VOX_OK;
     }
+    if (vox_digs_dropship_step(match) != VOX_OK) {
+        return VOX_ERR_INVALID;
+    }
     for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
         if (!vox_digs_player_is_active(match, i)) {
+            continue;
+        }
+        if (digs_player_extracted(match, i)) {
+            match->player_actions[i] = 0U;
+            match->previous_actions[i] = 0U;
             continue;
         }
         if (match->last_attacker[i] != VOX_DIGS_NO_PLAYER &&
@@ -2773,6 +4569,12 @@ vox_result vox_digs_match_step(vox_digs_match *match)
         }
         if (match->weapon_cooldown[i] > 0U) {
             match->weapon_cooldown[i]--;
+        }
+        if (match->dash_cooldown[i] > 0U) {
+            match->dash_cooldown[i]--;
+        }
+        if (match->dash_invulnerability[i] > 0U) {
+            match->dash_invulnerability[i]--;
         }
         if (match->alive[i] && match->spawn_shield_ticks[i] > 0U) {
             match->spawn_shield_ticks[i]--;
@@ -2806,7 +4608,8 @@ vox_result vox_digs_match_step(vox_digs_match *match)
         if (match->phase != VOX_DIGS_RUNNING) {
             break;
         }
-        if (match->alive[i] && vox_digs_player_is_bot(match, i) &&
+        if (match->alive[i] && !digs_player_extracted(match, i) &&
+            vox_digs_player_is_bot(match, i) &&
             vox_digs_bot_think(match, i) != VOX_OK) {
             return VOX_ERR_INVALID;
         }
@@ -2818,9 +4621,26 @@ vox_result vox_digs_match_step(vox_digs_match *match)
     if (vox_world_step(&match->world, 0) != VOX_OK) {
         return VOX_ERR_INVALID;
     }
+    if (vox_fluid_step_terrain(&match->fluids, &match->world,
+                               VOX_FLUID_MAX_CELLS) != VOX_OK ||
+        vox_structure_step(&match->structure, &match->world, 8U) != VOX_OK) {
+        return VOX_ERR_INVALID;
+    }
+    digs_step_structural_cascades(match);
+    if (vox_rigid_step_fluids(&match->ragdolls, &match->world,
+                              &match->fluids,
+                              match->physics_config.gravity_q16) != VOX_OK) {
+        return VOX_ERR_INVALID;
+    }
+    digs_step_rigid_impacts(match);
+    if (match->phase != VOX_DIGS_RUNNING) {
+        match->state_hash = vox_digs_hash(match);
+        return VOX_OK;
+    }
+    digs_recycle_sleeping_rigids(match);
     for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
         vox_result physics_result;
-        if (!match->alive[i]) {
+        if (!match->alive[i] || digs_player_extracted(match, i)) {
             continue;
         }
         digs_apply_player_controls(match, i);
@@ -2891,7 +4711,7 @@ vox_result vox_digs_match_step(vox_digs_match *match)
     digs_step_projectiles(match);
     digs_step_effects(match);
     for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
-        if (match->alive[i]) {
+        if (match->alive[i] && !digs_player_extracted(match, i)) {
             digs_step_rope(match, i);
         }
         match->previous_actions[i] = match->player_actions[i];
@@ -2907,6 +4727,8 @@ vox_result vox_digs_match_step(vox_digs_match *match)
     }
     digs_update_lava(match);
     digs_apply_lava_hazards(match);
+    digs_apply_fluid_hazards(match);
+    digs_replay_capture(match);
     match->tick++;
     if (digs_score_limit_reached(match)) {
         digs_finish_match(match, VOX_DIGS_END_SCORE);
@@ -2972,6 +4794,89 @@ static void digs_spawn_death_gore(vox_digs_match *match, vox_u16 victim,
                                   velocity_x, velocity_y,
                                   (vox_u16)(38U + noise % 90U), victim,
                                   (vox_u16)(noise & 31U));
+    }
+}
+
+static void digs_spawn_corpse_assembly(vox_digs_match *match,
+                                       vox_u16 victim, vox_u16 killer)
+{
+    static const vox_u16 parent[VOX_DIGS_ANATOMY_PART_COUNT] = {
+        VOX_DIGS_PART_TORSO, VOX_DIGS_NO_PART, VOX_DIGS_PART_TORSO,
+        VOX_DIGS_PART_TORSO, VOX_DIGS_PART_TORSO,
+        VOX_DIGS_PART_LEFT_UPPER_ARM, VOX_DIGS_PART_RIGHT_UPPER_ARM,
+        VOX_DIGS_PART_LEFT_FOREARM, VOX_DIGS_PART_RIGHT_FOREARM,
+        VOX_DIGS_PART_PELVIS, VOX_DIGS_PART_PELVIS,
+        VOX_DIGS_PART_LEFT_THIGH, VOX_DIGS_PART_RIGHT_THIGH,
+        VOX_DIGS_PART_LEFT_SHIN, VOX_DIGS_PART_RIGHT_SHIN
+    };
+    vox_u16 bodies[VOX_DIGS_ANATOMY_PART_COUNT];
+    vox_u16 part;
+    vox_u16 weapon = match->last_damage_weapon[victim];
+    vox_i32 origin_x = match->players[victim].position_x.value_q16;
+    vox_i32 origin_y = match->players[victim].position_y.value_q16;
+    int explosive = weapon == VOX_DIGS_TOOL_BLAST_CHARGE ||
+                    weapon == VOX_DIGS_TOOL_CONCUSSION_GRENADE ||
+                    weapon == VOX_DIGS_TOOL_NAIL_BOMB;
+    int heat = weapon == VOX_DIGS_TOOL_CINDER_FLASK;
+    for (part = 0U; part < VOX_DIGS_ANATOMY_PART_COUNT; ++part) {
+        vox_digs_hurtbox box;
+        vox_u32 noise;
+        vox_u16 body_index;
+        vox_i32 mass;
+        bodies[part] = VOX_DIGS_NO_PART;
+        if (vox_digs_anatomy_hurtbox(part, &box) != VOX_OK) {
+            continue;
+        }
+        noise = digs_noise(match->rules.seed, match->tick,
+                           (vox_u32)victim,
+                           0xC0FF5000U + (vox_u32)part +
+                           (vox_u32)killer * 17U);
+        mass = part == VOX_DIGS_PART_TORSO ? 131072L :
+               (part == VOX_DIGS_PART_PELVIS ? 98304L : 49152L);
+        if (vox_rigid_spawn(&match->ragdolls, &body_index,
+                            origin_x + box.offset_x_q16,
+                            origin_y + box.offset_y_q16,
+                            box.half_width_q16, box.half_height_q16, mass,
+                            VOX_RIGID_BODY_CORPSE) != VOX_OK) {
+            continue;
+        }
+        digs_note_rigid_spawn(match, body_index, killer, weapon,
+                              VOX_MAT_FLESH, 0U);
+        bodies[part] = body_index;
+        match->ragdolls.bodies[body_index].velocity_x_q16 =
+            match->players[victim].velocity_x.value_q16 +
+            ((vox_i32)(noise % 9U) - 4L) * 4096L;
+        match->ragdolls.bodies[body_index].velocity_y_q16 =
+            match->players[victim].velocity_y.value_q16 -
+            (vox_i32)((noise >> 8) % 5U) * 4096L;
+        match->ragdolls.bodies[body_index].angle_q16 =
+            (vox_i32)(noise & 65535U);
+        match->ragdolls.bodies[body_index].angular_velocity_q16 =
+            ((vox_i32)((noise >> 16) % 17U) - 8L) * 3072L;
+    }
+    for (part = 0U; part < VOX_DIGS_ANATOMY_PART_COUNT; ++part) {
+        vox_u16 parent_part = parent[part];
+        vox_u16 joint_index;
+        vox_i32 rest;
+        if (parent_part == VOX_DIGS_NO_PART ||
+            bodies[part] == VOX_DIGS_NO_PART ||
+            parent_part >= VOX_DIGS_ANATOMY_PART_COUNT ||
+            bodies[parent_part] == VOX_DIGS_NO_PART ||
+            (match->anatomy[victim][part].flags & VOX_DIGS_PART_SEVERED) != 0U ||
+            (match->anatomy[victim][parent_part].flags &
+             VOX_DIGS_PART_SEVERED) != 0U ||
+            (part == match->last_damage_part[victim]) || explosive || heat) {
+            continue;
+        }
+        rest = digs_distance_approx(
+            match->ragdolls.bodies[bodies[part]].position_x_q16 -
+                match->ragdolls.bodies[bodies[parent_part]].position_x_q16,
+            match->ragdolls.bodies[bodies[part]].position_y_q16 -
+                match->ragdolls.bodies[bodies[parent_part]].position_y_q16);
+        if (rest < (vox_i32)(1L << 15)) rest = (vox_i32)(1L << 15);
+        (void)vox_rigid_joint_add(&match->ragdolls, &joint_index,
+                                  bodies[parent_part], bodies[part], rest,
+                                  -16384L, 16384L);
     }
 }
 
@@ -3140,7 +5045,17 @@ digs_stimulus_valence[VOX_DIGS_STIMULUS_COUNT] = {
     0,      /* LONG_ABSENCE   */
     0,      /* MATCH_START    */
     0,      /* MATCH_END      */
-    0       /* IDLE           */
+    0,      /* IDLE           */
+    0,      /* MOVE           */
+    0,      /* WEAPON         */
+    0,      /* MISS           */
+    0,      /* HIT            */
+    0,      /* NEAR_DEATH     */
+    0,      /* CAVE_IN        */
+    0,      /* GRAPPLE        */
+    0,      /* KILL           */
+    0,      /* HUMILIATION    */
+    0       /* ESCAPE         */
 };
 
 const char *vox_digs_stimulus_name(vox_u16 stimulus)
@@ -3151,7 +5066,9 @@ const char *vox_digs_stimulus_name(vox_u16 stimulus)
         "REVENGE", "HUMILIATED", "STREAK", "SAVED BY", "TEAMED UP",
         "BETRAYED", "TRUCE OFFERED", "TRUCE ACCEPTED", "TRUCE BROKEN",
         "TAUNTED", "LAVA CLOSE", "BURIED", "DOOMED", "LONG ABSENCE",
-        "MATCH START", "MATCH END", "IDLE"
+        "MATCH START", "MATCH END", "IDLE", "MOVE", "WEAPON", "MISS",
+        "HIT", "NEAR DEATH", "CAVE IN", "GRAPPLE", "KILL",
+        "HUMILIATION", "ESCAPE"
     };
     return stimulus < VOX_DIGS_STIMULUS_COUNT ? names[stimulus] : "NONE";
 }
@@ -3584,6 +5501,14 @@ static vox_u16 digs_stimulus_audience(vox_u16 stimulus)
     case VOX_DIGS_STIMULUS_BURIED:
     case VOX_DIGS_STIMULUS_LAVA_CLOSE:
     case VOX_DIGS_STIMULUS_DOOMED:
+    case VOX_DIGS_STIMULUS_MOVE:
+    case VOX_DIGS_STIMULUS_WEAPON:
+    case VOX_DIGS_STIMULUS_MISS:
+    case VOX_DIGS_STIMULUS_HIT:
+    case VOX_DIGS_STIMULUS_NEAR_DEATH:
+    case VOX_DIGS_STIMULUS_CAVE_IN:
+    case VOX_DIGS_STIMULUS_GRAPPLE:
+    case VOX_DIGS_STIMULUS_ESCAPE:
         return (vox_u16)VOX_DIGS_AUDIENCE_SELF;
     case VOX_DIGS_STIMULUS_MATCH_START:
     case VOX_DIGS_STIMULUS_MATCH_END:
@@ -3591,6 +5516,8 @@ static vox_u16 digs_stimulus_audience(vox_u16 stimulus)
     case VOX_DIGS_STIMULUS_TRUCE_OFFERED:
     case VOX_DIGS_STIMULUS_HUMILIATED:
     case VOX_DIGS_STIMULUS_STREAK:
+    case VOX_DIGS_STIMULUS_KILL:
+    case VOX_DIGS_STIMULUS_HUMILIATION:
         return (vox_u16)VOX_DIGS_AUDIENCE_ALL;
     default:
         break;
@@ -3863,14 +5790,21 @@ static void digs_step_speech(vox_digs_match *match)
                           (vox_u16)~VOX_DIGS_ACTION_BARK);
         }
         /*
-         * The button is the timing.  A press works out the context if there
-         * is none queued, then clears the pause and takes the floor off
-         * whoever is talking -- the press is a single tick, so anything that
-         * defers it loses it, and a bark button that sometimes does nothing
-         * is worse than one that interrupts.
+         * The button is the timing.  A fresh action context (a grapple,
+         * cave-in, hit, and so on) wins over an older queued relationship
+         * prompt; otherwise the queued prompt remains.  Then it clears the
+         * pause and takes the floor off whoever is talking -- the press is a
+         * single tick, so anything that defers it loses it, and a bark button
+         * that sometimes does nothing is worse than one that interrupts.
          */
         if (pressed) {
-            if (match->speech_stimulus[player] == VOX_DIGS_STIMULUS_NONE) {
+            vox_u16 action_context =
+                digs_speech_player_action_context(match, player);
+            if (action_context != VOX_DIGS_STIMULUS_NONE) {
+                match->speech_stimulus[player] = action_context;
+                match->speech_subject[player] = VOX_DIGS_NO_PLAYER;
+            } else if (match->speech_stimulus[player] ==
+                       VOX_DIGS_STIMULUS_NONE) {
                 digs_speech_player_context(match, player);
             }
             match->speech_delay[player] = 0U;
@@ -3923,7 +5857,8 @@ static void digs_step_speech(vox_digs_match *match)
         {
             vox_i32 worth = (vox_i32)digs_stimulus_valence[stimulus];
             vox_i32 heat = (vox_i32)match->speech_exchange_heat +
-                           (worth < 0 ? -1L : (worth > 0 ? 1L : 0L));
+                           (worth <= -100L ? -2L :
+                            (worth < 0L ? -1L : (worth > 0L ? 1L : 0L)));
             if (heat > 6L) heat = 6L;
             if (heat < -6L) heat = -6L;
             match->speech_exchange_heat = (vox_i16)heat;
@@ -4052,9 +5987,116 @@ static void digs_step_contracts(vox_digs_match *match)
     }
 }
 
+/* Replay choice stays render-only, but it must still be reproducible from the
+ * bounded authoritative event history.  A streak is counted since the
+ * killer's most recent recorded death; multi-kill, cave-in, and blast context
+ * use finite recent windows so an old spectacular event cannot own every
+ * later results screen. */
+static void digs_replay_kill_context(const vox_digs_match *match,
+                                     vox_u16 killer, vox_u16 victim,
+                                     vox_u16 *kill_streak,
+                                     vox_u16 *multi_kill,
+                                     vox_u16 *cave_in_scale,
+                                     vox_u16 *blast_distance)
+{
+    vox_u16 event_index;
+    vox_u16 streak = 0U;
+    vox_u16 multi = 1U;
+    vox_u16 cave_in = 0U;
+    vox_u16 nearest_blast = DIGS_REPLAY_NO_BLAST_DISTANCE;
+    vox_u16 blast_seen = 0U;
+    if (kill_streak == 0 || multi_kill == 0 || cave_in_scale == 0 ||
+        blast_distance == 0) {
+        return;
+    }
+    *kill_streak = 1U;
+    *multi_kill = 1U;
+    *cave_in_scale = 0U;
+    *blast_distance = DIGS_REPLAY_NO_BLAST_DISTANCE;
+    if (match == 0) return;
+    for (event_index = 0U; event_index < match->event_count; ++event_index) {
+        const vox_digs_event *event = vox_digs_event_get(match, event_index);
+        vox_u32 age;
+        if (event == 0 || event->tick > match->tick) continue;
+        age = match->tick - event->tick;
+        if (event->type == VOX_DIGS_EVENT_KILL) {
+            if (event->target == killer) {
+                streak = 0U;
+            }
+            if (event->source == killer) {
+                if (streak < 65535U) streak++;
+                if (age <= 90U && multi < 65535U) multi++;
+            }
+        }
+        if (event->type == VOX_DIGS_EVENT_CAVE_IN &&
+            event->source == killer && age <= DIGS_REPLAY_CONTEXT_TICKS &&
+            event->magnitude > cave_in) {
+            cave_in = event->magnitude;
+        }
+        if (event->type == VOX_DIGS_EVENT_EXPLOSION &&
+            event->source == killer && age <= DIGS_REPLAY_BLAST_TICKS) {
+            vox_i32 distance_q16 = digs_distance_approx(
+                event->position_x_q16 -
+                    match->players[victim].position_x.value_q16,
+                event->position_y_q16 -
+                    match->players[victim].position_y.value_q16);
+            vox_u32 distance_cells = distance_q16 > 0L ?
+                                     (vox_u32)distance_q16 >> 16 : 0U;
+            vox_u16 distance = distance_cells >= 65535U ? 65534U :
+                               (vox_u16)distance_cells;
+            if (blast_seen == 0U || distance < nearest_blast) {
+                nearest_blast = distance;
+                blast_seen = 1U;
+            }
+        }
+    }
+    if (streak < 65535U) streak++;
+    *kill_streak = streak;
+    *multi_kill = multi;
+    *cave_in_scale = cave_in;
+    *blast_distance = nearest_blast;
+}
+
+static int digs_replay_candidate_better(
+    const vox_digs_replay_ledger *current, vox_u16 headshot,
+    vox_u16 kill_streak, vox_u16 multi_kill, vox_u16 cave_in_scale,
+    vox_u16 blast_distance, vox_u16 value)
+{
+    if (current == 0 || current->active == 0U) return 1;
+    /* A headshot remains the strongest replay event even when a previous
+     * candidate accumulated more routine award points. */
+    if (headshot != current->headshot) return headshot > current->headshot;
+    if (value != current->award_value) return value > current->award_value;
+    if (cave_in_scale != current->cave_in_scale) {
+        return cave_in_scale > current->cave_in_scale;
+    }
+    if (blast_distance != current->blast_distance) {
+        if (blast_distance == DIGS_REPLAY_NO_BLAST_DISTANCE) return 0;
+        if (current->blast_distance == DIGS_REPLAY_NO_BLAST_DISTANCE) {
+            return 1;
+        }
+        return blast_distance < current->blast_distance;
+    }
+    if (multi_kill != current->multi_kill) {
+        return multi_kill > current->multi_kill;
+    }
+    if (kill_streak != current->kill_streak) {
+        return kill_streak > current->kill_streak;
+    }
+    /* Equal candidates retain the earlier event; input order is the stable
+     * final tie-breaker and no wall clock or pointer order is involved. */
+    return 0;
+}
+
 vox_result vox_digs_record_kill(vox_digs_match *match, vox_u16 killer,
                                 vox_u16 victim)
 {
+    vox_u16 headshot;
+    vox_u16 kill_streak;
+    vox_u16 multi_kill;
+    vox_u16 cave_in_scale;
+    vox_u16 blast_distance;
+    vox_u32 replay_value;
     if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
         !vox_digs_player_is_active(match, killer) ||
         !vox_digs_player_is_active(match, victim) || !match->alive[victim] ||
@@ -4077,6 +6119,58 @@ vox_result vox_digs_record_kill(vox_digs_match *match, vox_u16 killer,
         match->health[killer] = healed > (vox_u32)VOX_DIGS_MAX_HEALTH ?
                                 (vox_u16)VOX_DIGS_MAX_HEALTH :
                                 (vox_u16)healed;
+    }
+    /* A kill leaves the anatomy as bounded rigid segments in the
+     * authoritative pool.  Presentation gore remains separate; it cannot
+     * replace the body that collides, tumbles, and settles. */
+    digs_spawn_corpse_assembly(match, victim, killer);
+    (void)vox_fluid_add_at(
+        &match->fluids,
+        (vox_u16)(match->players[victim].position_x.value_q16 >> 16),
+        (vox_u16)(match->players[victim].position_y.value_q16 >> 16), 0U,
+        VOX_FLUID_BLOOD, 8192L, 37L << 16);
+    if (match->last_damage_part[victim] == VOX_DIGS_PART_HEAD) {
+        (void)vox_digs_award_note(match, killer,
+                                  VOX_DIGS_AWARD_HEADHUNTER, 200U);
+    }
+    headshot = match->last_damage_part[victim] == VOX_DIGS_PART_HEAD ?
+               1U : 0U;
+    digs_replay_kill_context(match, killer, victim, &kill_streak,
+                             &multi_kill, &cave_in_scale, &blast_distance);
+    replay_value = match->award_value[killer] > DIGS_REPLAY_AWARD_VALUE_CAP ?
+                   DIGS_REPLAY_AWARD_VALUE_CAP : match->award_value[killer];
+    replay_value += (vox_u32)kill_streak * DIGS_REPLAY_KILL_STREAK_VALUE;
+    replay_value += (vox_u32)multi_kill * DIGS_REPLAY_MULTI_KILL_VALUE;
+    replay_value += (vox_u32)cave_in_scale * DIGS_REPLAY_CAVE_IN_VALUE;
+    if (blast_distance != DIGS_REPLAY_NO_BLAST_DISTANCE &&
+        blast_distance <= DIGS_REPLAY_BLAST_MAX_DISTANCE_CELLS) {
+        replay_value += (vox_u32)(
+            DIGS_REPLAY_BLAST_MAX_DISTANCE_CELLS + 1U - blast_distance) *
+            DIGS_REPLAY_BLAST_PROXIMITY_VALUE;
+    }
+    if (headshot != 0U) replay_value += DIGS_REPLAY_HEADSHOT_VALUE;
+    if (replay_value > 65535U) replay_value = 65535U;
+    if (digs_replay_candidate_better(&match->replay, headshot,
+                                     kill_streak, multi_kill, cave_in_scale,
+                                     blast_distance,
+                                     (vox_u16)replay_value)) {
+        match->replay.active = 1U;
+        match->replay.killer = killer;
+        match->replay.victim = victim;
+        match->replay.headshot = headshot;
+        match->replay.kill_streak = kill_streak;
+        match->replay.multi_kill = multi_kill;
+        match->replay.award_value = (vox_u16)replay_value;
+        match->replay.cave_in_scale = cave_in_scale;
+        match->replay.blast_distance = blast_distance;
+        match->replay.selected_tick = match->tick;
+        match->replay.seed = match->rules.seed;
+        digs_emit_event(match, VOX_DIGS_EVENT_REPLAY_SELECT, killer, victim,
+                        match->last_damage_weapon[victim], VOX_MAT_BLOOD,
+                        match->players[victim].position_x.value_q16,
+                        match->players[victim].position_y.value_q16,
+                        match->replay.award_value,
+                        match->replay.headshot);
     }
     match->alive[victim] = 0U;
     match->health[victim] = 0U;
@@ -4110,6 +6204,7 @@ vox_result vox_digs_submit_input(vox_digs_match *match,
         !vox_digs_player_is_active(match, input->player) ||
         vox_digs_player_is_bot(match, input->player) ||
         !match->alive[input->player] ||
+        digs_player_extracted(match, input->player) ||
         (input->actions & (vox_u16)~VOX_DIGS_ACTION_MASK) != 0U ||
         input->aim_x >= VOX_WORLD_WIDTH ||
         input->aim_y >= VOX_WORLD_HEIGHT ||
@@ -4146,9 +6241,14 @@ vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
                              vox_u16 tool, vox_u32 x, vox_u32 y, vox_u32 z)
 {
     const vox_cell *target;
+    vox_u16 target_material;
+    vox_u16 detached_body_index;
+    vox_structure_cluster detached;
+    vox_result cluster_result;
     vox_result result;
     if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
         !vox_digs_player_is_active(match, player) || !match->alive[player] ||
+        digs_player_extracted(match, player) ||
         tool >= VOX_DIGS_TOOL_COUNT) {
         return VOX_ERR_INVALID;
     }
@@ -4156,12 +6256,34 @@ vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
     if (target == 0 || target->material == VOX_MAT_BEDROCK) {
         return VOX_ERR_INVALID;
     }
+    target_material = target->material;
+    cluster_result = VOX_ERR_INVALID;
+    if (digs_weapons[tool].blast_radius >= 3U &&
+        target_material != VOX_MAT_AIR) {
+        cluster_result = vox_cluster_extract(&match->world, x, y, z,
+                                             &detached);
+        if (cluster_result == VOX_OK) {
+            detached_body_index = digs_rigid_free_slot(match);
+            if (vox_cluster_spawn_debris(&detached, &match->ragdolls,
+                                         0L, -(2L << 16)) != VOX_OK) {
+                /* A full rigid pool cannot make terrain disappear.  Restore
+                 * it before the actual tool operation applies its own bounded
+                 * material damage. */
+                (void)vox_cluster_restore(&match->world, &detached, 0U);
+                cluster_result = VOX_ERR_CAPACITY;
+            } else {
+                digs_note_rigid_spawn(match, detached_body_index, player,
+                                      tool, detached.cells[0].material,
+                                      detached.count);
+            }
+        }
+    }
     if (tool == VOX_DIGS_TOOL_PICK) {
         result = vox_world_set(&match->world, x, y, z, VOX_MAT_AIR,
                                20L << 16);
     } else if (tool == VOX_DIGS_TOOL_BLAST_CHARGE) {
-        result = vox_world_blast(&match->world, x, y, z,
-                                 DIGS_SCALE(3U), 700L << 16);
+        result = digs_blast(match, x, y, z, DIGS_SCALE(3U),
+                            700L << 16, player, tool);
     } else if (tool == VOX_DIGS_TOOL_SMOKE_POT) {
         result = vox_world_set(&match->world, x, y, z, VOX_MAT_SMOKE,
                                180L << 16);
@@ -4172,28 +6294,72 @@ vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
         result = vox_world_set(&match->world, x, y, z, VOX_MAT_WATER,
                                20L << 16);
     } else if (tool == VOX_DIGS_TOOL_SLEDGE) {
-        result = vox_world_blast(&match->world, x, y, z,
-                                 DIGS_SCALE(2U), 80L << 16);
+        result = digs_blast(match, x, y, z, DIGS_SCALE(2U),
+                            80L << 16, player, tool);
     } else if (tool == VOX_DIGS_TOOL_NAIL_GUN) {
-        result = vox_world_blast(&match->world, x, y, z,
-                                 DIGS_SCALE(1U), 40L << 16);
+        result = digs_blast(match, x, y, z, DIGS_SCALE(1U),
+                            40L << 16, player, tool);
     } else if (tool == VOX_DIGS_TOOL_BOILER_SHOTGUN) {
-        result = vox_world_blast(&match->world, x, y, z,
-                                 DIGS_SCALE(2U), 180L << 16);
+        result = digs_blast(match, x, y, z, DIGS_SCALE(2U),
+                            180L << 16, player, tool);
     } else if (tool == VOX_DIGS_TOOL_CONCUSSION_GRENADE) {
-        result = vox_world_blast(&match->world, x, y, z,
-                                 DIGS_SCALE(5U), 400L << 16);
+        result = digs_blast(match, x, y, z, DIGS_SCALE(5U),
+                            400L << 16, player, tool);
     } else {
-        result = vox_world_blast(&match->world, x, y, z,
-                                 DIGS_SCALE(4U), 500L << 16);
+        result = digs_blast(match, x, y, z, DIGS_SCALE(4U),
+                            500L << 16, player, tool);
     }
     if (result != VOX_OK) {
         return result;
     }
+    (void)vox_structure_invalidate_with_cause(
+        &match->structure, x, y,
+        digs_weapons[tool].blast_radius > 0U ?
+        digs_weapons[tool].blast_radius + VOX_STRUCTURE_COHESION_CELLS :
+        VOX_STRUCTURE_COHESION_CELLS,
+        player, tool);
+    if (cluster_result == VOX_OK) {
+        digs_emit_event(match, VOX_DIGS_EVENT_CAVE_IN, player,
+                        VOX_DIGS_NO_PLAYER, tool, target_material,
+                        (vox_i32)(x << 16), (vox_i32)(y << 16),
+                        detached.count, detached.load_q8);
+        (void)vox_digs_award_note(match, player,
+                                  VOX_DIGS_AWARD_CAVE_IN_ARTIST,
+                                  detached.count);
+    }
+    if (tool == VOX_DIGS_TOOL_PICK && target_material != VOX_MAT_AIR) {
+        (void)vox_digs_award_note(match, player,
+                                  VOX_DIGS_AWARD_GRAVE_DIGGER, 50U);
+    }
+    if (tool == VOX_DIGS_TOOL_CINDER_FLASK) {
+        (void)vox_digs_award_note(match, player,
+                                  VOX_DIGS_AWARD_PYROMANIAC, 75U);
+    }
+    if (digs_weapons[tool].blast_radius > 0U) {
+        digs_spawn_blast_debris(match, x, y,
+                                digs_weapons[tool].blast_radius, 0U,
+                                player, tool);
+    }
+    if (tool == VOX_DIGS_TOOL_CINDER_FLASK ||
+        tool == VOX_DIGS_TOOL_PRESSURE_HOSE) {
+        vox_u16 fluid_material = tool == VOX_DIGS_TOOL_CINDER_FLASK ?
+                                 VOX_FLUID_LAVA : VOX_FLUID_WATER;
+        /* A fluid cell is one Q16 unit.  The old 700 << 8 request was
+         * larger than that bounded cell and was silently rejected, leaving
+         * Cinder Flask as a terrain-only effect.  Deposit a deterministic
+         * three-quarter cell here; the solver carries the rest through open
+         * neighbors on later ticks. */
+        vox_i32 fluid_volume = tool == VOX_DIGS_TOOL_CINDER_FLASK ?
+                               49152L : 20L << 8;
+        (void)vox_fluid_add_at(&match->fluids, (vox_u16)x, (vox_u16)y,
+                               (vox_u16)z, fluid_material, fluid_volume,
+                               tool == VOX_DIGS_TOOL_CINDER_FLASK ?
+                               700L << 16 : 20L << 16);
+    }
     match->selected_weapon[player] = tool;
     digs_end_spawn_shield(match, player);
     digs_emit_event(match, VOX_DIGS_EVENT_WEAPON_FIRE, player,
-                    VOX_DIGS_NO_PLAYER, tool, target->material,
+                    VOX_DIGS_NO_PLAYER, tool, target_material,
                     (vox_i32)(x << 16), (vox_i32)(y << 16),
                     digs_weapons[tool].damage,
                     (vox_u16)(digs_noise(match->rules.seed, match->tick,
@@ -4456,14 +6622,16 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
     vox_i32 wound_y_q16;
     if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
         !vox_digs_player_is_active(match, victim) ||
-        !match->alive[victim] || damage == 0U ||
+        !match->alive[victim] || digs_player_extracted(match, victim) ||
+        damage == 0U ||
         weapon >= VOX_DIGS_TOOL_COUNT ||
         (part != VOX_DIGS_NO_PART &&
          part >= VOX_DIGS_ANATOMY_PART_COUNT) ||
         (damage_flags & (vox_u16)~(VOX_DIGS_DAMAGE_BALLISTIC |
                                   VOX_DIGS_DAMAGE_BLUNT |
                                   VOX_DIGS_DAMAGE_EXPLOSIVE |
-                                  VOX_DIGS_DAMAGE_HEAT)) != 0U ||
+                                  VOX_DIGS_DAMAGE_HEAT |
+                                  VOX_DIGS_DAMAGE_DROWNING)) != 0U ||
         (attacker != VOX_DIGS_NO_PLAYER &&
          !vox_digs_player_is_active(match, attacker))) {
         return VOX_ERR_INVALID;
@@ -4480,8 +6648,25 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
                         damage, 1U);
         return VOX_OK;
     }
+    if (match->dash_invulnerability[victim] > 0U) {
+        digs_emit_event(match, VOX_DIGS_EVENT_SHIELD_BLOCK, attacker, victim,
+                        weapon, VOX_MAT_METAL,
+                        match->players[victim].position_x.value_q16,
+                        match->players[victim].position_y.value_q16,
+                        damage, 2U);
+        return VOX_OK;
+    }
     if (part == VOX_DIGS_NO_PART) {
         part = digs_choose_hit_part(match, attacker, victim, weapon, damage);
+    }
+    if (part == VOX_DIGS_PART_HEAD) {
+        damage = 65535U;
+        fatal = 1U;
+        digs_emit_event(match, VOX_DIGS_EVENT_HEADSHOT, attacker, victim,
+                        weapon, VOX_MAT_BLOOD,
+                        match->players[victim].position_x.value_q16,
+                        match->players[victim].position_y.value_q16,
+                        damage, part);
     }
     if (vox_digs_anatomy_hurtbox(part, &wound_box) != VOX_OK) {
         return VOX_ERR_INVALID;
@@ -4539,6 +6724,12 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
                                     VOX_DIGS_PART_CAUTERIZED) &
                                    (vox_u16)~VOX_DIGS_PART_BLEEDING);
         anatomy->bleed_rate_q8 = 0U;
+    } else if ((damage_flags & VOX_DIGS_DAMAGE_DROWNING) != 0U) {
+        /* Water damage is suffocation, not an open wound. */
+        anatomy->flags = (vox_u16)(anatomy->flags &
+                                   (vox_u16)~VOX_DIGS_PART_BLEEDING);
+        anatomy->bleed_rate_q8 = 0U;
+        match->bleed_accumulator_q8[victim] = 0U;
     } else {
         vox_u16 bleed = (vox_u16)(damage / 10U + 1U);
         if (bleed > 16U) {
@@ -4557,8 +6748,8 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
     digs_emit_event(match, VOX_DIGS_EVENT_DAMAGE, attacker, victim,
                     weapon, VOX_MAT_BLOOD,
                     wound_x_q16, wound_y_q16,
-                    damage, (vox_u16)((part << 4) |
-                                      (damage_flags & 15U)));
+                    damage, (vox_u16)((part << 5) |
+                                      (damage_flags & 31U)));
     if (aggregate_damage < match->health[victim]) {
         match->health[victim] = (vox_u16)(match->health[victim] -
                                            aggregate_damage);
@@ -4849,9 +7040,10 @@ static vox_result digs_fire_melee(vox_digs_match *match, vox_u16 player,
     if (target_x > 0U && target_y > 0U &&
         target_x + 1U < VOX_WORLD_WIDTH &&
         target_y + 1U < VOX_WORLD_HEIGHT) {
-        (void)vox_world_blast(&match->world, target_x, target_y,
-                              VOX_WORLD_DEPTH - 1U,
-                              properties->blast_radius, 120L << 16);
+        (void)digs_blast(match, target_x, target_y,
+                         VOX_WORLD_DEPTH - 1U,
+                         properties->blast_radius, 120L << 16,
+                         player, weapon);
     }
     for (victim = 0U; victim < match->rules.player_count; ++victim) {
         vox_u16 part = VOX_DIGS_NO_PART;
@@ -5158,9 +7350,10 @@ static vox_result digs_fire_popper(vox_digs_match *match, vox_u16 player,
         }
         if (digs_projectile_hits_solid(&match->world, (vox_u32)x_cell,
                                        (vox_u32)y_cell)) {
-            (void)vox_world_blast(&match->world, (vox_u32)x_cell,
-                                  (vox_u32)y_cell, VOX_WORLD_DEPTH - 1U,
-                                  properties->blast_radius, 550L << 16);
+            (void)digs_blast(match, (vox_u32)x_cell, (vox_u32)y_cell,
+                             VOX_WORLD_DEPTH - 1U,
+                             properties->blast_radius, 550L << 16,
+                             player, VOX_DIGS_TOOL_POPPER);
             digs_damage_radius(match, player, (vox_u32)x_cell,
                                (vox_u32)y_cell, properties->blast_radius,
                                properties->damage, VOX_DIGS_TOOL_POPPER,
@@ -5178,9 +7371,9 @@ static vox_result digs_fire_popper(vox_digs_match *match, vox_u16 player,
                                      VOX_DIGS_TOOL_POPPER, part,
                                      properties->damage,
                                      VOX_DIGS_DAMAGE_BALLISTIC);
-            (void)vox_world_blast(&match->world, (vox_u32)x_cell,
-                                  (vox_u32)y_cell, VOX_WORLD_DEPTH - 1U,
-                                  1U, 550L << 16);
+            (void)digs_blast(match, (vox_u32)x_cell, (vox_u32)y_cell,
+                             VOX_WORLD_DEPTH - 1U, 1U, 550L << 16,
+                             player, VOX_DIGS_TOOL_POPPER);
             return VOX_OK;
         }
     }
@@ -5243,10 +7436,10 @@ static vox_result digs_fire_hot_rail(vox_digs_match *match, vox_u16 player,
                                     cell->material, 850L << 16);
             }
             if ((step & 7U) == 0U) {
-                (void)vox_world_blast(&match->world, (vox_u32)x_cell,
-                                      (vox_u32)y_cell,
-                                      VOX_WORLD_DEPTH - 1U, 1U,
-                                      800L << 16);
+                (void)digs_blast(match, (vox_u32)x_cell, (vox_u32)y_cell,
+                                 VOX_WORLD_DEPTH - 1U, 1U,
+                                 800L << 16, player,
+                                 VOX_DIGS_TOOL_HOT_RAIL);
             }
         }
         for (victim = 0U; victim < match->rules.player_count; ++victim) {
@@ -5289,9 +7482,9 @@ static vox_result digs_fire_bore_drill(vox_digs_match *match,
         }
         if (digs_projectile_hits_solid(&match->world, (vox_u32)source_x,
                                        (vox_u32)y_cell)) {
-            (void)vox_world_blast(&match->world, (vox_u32)source_x,
-                                  (vox_u32)y_cell, VOX_WORLD_DEPTH - 1U,
-                                  1U, 500L << 16);
+            (void)digs_blast(match, (vox_u32)source_x, (vox_u32)y_cell,
+                             VOX_WORLD_DEPTH - 1U, 1U, 500L << 16,
+                             player, VOX_DIGS_TOOL_BORE_DRILL);
         }
         if (match->players[player].velocity_y.value_q16 <= 0L) {
             continue;
@@ -5343,9 +7536,9 @@ static vox_result digs_fire_bolt_action(vox_digs_match *match,
         }
         if (digs_projectile_hits_solid(&match->world, (vox_u32)x_cell,
                                        (vox_u32)y_cell)) {
-            (void)vox_world_blast(&match->world, (vox_u32)x_cell,
-                                  (vox_u32)y_cell, VOX_WORLD_DEPTH - 1U,
-                                  1U, 900L << 16);
+            (void)digs_blast(match, (vox_u32)x_cell, (vox_u32)y_cell,
+                             VOX_WORLD_DEPTH - 1U, 1U, 900L << 16,
+                             player, VOX_DIGS_TOOL_BOLT_ACTION);
             bores++;
             if (bores >= 6U) {
                 break;
@@ -5379,7 +7572,8 @@ vox_result vox_digs_fire_weapon(vox_digs_match *match, vox_u16 player,
     int offset;
     if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
         !vox_digs_player_is_active(match, player) ||
-        !match->alive[player] || weapon >= VOX_DIGS_TOOL_COUNT ||
+        !match->alive[player] || digs_player_extracted(match, player) ||
+        weapon >= VOX_DIGS_TOOL_COUNT ||
         target_x >= VOX_WORLD_WIDTH || target_y >= VOX_WORLD_HEIGHT ||
         match->weapon_cooldown[player] != 0U ||
         (match->rules.weapon_mask & (vox_u16)(1U << weapon)) == 0U) {
@@ -5529,7 +7723,8 @@ static void digs_step_weapon_input(vox_digs_match *match, vox_u16 player)
 {
     vox_u16 actions = match->player_actions[player];
     vox_u16 weapon = match->selected_weapon[player];
-    if (!match->alive[player] || weapon >= VOX_DIGS_TOOL_COUNT) {
+    if (!match->alive[player] || digs_player_extracted(match, player) ||
+        weapon >= VOX_DIGS_TOOL_COUNT) {
         return;
     }
     if (weapon == VOX_DIGS_TOOL_RAIL_GUN) {
@@ -5605,7 +7800,8 @@ static void digs_step_weapon_input(vox_digs_match *match, vox_u16 player)
 static int digs_ai_is_enemy(const vox_digs_match *match, vox_u16 player,
                             vox_u16 candidate)
 {
-    if (candidate == player || !match->alive[candidate]) {
+    if (candidate == player || !match->alive[candidate] ||
+        digs_player_extracted(match, candidate)) {
         return 0;
     }
     return 1;
@@ -6255,6 +8451,20 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
         return VOX_ERR_INVALID;
     }
     state = &match->bots[player];
+    if (digs_player_extracted(match, player)) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_EXTRACTION;
+        state->extraction_ticks++;
+        match->player_actions[player] = 0U;
+        match->move_x_q15[player] = 0;
+        match->move_y_q15[player] = 0;
+        return VOX_OK;
+    }
+    if (match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_LAUNCH &&
+        (match->dropship.launched_mask & (vox_u16)(1U << player)) == 0U &&
+        ((match->tick + (vox_u32)player * 31U) %
+         (90U + (vox_u32)vox_digs_bot_archetype(match, player) * 30U)) == 0U) {
+        (void)vox_digs_dropship_launch(match, player);
+    }
     state->state_ticks++;
     if (state->memory_ticks > 0U) {
         state->memory_ticks--;
@@ -6343,6 +8553,24 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
      * it guards.
      */
     hazard = digs_ai_hazard(match, player, personality->caution, &escape_x);
+    /* Survival states are refreshed before the decision throttle.  The rest
+     * of the tunnel state is selected below, after this tick has actually
+     * found (or failed to find) a target; using last tick's target here made
+     * FLAMEY's visible/ambush branch permanently read as a blind trap. */
+    if ((match->dropship.extracted_mask & (vox_u16)(1U << player)) != 0U) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_EXTRACTION;
+    } else if (match->buried_ticks[player] > 0U) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_RECOVERY;
+    } else if (hazard >= DIGS_AI_HAZARD_CRITICAL) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_DROWNING;
+    } else if (hazard != 0U && escape_x != 0) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_ESCAPE;
+    }
+    state->tunnel_safety_q8 = hazard >= 2U ? 0U :
+                              (hazard == 1U ? 128U : 255U);
+    state->collapse_risk_q8 = state->breach_ticks > 0U ?
+                              (vox_u16)((state->breach_ticks > 255U) ?
+                                        255U : state->breach_ticks) : 0U;
     if (hazard >= DIGS_AI_HAZARD_CRITICAL && escape_x != 0) {
         vox_u16 reflex = (vox_u16)(escape_x > 0 ? VOX_DIGS_ACTION_RIGHT :
                                                   VOX_DIGS_ACTION_LEFT);
@@ -6709,6 +8937,41 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
             digs_ai_weapon(match, player, nearest);
         actions = (vox_u16)(actions | VOX_DIGS_ACTION_FIRE);
     }
+    if ((state->mode == VOX_DIGS_AI_RETREATING || hazard >= 2U) &&
+        match->dash_cooldown[player] == 0U &&
+        ((match->tick + (vox_u32)player * 13U) % 37U) == 0U) {
+        /* Bots use the same burst and invulnerability path as players. */
+        actions = (vox_u16)(actions | VOX_DIGS_ACTION_DASH);
+    }
+    /* This is deliberately after target acquisition and breach planning. A
+     * tunnel state is an observable account of the decision actually made,
+     * not a speculative label from the preceding tick. */
+    if ((match->dropship.extracted_mask & (vox_u16)(1U << player)) != 0U) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_EXTRACTION;
+    } else if (match->buried_ticks[player] > 0U) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_RECOVERY;
+    } else if (hazard >= DIGS_AI_HAZARD_CRITICAL) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_DROWNING;
+    } else if (hazard != 0U && escape_x != 0) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_ESCAPE;
+    } else if (state->breach_ticks > 128U) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_COLLAPSE_RISK;
+    } else if (breaching || state->breach_ticks > 0U) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_EXCAVATING;
+    } else if (state->stuck_ticks >= digs_ai_stuck_threshold(archetype)) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_PLANNING;
+    } else if (target != VOX_DIGS_NO_PLAYER &&
+               archetype == VOX_DIGS_ARCHETYPE_TRICKSTER) {
+        state->tunnel_state = visible ? VOX_DIGS_TUNNEL_AMBUSH :
+                              VOX_DIGS_TUNNEL_TRAP;
+    } else if (target != VOX_DIGS_NO_PLAYER && !visible &&
+               archetype == VOX_DIGS_ARCHETYPE_ENGINEER) {
+        /* RIVET keeps an acquired destination and plans a safe route rather
+         * than turning into an aimless roamer when sight drops. */
+        state->tunnel_state = VOX_DIGS_TUNNEL_PLANNING;
+    } else {
+        state->tunnel_state = VOX_DIGS_TUNNEL_NONE;
+    }
     match->player_actions[player] = actions;
     match->move_x_q15[player] = move_x;
     match->move_y_q15[player] = 0;
@@ -6761,6 +9024,18 @@ static void digs_deposit_projectile(vox_digs_match *match,
                                     projectile->material,
                                     projectile->material == VOX_MAT_LAVA ?
                                     750L << 16 : 80L << 16);
+                if (projectile->material == VOX_MAT_LAVA ||
+                    projectile->material == VOX_MAT_WATER) {
+                    (void)vox_fluid_add_at(
+                        &match->fluids, (vox_u16)sample_x,
+                        (vox_u16)sample_y, (vox_u16)z,
+                        projectile->material == VOX_MAT_LAVA ?
+                        VOX_FLUID_LAVA : VOX_FLUID_WATER,
+                        projectile->material == VOX_MAT_LAVA ?
+                        16384L : 8192L,
+                        projectile->material == VOX_MAT_LAVA ?
+                        700L << 16 : 20L << 16);
+                }
             }
         }
     }
@@ -6828,9 +9103,9 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
         projectile.blast_radius > 0U) {
         vox_u16 lobe;
         vox_u16 lobe_count = (vox_u16)(2U + explosion_noise % 4U);
-        (void)vox_world_blast(&match->world, x, y,
-                              VOX_WORLD_DEPTH - 1U,
-                              terrain_radius, 700L << 16);
+        (void)digs_blast(match, x, y, VOX_WORLD_DEPTH - 1U,
+                         terrain_radius, 700L << 16,
+                         projectile.owner, projectile.weapon);
         for (lobe = 0U; lobe < lobe_count; ++lobe) {
             vox_u32 noise = digs_noise(explosion_noise, lobe, x, y);
             vox_i32 offset_x = (vox_i32)(noise %
@@ -6844,10 +9119,11 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
             if (lobe_x > 0 && lobe_y > 0 &&
                 lobe_x < (vox_i32)VOX_WORLD_WIDTH &&
                 lobe_y < (vox_i32)VOX_WORLD_HEIGHT) {
-                (void)vox_world_blast(&match->world, (vox_u32)lobe_x,
-                                      (vox_u32)lobe_y,
-                                      VOX_WORLD_DEPTH - 1U,
-                                      lobe_radius, 700L << 16);
+                (void)digs_blast(match, (vox_u32)lobe_x,
+                                 (vox_u32)lobe_y,
+                                 VOX_WORLD_DEPTH - 1U,
+                                 lobe_radius, 700L << 16,
+                                 projectile.owner, projectile.weapon);
             }
         }
         digs_damage_radius(match, projectile.owner, x, y,
@@ -6880,9 +9156,9 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
                                  projectile.damage, damage_flags);
     } else if (projectile.blast_radius > 0U &&
                projectile.weapon == VOX_DIGS_TOOL_BOILER_SHOTGUN) {
-        (void)vox_world_blast(&match->world, x, y,
-                              VOX_WORLD_DEPTH - 1U,
-                              DIGS_SCALE(1U), 100L << 16);
+        (void)digs_blast(match, x, y, VOX_WORLD_DEPTH - 1U,
+                         DIGS_SCALE(1U), 100L << 16,
+                         projectile.owner, projectile.weapon);
     }
     if (properties->flags & VOX_DIGS_WEAPON_DEPOSIT) {
         digs_deposit_projectile(match, &projectile, x, y);
@@ -7027,12 +9303,12 @@ static void digs_step_projectiles(vox_digs_match *match)
                     /* A charged Pulaski shaves a small, noisy notch into a
                      * wall before it turns around.  It is intentionally not
                      * an explosion: the axe stays in flight and returns. */
-                    (void)vox_world_blast(&match->world,
-                                          (vox_u32)x_cell,
-                                          (vox_u32)y_cell,
-                                          VOX_WORLD_DEPTH - 1U,
-                                          projectile->blast_radius,
-                                          360L << 16);
+                    (void)digs_blast(match, (vox_u32)x_cell,
+                                     (vox_u32)y_cell,
+                                     VOX_WORLD_DEPTH - 1U,
+                                     projectile->blast_radius,
+                                     360L << 16, projectile->owner,
+                                     projectile->weapon);
                     digs_spawn_effect_variant(match, VOX_MAT_METAL,
                         projectile->position_x_q16,
                         projectile->position_y_q16,
@@ -7320,7 +9596,7 @@ static void digs_step_bleeding(vox_digs_match *match)
         vox_u16 total_rate = 0U;
         vox_u16 damage;
         vox_u32 accumulated;
-        if (!match->alive[player]) {
+        if (!match->alive[player] || digs_player_extracted(match, player)) {
             continue;
         }
         for (part = 0U; part < VOX_DIGS_ANATOMY_PART_COUNT; ++part) {
@@ -7362,6 +9638,22 @@ static void digs_step_bleeding(vox_digs_match *match)
             match->bleed_accumulator_q8[player] % 256U);
         if (damage > 0U) {
             vox_u16 drops = damage > 8U ? 8U : damage;
+            vox_i32 blood_x = match->players[player].position_x.value_q16 /
+                              65536L;
+            vox_i32 blood_y = match->players[player].position_y.value_q16 /
+                              65536L;
+            if (blood_x >= 0L && blood_y >= 0L &&
+                blood_x < (vox_i32)VOX_WORLD_WIDTH &&
+                blood_y < (vox_i32)VOX_WORLD_HEIGHT) {
+                /* The visible droplets are bounded presentation.  This
+                 * smaller deposit is the authoritative pool that can later
+                 * run, mix with water, or be sampled by movement. */
+                (void)vox_fluid_add_at(
+                    &match->fluids, (vox_u16)blood_x, (vox_u16)blood_y,
+                    (vox_u16)(match->tick % VOX_WORLD_DEPTH),
+                    VOX_FLUID_BLOOD,
+                    (vox_i32)drops * 1024L, 37L << 16);
+            }
             for (part = 0U; part < drops; ++part) {
                 vox_u32 noise = digs_noise(match->rules.seed,
                                            match->tick, player,
@@ -7434,20 +9726,11 @@ static void digs_update_lava(vox_digs_match *match)
         (match->lava_level_q16 *
          (DIGS_LAVA_BASIN_TOP - DIGS_SCALE(3U)) / 65535U));
     while (match->lava_surface_y > desired_surface) {
-        vox_u32 x;
-        vox_u32 z;
         match->lava_surface_y--;
-        for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
-            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-                const vox_cell *cell = vox_world_cell(
-                    &match->world, x, match->lava_surface_y, z);
-                if (cell != 0 && cell->material != VOX_MAT_BEDROCK) {
-                    (void)vox_world_set(&match->world, x,
-                                        match->lava_surface_y, z,
-                                        VOX_MAT_LAVA, 750L << 16);
-                }
-            }
-        }
+        (void)vox_world_set_layer_quiet_except(&match->world,
+                                               match->lava_surface_y,
+                                               VOX_MAT_LAVA, 750L << 16,
+                                               VOX_MAT_BEDROCK);
     }
 }
 
@@ -7459,7 +9742,7 @@ static void digs_apply_lava_hazards(vox_digs_match *match)
         vox_i32 x_cell;
         int touching_lava = 0;
         vox_u32 z;
-        if (!match->alive[player]) {
+        if (!match->alive[player] || digs_player_extracted(match, player)) {
             continue;
         }
         foot_y = digs_q16_to_cell(
@@ -7479,6 +9762,15 @@ static void digs_apply_lava_hazards(vox_digs_match *match)
                     touching_lava = 1;
                     break;
                 }
+                {
+                    const vox_fluid_cell *fluid = vox_fluid_cell_get_at(
+                        &match->fluids, (vox_u16)x_cell, (vox_u16)foot_y,
+                        (vox_u16)z);
+                    if (fluid != 0 && fluid->material == VOX_FLUID_LAVA) {
+                        touching_lava = 1;
+                        break;
+                    }
+                }
             }
         }
         if (touching_lava) {
@@ -7493,6 +9785,60 @@ static void digs_apply_lava_hazards(vox_digs_match *match)
                     0L, -24576L, 28U);
             }
         }
+    }
+}
+
+static void digs_apply_fluid_hazards(vox_digs_match *match)
+{
+    vox_u16 player;
+    for (player = 0U; player < match->rules.player_count; ++player) {
+        vox_i32 center_x;
+        vox_i32 center_y;
+        vox_i32 feet_y;
+        vox_u16 z;
+        int submerged = 0;
+        if (!match->alive[player] || digs_player_extracted(match, player)) {
+            continue;
+        }
+        center_x = digs_q16_to_cell(
+            match->players[player].position_x.value_q16);
+        center_y = digs_q16_to_cell(
+            match->players[player].position_y.value_q16);
+        feet_y = digs_q16_to_cell(
+            match->players[player].position_y.value_q16 +
+            match->players[player].half_height_q16);
+        if (center_x < 0L || center_x >= (vox_i32)VOX_WORLD_WIDTH) {
+            continue;
+        }
+        if (center_y < 0L) center_y = 0L;
+        if (feet_y >= (vox_i32)VOX_WORLD_HEIGHT) {
+            feet_y = (vox_i32)VOX_WORLD_HEIGHT - 1L;
+        }
+        for (z = 0U; z < VOX_FLUID_GRID_DEPTH; ++z) {
+            const vox_fluid_cell *center = vox_fluid_cell_get_at(
+                &match->fluids, (vox_u16)center_x, (vox_u16)center_y, z);
+            const vox_fluid_cell *feet = vox_fluid_cell_get_at(
+                &match->fluids, (vox_u16)center_x, (vox_u16)feet_y, z);
+            if ((center != 0 && center->material == VOX_FLUID_WATER &&
+                 center->volume_q16 >= 32768L) ||
+                (feet != 0 && feet->material == VOX_FLUID_WATER &&
+                 feet->volume_q16 >= 32768L)) {
+                submerged = 1;
+                break;
+            }
+        }
+        if (!submerged) continue;
+        if ((match->tick % 30U) == (vox_u32)player) {
+            digs_emit_event(match, VOX_DIGS_EVENT_DROWN, VOX_DIGS_NO_PLAYER,
+                            player, VOX_DIGS_TOOL_HYDROSHOT, VOX_MAT_WATER,
+                            match->players[player].position_x.value_q16,
+                            match->players[player].position_y.value_q16,
+                            3U, 0U);
+        }
+        (void)vox_digs_apply_hit(match, VOX_DIGS_NO_PLAYER, player,
+                                 VOX_DIGS_TOOL_HYDROSHOT,
+                                 VOX_DIGS_PART_TORSO, 3U,
+                                 VOX_DIGS_DAMAGE_DROWNING);
     }
 }
 
@@ -7537,6 +9883,34 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
     hash = digs_hash_mix(hash, (vox_u32)match->effect_cursor);
     hash = digs_hash_mix(hash, match->terrain_hash);
     hash = digs_hash_mix(hash, vox_world_hash(&match->world));
+    hash = digs_hash_mix(hash, vox_fluid_hash(&match->fluids));
+    hash = digs_hash_mix(hash, vox_rigid_hash(&match->ragdolls));
+    hash = digs_hash_mix(hash, vox_structure_hash(&match->structure));
+    for (i = 0U; i < VOX_RIGID_MAX_BODIES; ++i) {
+        hash = digs_hash_mix(hash, (vox_u32)match->rigid_source[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->rigid_weapon[i]);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->rigid_impact_cooldown[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->rigid_material[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->rigid_loose_cells[i]);
+    }
+    hash = digs_hash_mix(hash, match->rigid_settle_discarded);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.position_x_q16);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.position_y_q16);
+    hash = digs_hash_mix(hash,
+                         (vox_u32)match->dropship.previous_position_x_q16);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.velocity_x_q16);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.phase);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.route_ticks);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.launched_mask);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.extracted_mask);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.alarmed);
+    hash = digs_hash_mix(hash,
+                         (vox_u32)match->dropship.collision_cooldown);
+    for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
+        hash = digs_hash_mix(hash, (vox_u32)match->awards[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->award_value[i]);
+    }
     hash = digs_hash_mix(hash, (vox_u32)match->physics_config.gravity_q16);
     hash = digs_hash_mix(hash, (vox_u32)match->physics_config.max_speed_q16);
     hash = digs_hash_mix(hash, (vox_u32)match->physics_config.max_step_q16);
@@ -7563,6 +9937,8 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
         hash = digs_hash_mix(hash, (vox_u32)match->coyote_ticks[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->jump_buffer_ticks[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->jump_hold_ticks[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->dash_cooldown[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->dash_invulnerability[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->steam_q16[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->weapon_cooldown[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->selected_weapon[i]);
@@ -7621,6 +9997,10 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
         hash = digs_hash_mix(hash, (vox_u32)match->ropes[i].point_count);
         hash = digs_hash_mix(hash, (vox_u32)match->ropes[i].target_player);
         hash = digs_hash_mix(hash, (vox_u32)match->ropes[i].flags);
+        hash = digs_hash_mix(hash, (vox_u32)match->ropes[i].target_x);
+        hash = digs_hash_mix(hash, (vox_u32)match->ropes[i].target_y);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->ropes[i].retarget_cursor);
         hash = digs_hash_mix(hash, (vox_u32)match->ropes[i].hook_x_q16);
         hash = digs_hash_mix(hash, (vox_u32)match->ropes[i].hook_y_q16);
         hash = digs_hash_mix(hash,
@@ -7664,6 +10044,10 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
                              (vox_u32)match->bots[i].last_seen_x_q16);
         hash = digs_hash_mix(hash,
                              (vox_u32)match->bots[i].last_seen_y_q16);
+        hash = digs_hash_mix(hash, (vox_u32)match->bots[i].tunnel_state);
+        hash = digs_hash_mix(hash, (vox_u32)match->bots[i].tunnel_safety_q8);
+        hash = digs_hash_mix(hash, (vox_u32)match->bots[i].collapse_risk_q8);
+        hash = digs_hash_mix(hash, (vox_u32)match->bots[i].extraction_ticks);
         {
             vox_u16 part;
             for (part = 0U; part < VOX_DIGS_ANATOMY_PART_COUNT; ++part) {

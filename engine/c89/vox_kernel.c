@@ -842,6 +842,42 @@ void vox_world_init(vox_world *world)
     }
 }
 
+vox_result vox_world_rebuild(vox_world *world)
+{
+    vox_u32 i;
+    if (world == 0 || world->abi_version != VOX_ABI_VERSION ||
+        world->struct_size < (vox_u32)sizeof(*world)) {
+        return VOX_ERR_INVALID;
+    }
+    world->occupied_cells = 0U;
+    world->awake_cells = 0U;
+    for (i = 0U; i < VOX_WORLD_CHUNK_COUNT; ++i) {
+        world->chunks[i].occupied_cells = 0U;
+        world->chunks[i].awake_cells = 0U;
+        world->chunks[i].cell_hash = 0U;
+        world->chunks[i].flags = 0U;
+    }
+    for (i = 0U; i < VOX_WORLD_CELLS; ++i) {
+        vox_u32 x = i % VOX_WORLD_WIDTH;
+        vox_u32 y = (i / VOX_WORLD_WIDTH) % VOX_WORLD_HEIGHT;
+        vox_chunk *chunk = &world->chunks[vox_chunk_index(x, y)];
+        vox_cell *cell = &world->cells[i];
+        int occupied;
+        cell->flags = (vox_u16)(cell->flags &
+            (vox_u16)~(VOX_CELL_OCCUPIED | VOX_CELL_AWAKE |
+                       VOX_CELL_MOVED | VOX_CELL_LOOSE |
+                       VOX_CELL_UNSTABLE | VOX_CELL_PHASE_GAS));
+        occupied = cell->material != VOX_MAT_AIR;
+        if (occupied) {
+            cell->flags = (vox_u16)(cell->flags | VOX_CELL_OCCUPIED);
+            world->occupied_cells++;
+            chunk->occupied_cells++;
+        }
+        chunk->cell_hash ^= vox_cell_signature(i, cell);
+    }
+    return VOX_OK;
+}
+
 const vox_material_properties *vox_material_get(vox_u16 material)
 {
     if (material >= VOX_MAT_COUNT) {
@@ -903,6 +939,87 @@ vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
     return VOX_OK;
 }
 
+static vox_result vox_world_set_layer_except_internal(
+    vox_world *world, vox_u32 y, vox_u16 material, vox_i32 temperature_q16,
+    vox_u16 skip_material, int wake)
+{
+    vox_u32 x;
+    vox_u32 z;
+    if (world == 0 || world->abi_version != VOX_ABI_VERSION ||
+        world->struct_size < (vox_u32)sizeof(*world) ||
+        y >= VOX_WORLD_HEIGHT || material >= VOX_MAT_COUNT ||
+        skip_material >= VOX_MAT_COUNT) {
+        return VOX_ERR_INVALID;
+    }
+    for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+        for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+            vox_u32 cell_index;
+            vox_cell *cell;
+            vox_chunk *chunk;
+            vox_u32 old_signature;
+            vox_u32 new_signature;
+            int was_occupied;
+            int was_awake;
+            int occupied;
+            cell_index = vox_index(x, y, z);
+            cell = &world->cells[cell_index];
+            if (cell->material == skip_material) continue;
+            chunk = &world->chunks[vox_chunk_index(x, y)];
+            old_signature = vox_cell_signature(cell_index, cell);
+            was_occupied = (cell->flags & VOX_CELL_OCCUPIED) != 0U;
+            was_awake = (cell->flags & VOX_CELL_AWAKE) != 0U;
+            cell->material = material;
+            cell->flags = (vox_u16)(cell->flags &
+                (vox_u16)~(VOX_CELL_OCCUPIED | VOX_CELL_PHASE_GAS |
+                           VOX_CELL_MOVED | VOX_CELL_LOOSE |
+                           VOX_CELL_UNSTABLE));
+            cell->temperature_q16 = temperature_q16;
+            occupied = material != VOX_MAT_AIR;
+            if (occupied) {
+                cell->flags = (vox_u16)(cell->flags | VOX_CELL_OCCUPIED);
+            }
+            if (!was_occupied && occupied) {
+                world->occupied_cells++;
+                chunk->occupied_cells++;
+            } else if (was_occupied && !occupied) {
+                world->occupied_cells--;
+                chunk->occupied_cells--;
+            }
+            if (wake && !was_awake) {
+                cell->flags = (vox_u16)(cell->flags | VOX_CELL_AWAKE);
+                world->awake_cells++;
+                chunk->awake_cells++;
+                chunk->flags = (vox_u16)(chunk->flags |
+                                         VOX_CHUNK_ACTIVE);
+            }
+            new_signature = vox_cell_signature(cell_index, cell);
+            chunk->cell_hash ^= old_signature ^ new_signature;
+            vox_mark_dirty(chunk);
+        }
+    }
+    return VOX_OK;
+}
+
+vox_result vox_world_set_layer_except(vox_world *world, vox_u32 y,
+                                      vox_u16 material,
+                                      vox_i32 temperature_q16,
+                                      vox_u16 skip_material)
+{
+    return vox_world_set_layer_except_internal(world, y, material,
+                                               temperature_q16,
+                                               skip_material, 1);
+}
+
+vox_result vox_world_set_layer_quiet_except(vox_world *world, vox_u32 y,
+                                            vox_u16 material,
+                                            vox_i32 temperature_q16,
+                                            vox_u16 skip_material)
+{
+    return vox_world_set_layer_except_internal(world, y, material,
+                                               temperature_q16,
+                                               skip_material, 0);
+}
+
 vox_result vox_world_set_loose(vox_world *world, vox_u32 x, vox_u32 y,
                                vox_u32 z, vox_u16 loose)
 {
@@ -953,25 +1070,52 @@ vox_result vox_world_wake(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z)
 
 vox_result vox_world_sleep_all(vox_world *world)
 {
-    vox_u32 i;
+    vox_u32 chunk_y;
+    vox_u32 chunk_x;
+    vox_u32 depth;
+    vox_u32 local_y;
+    vox_u32 local_x;
     if (world == 0) {
         return VOX_ERR_INVALID;
     }
-    for (i = 0U; i < VOX_WORLD_CELLS; ++i) {
-        vox_u32 x = i % VOX_WORLD_WIDTH;
-        vox_u32 y = (i / VOX_WORLD_WIDTH) % VOX_WORLD_HEIGHT;
-        vox_chunk *chunk = &world->chunks[vox_chunk_index(x, y)];
-        vox_toggle_cell_signature(chunk, i, &world->cells[i]);
-        world->cells[i].flags = (vox_u16)(world->cells[i].flags &
-                                          (vox_u16)~(VOX_CELL_AWAKE |
-                                                    VOX_CELL_MOVED));
-        vox_toggle_cell_signature(chunk, i, &world->cells[i]);
+    for (chunk_y = 0U; chunk_y < VOX_WORLD_CHUNKS_Y; ++chunk_y) {
+        for (chunk_x = 0U; chunk_x < VOX_WORLD_CHUNKS_X; ++chunk_x) {
+            vox_u32 chunk_index = chunk_y * VOX_WORLD_CHUNKS_X + chunk_x;
+            vox_chunk *chunk = &world->chunks[chunk_index];
+            if ((chunk->flags & VOX_CHUNK_ACTIVE) == 0U) continue;
+            for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+                for (local_y = 0U; local_y < VOX_CHUNK_HEIGHT; ++local_y) {
+                    for (local_x = 0U; local_x < VOX_CHUNK_WIDTH;
+                         ++local_x) {
+                        vox_u32 x = chunk_x * VOX_CHUNK_WIDTH + local_x;
+                        vox_u32 y = chunk_y * VOX_CHUNK_HEIGHT + local_y;
+                        vox_u32 index = (depth * VOX_WORLD_HEIGHT *
+                                         VOX_WORLD_WIDTH) +
+                                        (y * VOX_WORLD_WIDTH) + x;
+                        vox_cell *cell = &world->cells[index];
+                        if ((cell->flags & (VOX_CELL_AWAKE |
+                                            VOX_CELL_MOVED)) == 0U) {
+                            continue;
+                        }
+                        vox_toggle_cell_signature(chunk, index, cell);
+                        cell->flags = (vox_u16)(cell->flags &
+                                                (vox_u16)~(VOX_CELL_AWAKE |
+                                                          VOX_CELL_MOVED));
+                        vox_toggle_cell_signature(chunk, index, cell);
+                    }
+                }
+            }
+        }
     }
     world->awake_cells = 0U;
-    for (i = 0U; i < VOX_WORLD_CHUNK_COUNT; ++i) {
-        world->chunks[i].awake_cells = 0U;
-        world->chunks[i].flags = (vox_u16)(world->chunks[i].flags &
-                                           (vox_u16)~VOX_CHUNK_ACTIVE);
+    for (chunk_y = 0U; chunk_y < VOX_WORLD_CHUNKS_Y; ++chunk_y) {
+        for (chunk_x = 0U; chunk_x < VOX_WORLD_CHUNKS_X; ++chunk_x) {
+            vox_chunk *chunk = &world->chunks[
+                chunk_y * VOX_WORLD_CHUNKS_X + chunk_x];
+            chunk->awake_cells = 0U;
+            chunk->flags = (vox_u16)(chunk->flags &
+                                     (vox_u16)~VOX_CHUNK_ACTIVE);
+        }
     }
     return VOX_OK;
 }

@@ -167,9 +167,21 @@ extern "C" {
 #endif
 
 void vox_world_init(vox_world *world);
+/* Rebuild occupied/chunk hash indexes after deterministic bulk population. */
+vox_result vox_world_rebuild(vox_world *world);
 const vox_material_properties *vox_material_get(vox_u16 material);
 vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
                          vox_u16 material, vox_i32 temperature_q16);
+/* Set one complete x/z layer, retaining a material such as bedrock. */
+vox_result vox_world_set_layer_except(vox_world *world, vox_u32 y,
+                                      vox_u16 material,
+                                      vox_i32 temperature_q16,
+                                      vox_u16 skip_material);
+/* Bulk layer fill for persistent hazards; does not wake sleeping cells. */
+vox_result vox_world_set_layer_quiet_except(vox_world *world, vox_u32 y,
+                                            vox_u16 material,
+                                            vox_i32 temperature_q16,
+                                            vox_u16 skip_material);
 /* Setting loose is idempotent; AIR may only be cleared, never made loose. */
 vox_result vox_world_set_loose(vox_world *world, vox_u32 x, vox_u32 y,
                                vox_u32 z, vox_u16 loose);

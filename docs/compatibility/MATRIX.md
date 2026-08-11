@@ -13,6 +13,19 @@ every machine released since 1990.
 | VERIFIED | Native or reproducible acceptance evidence is recorded |
 | UNSUPPORTED | Explicitly outside the current profile |
 
+## Untagged current-source evidence
+
+This is local source evidence for the untagged implementation increment, not a
+published release or a replacement for the v0.0.4 promotion/human-QA lanes below.
+
+| Surface | Exact environment | State | Evidence and boundary |
+|---|---|---|---|
+| Strict portable core and current gameplay increment | Current local checkout; strict C90 CMake build | RUNS | `ctest --test-dir build-sdl-v005 --output-on-failure` completed 31/31, including the 479-second deterministic match regression, fluid/rigid/cluster gates, wide-cascade and fixture-overflow scenarios, dropship start safety, particle overlay, and cosmetic art determinism. This is native Linux source evidence only. |
+| SDL deterministic load | Current local checkout; clean strict SDL2 builds at `-O0` and `-O2` | RUNS | Both optimisation levels reproduced the 600-tick stream including the interactive dropship start: fired 23, explosions 16, crushes 0, effects 978, awake 4616, canonical hash `c53b59d9`. No timing threshold was applied. |
+| SDL settings and menu migration | Current local SDL2 host | RUNS | Settings, input, bark, chronicle, camera, fixed-step, cap, haptic, audio-cadence, smoke, particle overlay, dropship-start, and menu self-tests pass. The menu gate now renders and hit-tests 12 screens, including both Input & Controller pages; this is not physical controller, display, or audio acceptance. |
+| Current-source test package | Explicitly allowed dirty local checkout; clean Release+NASM package build | RUNS | Package CTest completed 31/31. The temporary package produced binary and Corresponding Source archives, validated SPDX SBOMs and SHA-256 checksums, and a 560,087-byte staged payload (37.9% of the 1,474,560-byte ceiling; 914,473 bytes headroom). Its `0.0.4-feedback-test` name makes it non-release evidence, not an artifact to publish. The package was made before this evidence-row wording refresh. |
+| Current manual/release acceptance | No human or release-package evidence | PLANNED | The dam, magma, blood, cave-in, grapple, bot-tunnelling, replay, dropship, platform-performance, source-archive, SBOM, and checksum lanes still require a clean release candidate and recorded human acceptance. v0.0.4's outstanding human QA remains separate and blocking for v0.0.4 publication. |
+
 ## v0.0.4 development-candidate evidence
 
 | Surface | Exact environment | State | Evidence and boundary |
@@ -23,13 +36,13 @@ every machine released since 1990.
 | Four-miner deterministic load | Portable SDL2 non-windowed host; 600 authoritative ticks | RUNS | Working-tree verification reproduces fired 43, explosions 16, crushes 1, effects 474, awake 10754, and state hash `1acec253`. These counters differ from v0.0.3 principally because bots now breach walls; a v0.0.3 expectation applied here reads as a failure and is not one. No wall-clock assertion is applied, so this is a correctness/load result rather than a speed claim. |
 | Saved history excluded from the canonical hash | Same host; pref paths with and without an accumulated chronicle | RUNS | `--load-self-test 600` prints `1acec253` regardless of how much history the pref path holds, and `test_the_clock_stays_out_of_the_hash` fails if a wall-clock value re-enters the digest. This is the determinism boundary RFC 0003 rests on; VOX-QA-094 is its human lane. |
 | Chronicle durability | Same host | RUNS | `--chronicle-self-test` round-trips a chronicle and refuses a damaged one by checksum. Recovery from a genuinely corrupted file on disk is VOX-QA-092 and is not automated. |
-| Menu and window layout | Same host; 10 screens | RUNS | `--menu-self-test` walks every screen and fails on content drawn outside its frame. Scrollbar behaviour, wrapping and colour coding are judged by eye in VOX-QA-101 and 102. |
+| Menu and window layout | Same host; 12 screens | RUNS | `--menu-self-test` walks every screen and fails on content drawn outside its frame. Scrollbar behaviour, wrapping and colour coding are judged by eye in VOX-QA-101 and 102. |
 | Playable payload budget | Staged Release tree | RUNS | 505,735 bytes, 34.2% of the 1,474,560-byte ceiling, 968,825 bytes of headroom. The budget covers the binary plus the staged `share/` tree; documentation, licences and evidence are tester-archive material and excluded. |
 | Four-miner destruction performance | Named bench: i7-10750H in `power-saver`; GTX 1660 Ti laptop; CPU-authoritative simulation | RUNS | Clean-tree package qualification with `VOX_NAMED_BENCH_QUALIFY=1` records avg 3.074 ms, p95 5.287 ms, max 9.620 ms against the 5 / 8 / 16.67 ms gate, with canonical activity and hash `1acec253`. Five further runs on the same bench held every limit (avg 2.927-3.439, p95 4.999-6.792, max 7.518-13.171), so `max` is the variable metric and the narrowest margin. Recorded with ordinary desktop work running, which makes the result conservative rather than flattering. This is a 600-tick qualification, not the 15-minute soak. |
 | Bot memory across sessions | Same host; three separate processes over one chronicle file | RUNS | `tools/vox-session-evidence.sh` plays a match in one process, writes the chronicle, and opens a match from it in another. The carried accounts arrive intact (regard total 592, three pairs met), the second match opens at valence -136 where a first meeting opens at 0, and its state hash differs from a first meeting's -- so memory reaches the simulation rather than merely being stored. A missing or checksum-failed chronicle is refused rather than reported as a first meeting, which would pass the carry test for the wrong reason. Verified by reintroducing the defect: a build that ignores loaded memory fails exactly the two load-bearing assertions. This proves the mechanism, NOT that any of it reads as a grudge; VOX-QA-089 through 093 remain the human evidence and are still unrecorded. |
 | NVIDIA GTX 1660 Ti rendering | Same laptop | PLANNED | v0.0.4 remains a CPU renderer presented by SDL2. GPU presence is test-bench context, not evidence of graphics acceleration. |
 
-These rows describe the working tree at the time of writing. The v0.0.4
+These rows preserve the v0.0.4 development-candidate record. The v0.0.4
 release checklist, a clean package, the QA workbook, and physical
 controller/audio evidence remain authoritative promotion gates.
 

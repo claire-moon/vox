@@ -18,8 +18,8 @@ rather than quietly resolved.
 | Tests | 23, all green |
 | Payload | 514,063 B — **34.8 %** of the 1,474,560 B ceiling |
 | Headroom | **960,497 B** |
-| ABI | 10 |
-| Settings schema | 5 |
+| ABI | 11 |
+| Settings schema | 6 |
 | Chronicle format | 1 |
 | Canonical 600-tick hash | `1acec253` |
 
@@ -34,6 +34,40 @@ but both belong to v0.0.4 and should not be quietly forgotten:
    sessions) and 096–100 (conversation pacing) are release-blocking. The
    mechanism is proven by `digs_memory_across_sessions`; whether any of it
    *reads* as a grudge is unmeasured.
+
+The table above is the historical v0.0.4 baseline. The current checkout is an
+untagged implementation increment and is not a published v0.0.5 release.
+
+## Current contract and implementation status
+
+The following decisions are locked for v0.0.5:
+
+- Four total slots remain: up to two humans plus RIVET, CINDER, and FLAMEY.
+  Six relationship pairs and four persistent identities remain unchanged.
+- Settings schema is 6; chronicle format and memory version remain 1. The old
+  player-facing seed row and old rope Hold/Toggle choice are removed. Internal
+  deterministic seeds remain in rules, diagnostics, and replay metadata.
+- Grapple is always-toggle: press to cast/attach, press again to retarget,
+  jump to cancel, and arbitrary solid terrain is valid. Metal fixtures are a
+  special target class and destroyed fixtures produce non-anchor scrap.
+- The authoritative core now has bounded fixed-point fluid, oriented rigid-body,
+  structural-cluster, award, replay-selection, dash, and dropship interfaces.
+  Water, lava, and blood share the persistent fluid path; corpses and detached
+  debris share the rigid pool; and headshots, kill healing, cave-ins, grapple
+  targeting, and dropship events are hashed through the match state where
+  appropriate.
+- The current implementation increment is covered by strict C90 builds, 31
+  CTest tests including the long deterministic match gate, focused
+  fluid/rigid/cluster/gameplay tests, and SDL settings/chronicle/haptic
+  self-tests. Those are source/build gates, not a substitute for human QA.
+
+Still open before calling v0.0.5 complete: complete connected-volume
+support/load analysis beyond the bounded cascade fragments, large-world fluid
+capacity/performance qualification, and the remaining palette/animation art
+pass. An exact imported
+DOOM palette is additionally blocked until its asset provenance is approved
+under the repository policy. Payload/performance qualification after all
+changes and the manual scenarios listed below also remain required.
 
 ---
 
@@ -71,8 +105,10 @@ name. Do it first, because it is what the release is judged on.
 - **Asked for:** water that actually propagates so you can build lakes and
   rivers; lava that drips out when a magma pocket is popped; blood as a real
   simulated volume rather than a firework.
-- **Today:** liquids fall and react (water + lava → stone + steam) but do not
-  pool or flow laterally in a way that supports building a lake.
+- **Today:** the untagged core has bounded, fixed-point water/lava/blood cells
+  with deterministic downward flow, lateral equalization, pressure/head,
+  terrain-aware blocking, and water/lava reaction accounting. The dam, lake,
+  magma-spill, and blood-basin claims still need host-level manual acceptance.
 - **Done looks like:** a player can dam a channel and fill it; popping a magma
   pocket produces a running spill; blood pools and runs downhill.
 - **Watch:** this is the item most likely to break determinism or the tick
@@ -84,8 +120,9 @@ name. Do it first, because it is what the release is judged on.
 - **Asked for:** *"remove full gibbing and focus purely on actual
   dismemberment"* — every kill severs from the entry point of the attack.
   Fire melts, explosions gib; everything else dismembers.
-- **Today:** anatomy already supports severing (`SEVERED` states, per-part
-  damage, bleed and cautery). Gibbing still happens on kills it should not.
+- **Today:** anatomy supports entry-point severing, corpse assemblies, blood
+  deposits, explosive/heat damage flags, and headshot handling. Weapon-specific
+  dismemberment/gib policy still needs broader scenario coverage.
 - **Done looks like:** weapon and damage type decide the death. Scatterbrain
   usually splits into pieces and rarely full-gibs; bolt action severs cleanly.
 
@@ -93,20 +130,25 @@ name. Do it first, because it is what the release is judged on.
 
 - **Asked for:** Havok-like ragdolls, People Playground physics, Soldier of
   Fortune visceral detail, Halo 2/3 corpse physics. Actual guts and bones.
-- **Today:** bodies are axis-aligned fixed-point capsule proxies. No angular
-  dynamics, no joints.
+- **Today:** the untagged core has fixed-point oriented rectangular rigid bodies,
+  bounded anatomy joints, stable contacts, fluid drag/buoyancy sampling, and
+  deterministic sleep/recycling. It remains a bounded solver rather than a
+  general convex rigid-body engine.
 - **Done looks like:** severed parts and corpses tumble with momentum inherited
   from the killing blow, so two deaths from the same weapon look different.
 - **Watch:** this is the largest engineering item in the release and the one
   most likely to blow both the size and the tick budget. Angular rigid bodies
-  with joints, integer-only and deterministic, is a research task. **Consider
-  scoping to jointed particle chains rather than a general rigid-body solver.**
+  with joints, integer-only and deterministic, is a research task. The locked
+  contract requires bounded angular rigid segments; a particle-chain
+  substitution is not an acceptable scope reduction.
 
 ### A4. Headshots
 
 - **Asked for:** any tool including the steam hook can land one; treated like
   a DOUBLE KILL / TRIPLE KILL with an on-screen `HEADSHOT!`; the goriest kill.
-- **Today:** anatomy has a head region; no headshot rule and no popup.
+- **Today:** headshots are a fatal authoritative damage class with a distinct
+  hashed event, award stimulus, and replay-selection weight. Host popup/audio
+  acceptance remains separate.
 
 ### A5. Weapon feedback pass
 
@@ -135,8 +177,12 @@ explosion with smoke wisps and a light flash on the shooter.
   in, or kill by blowing a chunk out of a ceiling. Voxel *groups* carry their
   own state so clusters behave as clusters. Craters should pool debris rather
   than leaving Worms-style circles.
-- **Today:** bounded gravity pass on unsupported cells; cave-ins happen but
-  craters still read as circles.
+- **Today:** blasts invalidate a hashed, match-owned chunk support/load frontier,
+  extract bounded six-neighbour clusters, emit cave-in awards/events, and hand
+  detached material to rigid debris. Detached bodies settle up to sixteen loose
+  cells of their recorded material and hash any explicit remainder. A
+  cross-chunk regression proves a wide roof proceeds as multiple fragments;
+  whole-world extraction and large-cascade presentation remain open.
 
 ---
 
@@ -148,14 +194,16 @@ explosion with smoke wisps and a light flash on the shooter.
   players feel good at it; pulls the miner in for escapes and flings; can grab
   landscape (not just grid) at the cost of the hook burrowing; puff of smoke
   from launcher and landscape; impales miners to surfaces.
-- **Today:** three-state rope (idle/casting/attached), Hold and Toggle modes,
-  hook strike sets an unshielded enemy to exactly 1 HP.
+- **Today:** the rope is always-toggle (cast, press again to retarget, jump to
+  cancel), auto-aims arbitrary terrain or metal fixtures, and remains attached
+  while other actions run. Host audio/camera feedback remains acceptance work.
 
 ### B2. Forward dash
 
 - **Asked for:** works in mid-air and on the ground, grants temporary i-frames
   so attacks can be dodged and saves made. Available to NPCs too.
-- **Today:** does not exist.
+- **Today:** players and bots share a forward fixed-point dash with cooldown and
+  a bounded invulnerability window.
 
 ### B3. Kill heals
 
@@ -179,6 +227,12 @@ explosion with smoke wisps and a light flash on the shooter.
   rendered from the same seed with fog to separate them; real-time raymarched
   clouds; no sun but a small white moon on the top layer; a puppet-theatre feel
   where the world unfurls behind the action.
+- **Today:** the SDL2 port has a restrained air-only fog bias and a
+  seed-derived white moon. The prior parallax silhouettes and per-cell cloud
+  dither are deliberately deferred: at the target resolution they competed
+  with terrain and made the new physical debris read as visual noise. This is
+  a compatible fallback, not a claim that the requested full raymarched
+  skybox is complete.
 
 ### C3. Lighting and global illumination
 
@@ -191,16 +245,30 @@ explosion with smoke wisps and a light flash on the shooter.
 - **Asked for:** gentle pull-out when moving or throwing; pull-in for close
   weapons; shift opposite to a charging shot then slingshot toward it on
   release; slow zoom out on death; gentle sway when moving.
+- **Today:** the existing player camera has movement lead, fitting, death hold,
+  shake, and event trauma. Results replay now holds each captured frame for a
+  bounded slow-motion cadence and frames the ledger's killer/victim exchange
+  with headshot and multi-kill close-in treatment. More weapon-specific camera
+  choreography remains presentation work.
 
 ### C5. QWOP-style skeletal animation
 
 - **Asked for:** walk cycles, jump, steampack, pain and firing states. Not more
   fidelity — more fluidity, *"like N++ or super meat boy"*.
+- **Today:** the renderer derives compact walk, jump, steam, pain, and fire
+  poses from authoritative body/input state without adding animation state to
+  the match. Live rigid bodies also render as compact, capped corpse, debris,
+  and scrap marks rather than broad terrain-coloured bars. A fuller skeletal
+  system remains optional
+  presentation work.
 
 ### C6. Voxel weapon models
 
 - **Asked for:** low-poly voxel models the miners visibly carry and aim, so
   muzzle flashes fire out of something.
+- **Today:** the SDL2 port overlays a bounded voxel tool silhouette from the
+  selected weapon and authoritative aim. It is deliberately render-only; more
+  distinct per-tool forms remain presentation work.
 
 ---
 
@@ -218,6 +286,19 @@ A self-contained feature, and the most novel thing in the release.
   be swung out of the match to wait out the rising lava.
 - **Note:** this reuses the v0.0.4 bark and voice systems rather than adding a
   parallel one. The pilot is a fourth voice, not a fourth miner.
+- **Today:** the authoritative route, launch, collision, grapple, extraction,
+  and alarm states are implemented. SDL2 begins an interactive match by staging
+  miners on the authoritative hull before tick zero; Fire releases a miner and
+  the far route endpoint auto-releases any holdouts. It draws a render-only
+  voxel hull with directional exhaust below the HUD-safe top edge. A deck
+  launch ejects below the hull before the next collision check; the core and
+  host regressions both step through that formerly lethal post-Fire tick,
+  while an intentionally intersecting launched miner is still splattered. Its
+  default core state is departed until the host calls `vox_digs_dropship_begin`,
+  so ground-based deterministic tools do not acquire an invisible ship. Its
+  deep announcer says `FIRE TO
+  LAUNCH!`, and the lava alarm delivers `PILOT: LAVA RISING. EXTRACT NOW!`
+  through the same bark/audio path. Physical acceptance remains open.
 
 ---
 
@@ -234,9 +315,11 @@ sub-task**, not a finished thing inherited from v0.0.4.
   error in its pathfinding."* Three archetypes standing for typical player
   behaviours — one strategic and burrowing, one aggressive with the heaviest
   tools, and a third to identify.
-- **Today:** RIVET / CINDER / FLAMEY exist with five traits each and breach
-  walls. The behavioural range is narrower than the personality system can
-  express.
+- **Today:** RIVET / CINDER / FLAMEY submit the same movement, tool, and fire
+  actions as players. Their explicit tunnel states cover planning, excavation,
+  ambush, escape, trap, collapse risk, drowning, extraction, and recovery;
+  focused scenarios distinguish RIVET's route planning, CINDER's direct breach,
+  and FLAMEY's ambush/trap choice.
 
 ### E2. Death sounds and voice definition
 
@@ -246,13 +329,13 @@ sub-task**, not a finished thing inherited from v0.0.4.
   character. Distinct pitch, tenor and speed per bot.
 - **Today:** voice pitch/tone/speed already exist and are customisable.
 
-### E3. Fourth bot
+### E3. Fixed roster and authored player voice
 
-- **Asked for:** one more bot in single player, so four-player battles do not
-  need a second human.
-- **Watch:** this touches `VOX_DIGS_MAX_PAIRS` (currently 6 for four slots).
-  Five slots means ten pairs. Check the ABI and the memory format before
-  starting — it is a schema change, not a constant bump.
+The v0.0.5 contract retains four total slots: up to two humans plus RIVET,
+CINDER, and FLAMEY. There is no fourth bot, fifth slot, or ten-pair
+relationship expansion. The six pair records and four persistent identities
+remain compatible with chronicle format 1. Player expression comes from an
+implemented authored contextual bark corpus, not a selectable persona system.
 
 ### E4. Awards, medals, and the replay
 
@@ -312,24 +395,23 @@ Reasoning:
 
 ---
 
-## Open questions for the lead
+## Resolved release decisions
 
-Worth settling before the work starts, because each changes scope materially:
+The locked v0.0.5 contract resolves the scope questions that were present in
+the earlier exploratory roadmap:
 
-1. **Ragdolls (A3) are a research-scale item under ISO C, integer-only,
-   deterministic, and inside a 1.44 MB budget.** Is a jointed particle-chain
-   approximation acceptable, or is full angular rigid-body parity the bar?
-2. **A fourth bot (E3) is a memory-format change**, not a constant. Is it worth
-   breaking chronicle format 1 and asking existing players to start over, or
-   should it wait for a release that already breaks the format?
-3. **Does the relationship still have no UI?** v0.0.4 deliberately shipped with
+1. **Ragdolls use full bounded angular rigid segments.** A particle-chain
+   approximation is not an acceptable substitute.
+2. **The fixed four-slot roster is part of the compatibility contract.** New
+   gameplay must not expand the relationship matrix or chronicle identity
+   count.
+3. **Relationships still have no direct UI.** v0.0.4 deliberately shipped with
    none. If it reads as invisible in play, the nameplate tint is the cheapest
    remedy and should be reconsidered before anything more elaborate. The human
    QA checkpoints are what answer this.
-4. **Which third archetype?** E1 asks for three archetypes standing for typical
-   player behaviours and names two (strategic/burrowing, aggressive/heavy).
-   The third is unspecified.
-5. **The 1.44 MB ceiling against this feature list.** 960 KB of headroom for
+4. **The third archetype is FLAMEY:** short trap tunnels, ambush routes,
+   smoke/fire setups, and opportunistic escapes.
+5. **The 1.44 MB ceiling remains decisive.** 960 KB of headroom for
    fluids, ragdolls, skeletal animation, a raymarched sky and voxel weapon
    models is tight. If it comes to a choice, which features are the release and
    which are negotiable?

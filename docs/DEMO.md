@@ -17,11 +17,45 @@ ten weapons instead of eleven, and a claim that the bots were "target-selection
 demonstrators, not navigation" agents, which stopped being true when they
 learned to cut their way out of terrain.
 
+The checkout still identifies itself as v0.0.4 and has not been tagged or
+published as v0.0.5. It also contains an untagged v0.0.5 physics/gameplay
+increment. The status below separates those verified source changes from the
+human release work and presentation features that remain open.
+
+## Untagged v0.0.5 increment
+
+The strict-C90 build now includes bounded, integer-authoritative pools for
+persistent water/lava/blood volumes, oriented rigid bodies and joints, corpse
+assemblies, blast debris, structural cluster extraction, always-toggle grapple
+targeting, forward dash and invulnerability, headshots, kill healing, awards,
+the moving dropship, and a render-only best-kill replay ledger. Fluid flow uses
+gravity-increasing y coordinates and exact 3-D terrain blocking; fixture blasts
+emit metal scrap, and submerged miners receive hashed drowning damage. The new
+headless gates cover conservation, deterministic body order, cluster debris,
+fixture and drowning events, dropship route transitions, and replay selection.
+The current 600-tick SDL load gate begins the interactive dropship sequence and
+records fired 23, explosions 16, crushes 0, effects 978, awake 4616, and
+canonical hash `c53b59d9`; the same result was
+recaptured in strict `-O0` and `-O2` builds.
+
+This is engineering evidence, not a v0.0.5 release claim. The current source
+now carries wide unsupported roofs through bounded support-frontier fragments
+and settles compact debris back as loose material with explicit accounting for
+the bounded remainder. It still needs a whole-world support/load model beyond
+those bounded fragments, large-world fluid-capacity qualification, and manual
+acceptance of the fluid, cave-in,
+grapple, bot, replay, and dropship scenarios. The SDL2 port now has a
+restrained air-only fog/moon pass, paced replay framing, compact live
+rigid-body marks, and simple miner motion poses. The noisier parallax and
+cloud treatment is deliberately deferred until it can preserve the material
+read of the v0.0.4 renderer; it still does not ship the exact imported DOOM
+palette or a full skeletal-animation system.
+
 ## The title screen
 
 | Row | What it opens |
 |---|---|
-| **BEGIN** | Match setup: bot count, map, visible 32-bit seed, arsenal, time limit |
+| **BEGIN** | Match setup: bot count, map, arsenal, and game customization |
 | **INBOX (N)** | Messages the miners left you between sessions. `(N)` is the unread count |
 | **LOG** | Everything anyone has said, oldest first, across every session |
 | **PRACTICE** | A no-bot sandbox with the same authoritative material and weapon rules |
@@ -40,7 +74,7 @@ platform adapters.
 
 Every screen draws through one window widget with a title, a scrolling content
 region, a scrollbar when the content is taller than the region, and a footer.
-`digs_demo --menu-self-test` walks all ten screens and fails if anything draws
+`digs_demo --menu-self-test` walks all twelve screens and fails if anything draws
 outside its frame.
 
 ## Controls
@@ -53,7 +87,7 @@ are the defaults; the screen is authoritative if they ever disagree.
 | Move left / right | `A` / `D` | left / right | stick or dpad |
 | Jump | `Space` | up | A |
 | Steam | `Left Shift` | `Right Shift` | X |
-| Rope | right mouse | `/` | LB |
+| Rope | middle mouse, always-toggle | `/` | LB |
 | Fire | `E` or left mouse | `Right Ctrl` | RB |
 | Previous / next weapon | `Z` / `X` | `,` / `.` | Y / B |
 | Bark | `C` | `M` | right stick click |
@@ -114,7 +148,7 @@ a walled-in bot digs its way out.
 **Relationships are pairwise and deliberately have no UI.** There is no
 nameplate tint and no standings screen. What a miner thinks of you is carried
 entirely by what it says. Six pairs across four slots each hold a valence and
-one of eight tones from FEUD to BONDED, moved by twenty-seven distinct
+one of eight tones from FEUD to BONDED, moved by thirty-seven distinct
 stimuli. Tone changes are hysteretic so a pair sitting on a threshold does not
 flicker, and valence decays toward zero, so a grudge fades if you stop feeding
 it.
@@ -146,7 +180,9 @@ instead. It exists at the project lead's explicit request.
 The demo uses fourteen stable material IDs: air, bedrock, stone, soil, coal,
 biomass, sand, water, lava, metal, flesh, blood, smoke, and firedamp.
 
-- Sand, water, lava, and blood fall; smoke, firedamp, and gaseous water rise.
+- Sand, water, lava, and blood fall; the untagged v0.0.5 core also keeps bounded
+  fixed-point fluid volumes that pool and equalize laterally; smoke, firedamp,
+  and gaseous water rise.
 - Water touching lava converts the lava contact to stone and emits hot smoke
   as the demo's steam representation.
 - Lava or sufficiently hot neighbors ignite flammable biomass, coal, and
@@ -176,10 +212,41 @@ The option changes propagation work, not simulation:
 | Balanced | 3 | Default desktop setting |
 | Showcase | 5 | Wider glow where CPU headroom permits |
 
-The host builds a render-only snapshot for miners, projectiles, and effects so
-they receive the same Lightfield treatment without mutating authoritative
-terrain or replay hashes. SDL2 uploads the completed RGB texture and scales it
-to the window with letterboxing.
+The host builds a render-only snapshot for miners and projectiles so they
+receive the same Lightfield treatment without mutating authoritative terrain or
+replay hashes. Transient gore, smoke, sparks, and dust are then blended as
+compact screen-space marks, so they cannot overwrite terrain as opaque blocks.
+SDL2 uploads the completed RGB texture and scales it to the window with
+letterboxing.
+
+`MY MINER` also exposes outfit and helmet colours for each local human slot.
+They are presentation-only schema-6 preferences: bots retain their authored
+looks, and changing either colour never reaches the match hash or chronicle
+format.
+
+The SDL2 port also overlays a compact voxel dropship hull and each miner's held
+tool silhouette from existing authoritative position, velocity, selected-tool,
+and aim state. These overlays are rebuilt every frame and never become terrain,
+physics, or replay-hash state.
+
+When BEGIN starts an interactive match, the SDL2 host stages the miners on that
+authoritative hull before tick zero. FIRE launches them; bots use their normal
+input stream; and the route releases any holdouts at its far in-world endpoint.
+The ground spawn chosen during initialization remains the deterministic respawn
+target rather than a hidden second vehicle simulation. The deck begins below
+the HUD-safe top edge, and FIRE ejects a deck rider through the lower hold with
+a full authoritative cell of clearance before gravity takes over; a real
+post-launch collision is still lethal. The opening announcer says
+`FIRE TO LAUNCH!`; lava start uses the same deep speech path for the pilot
+line `PILOT: LAVA RISING. EXTRACT NOW!` before its alarm.
+`vox_digs_match_init` itself leaves the hull departed: core scenarios that do
+not explicitly begin the launch sequence have no virtual ship movement or
+collision surface.
+
+The renderer currently uses repository-owned palette data. An exact imported
+DOOM palette is not shipped because the repository's asset-provenance policy
+does not permit copying commercial game assets without an approved source and
+license decision.
 
 The selectable `15 LOW`, `30`, `60`, `90`, `120`, `144`, and `UNLIMITED` caps
 govern presentation only. A fixed-step accumulator advances the game in exact
@@ -257,19 +324,25 @@ credentials or private machine information before sharing. The chronicle
 records what you and the miners said to each other; treat it as you would any
 other personal file. The cockpit is local-only and performs no upload.
 
-## Deliberate v0.0.4 limits
+## Deliberate limits and open v0.0.5 work
 
 - The world is a bounded slab, not the planned large or streamed profile.
-- Physics provides terrain-colliding fixed-point body proxies and projectile
-  impacts, not angular rigid bodies, joints, stacking, or ragdolls. Ragdolls,
-  guts, bones and skeletal animation are v0.0.5 work.
-- Liquids fall and react but do not yet pool into lakes or rivers; the liquid
-  overhaul is v0.0.5.
-- Anatomy supports severing, but there is no headshot rule, no forward dash,
-  no dropship, no parallax skybox, and no post-game awards yet.
+- The v0.0.5 rigid pool is bounded and deterministic; it is not a general
+  convex-body engine. The match-owned support scheduler carries wide roofs
+  through bounded fragments, and sleeping debris reintroduces up to sixteen
+  loose cells in stable order while hashing every explicit remainder. The SDL2
+  port draws compact, capped live rigid marks and renderer-only miner motion;
+  whole-world support/load analysis and a full skeletal-animation system remain
+  open.
+- Persistent fluid state is implemented and tested, but dam/lake, magma-spill,
+  and blood-basin behavior still require manual QA in the host.
+- Headshots, forward dash, awards, dropship state, and replay selection are in
+  the untagged core. The SDL2 host paces the bounded best-kill ledger and
+  frames its killer/victim exchange, while the full interactive dropship and
+  replay experience remains acceptance-gated.
 - The SDL2 host is a Linux-first acceptance path. The only NASM code is an
   optional Linux x86-64 FNV-1a contract probe; it does not accelerate gameplay
   or rendering. Windows, macOS, historical APIs, production SIMD/assembly, and
   GPU renderers remain evidence-gated work.
-- There is no network multiplayer, replay file format, asset pack, mod loader,
-  or editor, and no compatibility promise across ABI changes.
+- There is no network multiplayer, replay save-file format, asset pack, mod
+  loader, or editor, and no compatibility promise across ABI changes.

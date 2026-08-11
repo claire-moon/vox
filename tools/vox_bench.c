@@ -237,6 +237,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "vox_bench: match init failed\n");
         return 3;
     }
+    if (vox_digs_dropship_begin(&match) != VOX_OK) {
+        fprintf(stderr, "vox_bench: dropship begin failed\n");
+        return 3;
+    }
 
     memset(&counters, 0, sizeof(counters));
     memset(&input, 0, sizeof(input));
