@@ -67,7 +67,7 @@ public final class DigsActivity extends SDLActivity {
             super.onBackPressed();
             return;
         }
-        DigsControlOverlay.tap(DigsControlOverlay.PAUSE);
+        DigsControlOverlay.back();
     }
 
     @Override

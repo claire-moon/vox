@@ -27,16 +27,23 @@ acceptance are intentionally outside this experimental target.
 
 All controls are at least 48 dp where a button is used, retain a high-contrast
 label, and expose a content description to Android accessibility services.
+The overlay changes its visible controls when a match begins, so the player
+never needs to use a gameplay-labelled button to navigate a menu.
 
-| On-screen control | During a match | In menus |
+| Screen | On-screen control | Action |
 |---|---|---|
-| LEFT / RIGHT | Run | Move left / right |
-| JUMP / STEAM | Jump / use steampack | Move up / down |
-| AIM | Drag to aim | — |
-| FIRE | Fire, charge, or respawn | Select |
-| ROPE | Hold or toggle rope, following DIGS input settings | — |
-| TOOL | Tap: next weapon; hold: previous weapon | — |
-| PAUSE or Android Back | Pause | Go back |
+| Menu, setup, pause, results | UP / DOWN | Move the selected item |
+| Menu, setup, pause, results | LEFT / RIGHT | Change the selected value |
+| Menu, setup, pause, results | SELECT | Activate the selected item |
+| Menu, setup, pause, results | BACK or Android Back | Go back |
+| Match | LEFT / RIGHT | Run |
+| Match | JUMP / STEAM | Jump / use steampack |
+| Match | AIM | Drag for gamepad-style directional aim |
+| Match | Blank screen space | Hold and drag for mouse-style direct cursor aim |
+| Match | FIRE | Fire, charge, or respawn |
+| Match | ROPE | Hold or toggle rope, following DIGS input settings |
+| Match | TOOL | Tap: next weapon; hold: previous weapon |
+| Match | PAUSE or Android Back | Pause |
 
 Bluetooth and USB controllers remain available through the same SDL2 controller
 path as desktop. The mobile overlay activates the existing keyboard-style

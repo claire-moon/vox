@@ -27,6 +27,7 @@
 #define DEMO_CAMERA_ZOOM_MIN 1
 #define DEMO_CAMERA_ZOOM_MAX 4
 #define DEMO_CAMERA_ZOOM_DEFAULT 2
+#define DEMO_ANDROID_RGBA_BYTES 4U
 #define DEMO_CAMERA_MIN_SCALE 1.0
 #define DEMO_CAMERA_SAFE_TOP_PIXELS 36.0
 #define DEMO_CAMERA_SAFE_BOTTOM_PIXELS 18.0
@@ -352,6 +353,8 @@ typedef struct demo_app {
     vox_u32 android_navigation_repeat[DIGS_ANDROID_CONTROL_COUNT];
     int android_taps[DIGS_ANDROID_CONTROL_COUNT];
     int android_aim_pending;
+    int android_pointer_pending;
+    int android_renderer_recovery_attempted;
 #endif
     demo_damage_popup damage_popups[DEMO_DAMAGE_POPUP_MAX];
     demo_hit_marker hit_markers[DEMO_LOCAL_MAX];
@@ -390,6 +393,10 @@ typedef struct demo_app {
 } demo_app;
 
 static vox_u8 demo_pixels[DEMO_WIDTH * DEMO_HEIGHT * VOX_SOFTWARE_RGB_BYTES];
+#if defined(VOX_ANDROID_PORT)
+static vox_u8 demo_android_present_pixels[DEMO_WIDTH * DEMO_HEIGHT *
+                                          DEMO_ANDROID_RGBA_BYTES];
+#endif
 static vox_u8 demo_camera_pixels[DEMO_WIDTH * DEMO_HEIGHT *
                                  VOX_SOFTWARE_RGB_BYTES];
 static vox_u8 demo_scene_pixels[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT *
@@ -4515,6 +4522,8 @@ static void demo_draw_world_feedback(demo_app *app)
             app->player_input[0].active_source == DEMO_SOURCE_KEYBOARD
 #if defined(VOX_ANDROID_PORT)
             && !app->android_controls.aim_active
+            && !app->android_controls.pointer_active
+            && !app->android_pointer_pending
 #endif
             ) {
             continue;
@@ -4623,6 +4632,8 @@ static void demo_draw_play(demo_app *app)
         app->player_input[0].active_source == DEMO_SOURCE_KEYBOARD
 #if defined(VOX_ANDROID_PORT)
         && !app->android_controls.aim_active
+        && !app->android_controls.pointer_active
+        && !app->android_pointer_pending
 #endif
         ) {
         demo_mouse_world(app, &app->aim_world_x[0], &app->aim_world_y[0]);
@@ -4631,6 +4642,8 @@ static void demo_draw_play(demo_app *app)
         app->player_input[0].active_source == DEMO_SOURCE_KEYBOARD
 #if defined(VOX_ANDROID_PORT)
         && !app->android_controls.aim_active
+        && !app->android_controls.pointer_active
+        && !app->android_pointer_pending
 #endif
         ) {
         demo_draw_crosshair(app, 0, app->mouse_x, app->mouse_y);
@@ -5071,6 +5084,23 @@ static void demo_update_controller_aim(demo_app *app, int player,
 }
 
 #if defined(VOX_ANDROID_PORT)
+static void demo_update_android_pointer_aim(demo_app *app, int player,
+                                            int raw_x, int raw_y)
+{
+    int logical_x;
+    int logical_y;
+    if (raw_x < 0) raw_x = 0;
+    if (raw_x > 32767) raw_x = 32767;
+    if (raw_y < 0) raw_y = 0;
+    if (raw_y > 32767) raw_y = 32767;
+    logical_x = raw_x * ((int)DEMO_WIDTH - 1) / 32767;
+    logical_y = raw_y * ((int)DEMO_HEIGHT - 1) / 32767;
+    app->mouse_x = logical_x;
+    app->mouse_y = logical_y;
+    demo_mouse_world(app, &app->aim_world_x[player],
+                     &app->aim_world_y[player]);
+}
+
 static void demo_update_android_aim(demo_app *app, int player,
                                     int raw_x, int raw_y, int rope_held)
 {
@@ -5208,7 +5238,12 @@ static void demo_submit_human_input(demo_app *app)
                 }
             }
 #endif
-            if (player == 0 && app->mouse_inside) {
+            if (player == 0 && app->mouse_inside
+#if defined(VOX_ANDROID_PORT)
+                && !app->android_controls.pointer_active
+                && !app->android_pointer_pending
+#endif
+                ) {
                 demo_mouse_world(app, &app->aim_world_x[0],
                                  &app->aim_world_y[0]);
             }
@@ -5255,7 +5290,12 @@ static void demo_submit_human_input(demo_app *app)
                 fire = 1;
             }
 #endif
-            if (player == 0 && app->mouse_inside) {
+            if (player == 0 && app->mouse_inside
+#if defined(VOX_ANDROID_PORT)
+                && !app->android_controls.pointer_active
+                && !app->android_pointer_pending
+#endif
+                ) {
                 if ((mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0U) {
                     fire = 1;
                 }
@@ -5265,8 +5305,14 @@ static void demo_submit_human_input(demo_app *app)
             }
 #if defined(VOX_ANDROID_PORT)
             if (player == 0 &&
-                (app->android_controls.aim_active ||
-                 app->android_aim_pending)) {
+                (app->android_controls.pointer_active ||
+                 app->android_pointer_pending)) {
+                demo_update_android_pointer_aim(
+                    app, player, app->android_controls.pointer_x_q15,
+                    app->android_controls.pointer_y_q15);
+            } else if (player == 0 &&
+                       (app->android_controls.aim_active ||
+                        app->android_aim_pending)) {
                 demo_update_android_aim(
                     app, player, app->android_controls.aim_x_q15,
                     app->android_controls.aim_y_q15, physical_rope);
@@ -5435,6 +5481,7 @@ static void demo_submit_human_input(demo_app *app)
                 app->android_taps[control] = 0;
             }
             app->android_aim_pending = 0;
+            app->android_pointer_pending = 0;
         }
 #endif
     }
@@ -6017,8 +6064,129 @@ static void demo_tick(demo_app *app)
 
 static void demo_apply_fullscreen(demo_app *app)
 {
+#if defined(VOX_ANDROID_PORT)
+    /* SDLActivity owns the Android window and has already made it immersive.
+     * Toggling SDL desktop-fullscreen here can briefly tear down its surface. */
+    (void)app;
+#else
     Uint32 flags = app->options.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0U;
     (void)SDL_SetWindowFullscreen(app->window, flags);
+#endif
+}
+
+static void demo_destroy_presentation(demo_app *app)
+{
+    if (app == 0) return;
+    if (app->texture != 0) {
+        SDL_DestroyTexture(app->texture);
+        app->texture = 0;
+    }
+    if (app->renderer != 0) {
+        SDL_DestroyRenderer(app->renderer);
+        app->renderer = 0;
+    }
+}
+
+static int demo_create_presentation(demo_app *app)
+{
+    Uint32 renderer_flags;
+    Uint32 texture_format;
+    int logical_size_status;
+    if (app == 0 || app->window == 0) return 0;
+#if defined(VOX_ANDROID_PORT)
+    renderer_flags = SDL_RENDERER_ACCELERATED;
+    texture_format = SDL_PIXELFORMAT_RGBA32;
+#else
+    renderer_flags = SDL_RENDERER_ACCELERATED;
+    texture_format = SDL_PIXELFORMAT_RGB24;
+#endif
+    app->renderer = SDL_CreateRenderer(app->window, -1, renderer_flags);
+#if defined(VOX_ANDROID_PORT)
+    if (app->renderer == 0) {
+        app->renderer = SDL_CreateRenderer(app->window, -1,
+                                           SDL_RENDERER_SOFTWARE);
+    }
+#else
+    if (app->renderer == 0) {
+        app->renderer = SDL_CreateRenderer(app->window, -1, 0U);
+    }
+#endif
+    if (app->renderer == 0) return 0;
+    logical_size_status = SDL_RenderSetLogicalSize(app->renderer,
+                                                   (int)DEMO_WIDTH,
+                                                   (int)DEMO_HEIGHT);
+#if defined(VOX_ANDROID_PORT)
+    /* A few GLES drivers expose a renderer before the first stable surface
+     * size. Rendering can still proceed safely without SDL logical scaling,
+     * so do not turn that transient setup failure into an app exit. */
+    if (logical_size_status != 0) SDL_ClearError();
+#else
+    if (logical_size_status != 0 ||
+        SDL_RenderSetIntegerScale(app->renderer, SDL_TRUE) != 0) {
+        demo_destroy_presentation(app);
+        return 0;
+    }
+#endif
+    app->texture = SDL_CreateTexture(app->renderer, texture_format,
+                                     SDL_TEXTUREACCESS_STREAMING,
+                                     (int)DEMO_WIDTH, (int)DEMO_HEIGHT);
+    if (app->texture == 0) {
+        demo_destroy_presentation(app);
+        return 0;
+    }
+    return 1;
+}
+
+#if defined(VOX_ANDROID_PORT)
+static void demo_prepare_android_present_pixels(void)
+{
+    vox_u32 pixel;
+    for (pixel = 0U; pixel < DEMO_WIDTH * DEMO_HEIGHT; ++pixel) {
+        const vox_u8 *source = &demo_pixels[pixel *
+                                             VOX_SOFTWARE_RGB_BYTES];
+        vox_u8 *destination = &demo_android_present_pixels[pixel *
+                                            DEMO_ANDROID_RGBA_BYTES];
+        destination[0] = source[0];
+        destination[1] = source[1];
+        destination[2] = source[2];
+        destination[3] = 255U;
+    }
+}
+#endif
+
+/* Return one for a presented frame, zero after a successful Android renderer
+ * recovery, and negative one when there is no recoverable presentation path. */
+static int demo_present_frame(demo_app *app)
+{
+    const void *pixels;
+    int pitch;
+    if (app == 0 || app->renderer == 0 || app->texture == 0) return -1;
+    pixels = demo_pixels;
+    pitch = (int)demo_ui.stride;
+#if defined(VOX_ANDROID_PORT)
+    demo_prepare_android_present_pixels();
+    pixels = demo_android_present_pixels;
+    pitch = (int)(DEMO_WIDTH * DEMO_ANDROID_RGBA_BYTES);
+#endif
+    if (SDL_UpdateTexture(app->texture, 0, pixels, pitch) != 0 ||
+        SDL_RenderClear(app->renderer) != 0 ||
+        SDL_RenderCopy(app->renderer, app->texture, 0, 0) != 0) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "DIGS frame presentation failed: %s", SDL_GetError());
+#if defined(VOX_ANDROID_PORT)
+        if (!app->android_renderer_recovery_attempted) {
+            app->android_renderer_recovery_attempted = 1;
+            demo_destroy_presentation(app);
+            if (demo_create_presentation(app)) return 0;
+        }
+#endif
+        return -1;
+    }
+    SDL_RenderPresent(app->renderer);
+#if defined(VOX_ANDROID_PORT)
+    app->android_renderer_recovery_attempted = 0;
+#endif
+    return 1;
 }
 
 static void demo_set_mouse_logical(demo_app *app, int logical_x,
@@ -6652,7 +6820,7 @@ static int demo_android_controls_active(const digs_android_control_state *state,
 {
     int control;
     if (state == 0 || taps == 0) return 0;
-    if (state->aim_active) return 1;
+    if (state->aim_active || state->pointer_active) return 1;
     for (control = 0; control < DIGS_ANDROID_CONTROL_COUNT; ++control) {
         if (state->buttons[control] || taps[control] != 0) return 1;
     }
@@ -6683,6 +6851,10 @@ static void demo_android_update_controls(demo_app *app)
         app->android_previous_controls.aim_revision) {
         app->android_aim_pending = 1;
     }
+    if (app->android_controls.pointer_revision !=
+        app->android_previous_controls.pointer_revision) {
+        app->android_pointer_pending = 1;
+    }
     for (control = 0; control < DIGS_ANDROID_CONTROL_COUNT; ++control) {
         int taps = digs_android_controls_take_tap(control);
         if (taps > 0 && app->android_taps[control] < 16) {
@@ -6697,7 +6869,7 @@ static void demo_android_update_controls(demo_app *app)
             DIGS_ANDROID_CONTROL_PAUSE];
         if (demo_android_controls_active(&app->android_controls,
                                          app->android_taps) ||
-            app->android_aim_pending) {
+            app->android_aim_pending || app->android_pointer_pending) {
             (void)demo_activate_source(app, 0, DEMO_SOURCE_KEYBOARD, 0);
         }
         if (app->android_taps[DIGS_ANDROID_CONTROL_PAUSE] != 0 ||
@@ -6707,30 +6879,35 @@ static void demo_android_update_controls(demo_app *app)
             app->android_taps[DIGS_ANDROID_CONTROL_PAUSE] = 0;
         }
     } else {
-        int fire_pressed = !app->android_previous_controls.buttons[
-            DIGS_ANDROID_CONTROL_FIRE];
-        int pause_pressed = !app->android_previous_controls.buttons[
-            DIGS_ANDROID_CONTROL_PAUSE];
-        demo_android_navigate(app, DIGS_ANDROID_CONTROL_JUMP, SDLK_UP);
-        demo_android_navigate(app, DIGS_ANDROID_CONTROL_STEAM, SDLK_DOWN);
+        int select_pressed = !app->android_previous_controls.buttons[
+            DIGS_ANDROID_CONTROL_MENU_SELECT];
+        int back_pressed = !app->android_previous_controls.buttons[
+            DIGS_ANDROID_CONTROL_MENU_BACK];
+        demo_android_navigate(app, DIGS_ANDROID_CONTROL_MENU_UP, SDLK_UP);
+        demo_android_navigate(app, DIGS_ANDROID_CONTROL_MENU_DOWN,
+                              SDLK_DOWN);
         demo_android_navigate(app, DIGS_ANDROID_CONTROL_LEFT, SDLK_LEFT);
         demo_android_navigate(app, DIGS_ANDROID_CONTROL_RIGHT, SDLK_RIGHT);
-        if (app->android_taps[DIGS_ANDROID_CONTROL_FIRE] != 0 ||
-            (app->android_controls.buttons[DIGS_ANDROID_CONTROL_FIRE] &&
-             fire_pressed)) {
+        if (app->android_taps[DIGS_ANDROID_CONTROL_MENU_SELECT] != 0 ||
+            (app->android_controls.buttons[
+                 DIGS_ANDROID_CONTROL_MENU_SELECT] && select_pressed)) {
             demo_handle_key(app, SDLK_RETURN, SDL_SCANCODE_UNKNOWN);
         }
-        if (app->android_taps[DIGS_ANDROID_CONTROL_PAUSE] != 0 ||
-            (app->android_controls.buttons[DIGS_ANDROID_CONTROL_PAUSE] &&
-             pause_pressed)) {
+        if (app->android_taps[DIGS_ANDROID_CONTROL_MENU_BACK] != 0 ||
+            (app->android_controls.buttons[DIGS_ANDROID_CONTROL_MENU_BACK] &&
+             back_pressed)) {
             demo_handle_key(app, SDLK_ESCAPE, SDL_SCANCODE_UNKNOWN);
         }
         for (control = 0; control < DIGS_ANDROID_CONTROL_COUNT; ++control) {
             app->android_taps[control] = 0;
         }
+        app->android_aim_pending = 0;
+        app->android_pointer_pending = 0;
     }
     memcpy(&app->android_previous_controls, &app->android_controls,
            sizeof(app->android_previous_controls));
+    digs_android_controls_set_mode(app->screen == DEMO_PLAY ?
+        DIGS_ANDROID_CONTROL_MODE_GAMEPLAY : DIGS_ANDROID_CONTROL_MODE_MENU);
 }
 #endif
 
@@ -8552,46 +8729,31 @@ int main(int argc, char **argv)
     demo_load_controller_mappings();
     (void)SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
     (void)SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+#if defined(VOX_ANDROID_PORT)
+    app.window = SDL_CreateWindow("DIGS v0.0.3 Demo",
+                                  SDL_WINDOWPOS_UNDEFINED,
+                                  SDL_WINDOWPOS_UNDEFINED,
+                                  0, 0,
+                                  SDL_WINDOW_FULLSCREEN |
+                                  SDL_WINDOW_ALLOW_HIGHDPI);
+#else
     app.window = SDL_CreateWindow("DIGS v0.0.3 Demo",
                                   SDL_WINDOWPOS_CENTERED,
                                   SDL_WINDOWPOS_CENTERED,
                                   DEMO_WINDOW_WIDTH, DEMO_WINDOW_HEIGHT,
                                   SDL_WINDOW_RESIZABLE);
+#endif
     if (app.window == 0) {
         fprintf(stderr, "window failed: %s\n", SDL_GetError());
         SDL_Quit();
         return 3;
     }
     demo_apply_fullscreen(&app);
-    app.renderer = SDL_CreateRenderer(app.window, -1,
-                                      SDL_RENDERER_ACCELERATED);
-    if (app.renderer == 0) {
-        app.renderer = SDL_CreateRenderer(app.window, -1, 0U);
-    }
-    if (app.renderer == 0) {
-        fprintf(stderr, "renderer failed: %s\n", SDL_GetError());
+    if (!demo_create_presentation(&app)) {
+        fprintf(stderr, "renderer or texture failed: %s\n", SDL_GetError());
         SDL_DestroyWindow(app.window);
         SDL_Quit();
         return 4;
-    }
-    if (SDL_RenderSetLogicalSize(app.renderer, (int)DEMO_WIDTH,
-                                 (int)DEMO_HEIGHT) != 0 ||
-        SDL_RenderSetIntegerScale(app.renderer, SDL_TRUE) != 0) {
-        fprintf(stderr, "logical renderer setup failed: %s\n", SDL_GetError());
-        SDL_DestroyRenderer(app.renderer);
-        SDL_DestroyWindow(app.window);
-        SDL_Quit();
-        return 5;
-    }
-    app.texture = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_RGB24,
-                                    SDL_TEXTUREACCESS_STREAMING,
-                                    (int)DEMO_WIDTH, (int)DEMO_HEIGHT);
-    if (app.texture == 0) {
-        fprintf(stderr, "texture failed: %s\n", SDL_GetError());
-        SDL_DestroyRenderer(app.renderer);
-        SDL_DestroyWindow(app.window);
-        SDL_Quit();
-        return 6;
     }
     demo_audio_open(&app);
     demo_audio_speak_text(&app, "DIGS!", VOX_AUDIO_SPEECH_DEEP,
@@ -8615,8 +8777,7 @@ int main(int argc, char **argv)
         demo_scripts_close(&app);
         demo_close_controllers(&app);
         demo_audio_close(&app);
-        SDL_DestroyTexture(app.texture);
-        SDL_DestroyRenderer(app.renderer);
+        demo_destroy_presentation(&app);
         SDL_DestroyWindow(app.window);
         SDL_Quit();
         return 7;
@@ -8664,15 +8825,18 @@ int main(int argc, char **argv)
         if (app.render_alpha < 0.0) app.render_alpha = 0.0;
         if (app.render_alpha > 1.0) app.render_alpha = 1.0;
         demo_render(&app);
-        if (SDL_UpdateTexture(app.texture, 0, demo_pixels,
-                              (int)demo_ui.stride) != 0 ||
-            SDL_RenderClear(app.renderer) != 0 ||
-            SDL_RenderCopy(app.renderer, app.texture, 0, 0) != 0) {
-            fprintf(stderr, "frame presentation failed: %s\n", SDL_GetError());
-            app.running = 0;
-            continue;
+        {
+            int present_status = demo_present_frame(&app);
+            if (present_status < 0) {
+                fprintf(stderr, "frame presentation failed: %s\n",
+                        SDL_GetError());
+                app.running = 0;
+                continue;
+            }
+            if (present_status == 0) {
+                continue;
+            }
         }
-        SDL_RenderPresent(app.renderer);
         ++app.rendered_frames;
         if (SDL_GetTicks() - app.fps_stamp >= 1000U) {
             vox_u32 now = SDL_GetTicks();
@@ -8690,8 +8854,7 @@ int main(int argc, char **argv)
     demo_scripts_close(&app);
     demo_close_controllers(&app);
     demo_audio_close(&app);
-    SDL_DestroyTexture(app.texture);
-    SDL_DestroyRenderer(app.renderer);
+    demo_destroy_presentation(&app);
     SDL_DestroyWindow(app.window);
     SDL_Quit();
     return 0;
