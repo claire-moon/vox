@@ -673,6 +673,128 @@ static int check_speech_queue(void)
     return 1;
 }
 
+/*
+ * The three opponents must not sound alike.  Rendering the same phrase under
+ * each voice and comparing the PCM is the only check that actually proves it
+ * -- asserting the table has different numbers in it would pass even if
+ * nothing read the table.
+ */
+/*
+ * The player's own voice must actually be adjustable, and must not be
+ * adjustable into silence.  Wiring a slider to a struct field and never
+ * rendering it is the failure this catches.
+ */
+static int check_custom_voice_is_tunable(void)
+{
+    static const vox_u8 phrase[] = {
+        VOX_AUDIO_ALLOPHONE_G, VOX_AUDIO_ALLOPHONE_EH,
+        VOX_AUDIO_ALLOPHONE_T, VOX_AUDIO_ALLOPHONE_SILENCE
+    };
+    static vox_i16 low[2048];
+    static vox_i16 high[2048];
+    static vox_audio_engine engine;
+    vox_audio_speech speech;
+
+    if (vox_audio_init(&engine, 22050U, 1U) != VOX_OK) return 0;
+    if (vox_audio_set_voice(&engine, 100U, 90U, 90U) != VOX_OK) return 0;
+    vox_audio_speech_init(&speech, phrase, (vox_u16)sizeof(phrase));
+    speech.profile = (vox_u8)VOX_AUDIO_SPEECH_CUSTOM;
+    speech.priority = VOX_AUDIO_PRIORITY_BARK;
+    speech.gain_q15 = 12000U;
+    if (vox_audio_speak(&engine, &speech) != VOX_OK) return 0;
+    if (vox_audio_render(&engine, low, 1024U) != VOX_OK) return 0;
+
+    if (vox_audio_init(&engine, 22050U, 1U) != VOX_OK) return 0;
+    if (vox_audio_set_voice(&engine, 130U, 240U, 125U) != VOX_OK) return 0;
+    vox_audio_speech_init(&speech, phrase, (vox_u16)sizeof(phrase));
+    speech.profile = (vox_u8)VOX_AUDIO_SPEECH_CUSTOM;
+    speech.priority = VOX_AUDIO_PRIORITY_BARK;
+    speech.gain_q15 = 12000U;
+    if (vox_audio_speak(&engine, &speech) != VOX_OK) return 0;
+    if (vox_audio_render(&engine, high, 1024U) != VOX_OK) return 0;
+
+    if (memcmp(low, high, sizeof(low)) == 0) {
+        fprintf(stderr, "audio custom voice did not change the render\n");
+        return 0;
+    }
+
+    /* Values from a hand-edited file must clamp, never silence the miner. */
+    if (vox_audio_init(&engine, 22050U, 1U) != VOX_OK) return 0;
+    if (vox_audio_set_voice(&engine, 0U, 0U, 0U) != VOX_OK) return 0;
+    if (engine.custom_pitch_hz < VOX_AUDIO_VOICE_PITCH_MIN ||
+        engine.custom_rate_pct < VOX_AUDIO_VOICE_RATE_MIN ||
+        engine.custom_formant_pct < VOX_AUDIO_VOICE_FORMANT_MIN) {
+        fprintf(stderr, "audio custom voice did not clamp low\n");
+        return 0;
+    }
+    if (vox_audio_set_voice(&engine, 60000U, 60000U, 60000U) != VOX_OK) {
+        return 0;
+    }
+    if (engine.custom_pitch_hz > VOX_AUDIO_VOICE_PITCH_MAX ||
+        engine.custom_rate_pct > VOX_AUDIO_VOICE_RATE_MAX ||
+        engine.custom_formant_pct > VOX_AUDIO_VOICE_FORMANT_MAX) {
+        fprintf(stderr, "audio custom voice did not clamp high\n");
+        return 0;
+    }
+    if (vox_audio_set_voice(0, 100U, 100U, 100U) != VOX_ERR_INVALID) {
+        return 0;
+    }
+    return 1;
+}
+
+static int check_named_voices_differ(void)
+{
+    static const vox_u8 phrase[] = {
+        VOX_AUDIO_ALLOPHONE_G, VOX_AUDIO_ALLOPHONE_EH,
+        VOX_AUDIO_ALLOPHONE_T, VOX_AUDIO_ALLOPHONE_SILENCE
+    };
+    static const vox_u8 voices[3] = {
+        (vox_u8)VOX_AUDIO_SPEECH_RIVET,
+        (vox_u8)VOX_AUDIO_SPEECH_CINDER,
+        (vox_u8)VOX_AUDIO_SPEECH_FLAMEY
+    };
+    static vox_i16 pcm[3][2048];
+    static vox_audio_engine engine;
+    vox_audio_speech speech;
+    vox_u32 index;
+    vox_u32 other;
+
+    for (index = 0U; index < 3U; ++index) {
+        if (vox_audio_init(&engine, 22050U, 1U) != VOX_OK) return 0;
+        vox_audio_speech_init(&speech, phrase, (vox_u16)sizeof(phrase));
+        speech.profile = voices[index];
+        speech.priority = VOX_AUDIO_PRIORITY_BARK;
+        speech.gain_q15 = 12000U;
+        if (vox_audio_speak(&engine, &speech) != VOX_OK) return 0;
+        if (vox_audio_render(&engine, pcm[index], 1024U) != VOX_OK) return 0;
+    }
+    for (index = 0U; index < 3U; ++index) {
+        for (other = index + 1U; other < 3U; ++other) {
+            if (memcmp(pcm[index], pcm[other], sizeof(pcm[0])) == 0) {
+                fprintf(stderr,
+                        "audio voices %lu and %lu are indistinguishable\n",
+                        (unsigned long)index, (unsigned long)other);
+                return 0;
+            }
+        }
+    }
+    /* And the two stock voices must still be exactly what they always were. */
+    if (vox_audio_init(&engine, 22050U, 1U) != VOX_OK) return 0;
+    vox_audio_speech_init(&speech, phrase, (vox_u16)sizeof(phrase));
+    speech.profile = (vox_u8)VOX_AUDIO_SPEECH_DEEP;
+    speech.priority = VOX_AUDIO_PRIORITY_BARK;
+    speech.gain_q15 = 12000U;
+    if (vox_audio_speak(&engine, &speech) != VOX_OK) return 0;
+    if (vox_audio_render(&engine, pcm[0], 1024U) != VOX_OK) return 0;
+    for (index = 0U; index < 3U; ++index) {
+        if (memcmp(pcm[0], pcm[index], sizeof(pcm[0])) == 0 && index != 0U) {
+            fprintf(stderr, "audio DEEP collided with a named voice\n");
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int check_speech_rate_boundaries(void)
 {
     static const vox_u8 phrase[] = {
@@ -840,6 +962,8 @@ int main(void)
         !check_master_volume() ||
         !check_speech_queue() ||
         !check_speech_rate_boundaries() ||
+        !check_named_voices_differ() ||
+        !check_custom_voice_is_tunable() ||
         !check_ambience() ||
         !check_state_hash_contract()) {
         return 1;

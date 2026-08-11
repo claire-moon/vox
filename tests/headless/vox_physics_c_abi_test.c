@@ -1,4 +1,16 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+/*
+ * Through v0.0.3 this existed to prove that a C translation unit could link
+ * and call the C++98 physics library across the versioned C ABI.  v0.0.4 is
+ * ISO C only, so that boundary no longer exists.
+ *
+ * The test is kept because its remaining assertions are the valuable half:
+ * that every ABI-carrying struct reports VOX_ABI_VERSION, that the pinned
+ * version constant has not drifted, that the error codes stay distinct, and
+ * that collision classification and overlap recovery answer correctly through
+ * the public headers alone.  Those are the contract a future embedder relies
+ * on, whatever language it is written in.
+ */
 #include <stdio.h>
 
 #include "vox/vox_physics.h"
@@ -21,7 +33,7 @@ int main(void)
         return 1;
     }
     vox_world_init(&world);
-    if (VOX_ABI_VERSION != 10U || VOX_ERR_COLLISION == VOX_ERR_INVALID ||
+    if (VOX_ABI_VERSION != 11U || VOX_ERR_COLLISION == VOX_ERR_INVALID ||
         vox_world_set(&world, 4U, 4U, 0U, VOX_MAT_FLESH,
                       20L << 16) != VOX_OK ||
         vox_world_collision_classify(&world, 4U, 4U) !=

@@ -1,0 +1,448 @@
+
+    LEAD NOTES:
+    
+        -   ISO C ONLY
+        
+        -   GAME MUST NOT EXCEED 1.44MB IN SIZE
+        
+        -   PERFORMANCE AT ALL FRAMERATES SHOULD HOLD REGARDLESS 
+            OF DEVICE
+            
+        -   SORRY I KEEP SAYING THINGS LIKE 'MAJOR  IMPROVEMENT'  AND WHAT NOT
+            FORGIVE ME I AM TIRED
+    
+        - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+
+    + First, we should  hardcode the names of the BOTS and stick them to their
+    defaults as we will be leaning on the  existence of BOTS and building upon
+    the  possibilities  therin.  Rivet,  Cinder, and Flamey  will be the three
+    other bots.
+    
+    + We want to hardcode these names in because the 'story' of this game will
+    happen between the BOTS  themselves,  the action and the combat. This will
+    require a major overhaul to them. The major  innovation we want to make is
+    that the bots will remember you in-between  matches, and almost  *pick-up*
+    conversations  from the last match. For this we will need a memory  system
+    for each bot so that all of the  actions and  conversation  history of the
+    last match will be remembered individually by all three.
+    
+    + We want all three BOTS to have individual  memories because we are going
+    to be giving these BOTS  distinct  personalities.  Think about  Pac-Man in
+    that all of the  different  ghosts  have  their  own  distinct  names  and
+    personalities  in game. We want three  distinct  bots so that if a persons
+    only experience with the game was to play against the BOTS that they would
+    begin to see a story  unfold. The  distinct  personalities  for these bots
+    should be apparent  from what they say, how they act in game, whether they
+    are aggressive or pacifist, down to what toolset and playstyle.
+    
+    + Thus we need another  major  overhaul to the current bark system. We are
+    getting  warmer on v.0.0.3  but with this new update we need a  significant
+    magnitude  more  added  to the  language  pool so that a large  variant  of
+    reactions  to different  stimuli that would be  represented  by these barks
+    within  the game.  These  barks need to start  'contracts'  from  player to
+    player  regardless  of whether they are player or npc. These  contracts are
+    essentially  the pointer  keeping track of the one-on-one  in-between  each
+    miner. The point of these  contracts  is to have a system in place to where
+    conversations can be assigned  different states from the top level in which
+    the tone of the  conversation  can be measured  down to the bottom level in
+    which each reaction from miner to miner can also be measured. For example a
+    bunch of aggressive back and forths will create a hostile  environment that
+    will then affect the behavior of the bots dependinng on their personnality.
+    This could  theoretically  mean peace  could be acheived if a  conversation
+    went towards  amicability. Thus the BOTS themselves will also have shifting
+    personalities  to where they will no longer be the same BOT that the player
+    interacted  with from the  beginning  of play. The bark  system will be the
+    drivinng  engine  behind this  emergent  story. We want bots to be able to
+    carry  conversations  and build  relationships  with both the  player  and
+    amongst each other.
+   
+    + On the  technical  level, the bark system as it is while it does present
+    some  amusing  back and  forths, it still bugs out and is  nonsensical  at
+    times. We need to have a quality  filter  that  enforces  our  established
+    intention of gameplay. The bark system should be  sophisticated  enough to
+    tell this story match after match, we should aim building this bark system
+    towards a full conversation engine.
+    
+    + In favor of this  direction:  An  overhaul  to the menu  system. We will
+    remove How to Play and Miner's  Index with INBOX and LOG. The idea is that
+    between  each  time  the  player  opens  the game  there  will be a chance
+    depending  on  that  time  and  depending  on  the   personality   of  the
+    corresponding bot that they will have left a message for you. This will be
+    based on their  memory of your  matches  together and be filtered  through
+    their  personality. To pull this off, we need to leverage the conversation
+    engine and ensure  that we leave it to two to three  sentences  at max. We
+    will need a simple  email style reader  within the menu's GUI that can let
+    you see unread  emails and then  reading them marking them as read. We can
+    put a (NUM)  next to INBOX on the menu  (for ex.  INBOX (1) or INBOX  (5))
+    clearing that number  depending on how many unread  messages there are. We
+    won't  have a  response  feature  yet  because we want this to  adequately
+    display the  maturity of the  systemic  nature of each BOT and will act as
+    the  'save'  between  matches.  LOG will be a much  more  simple  feature,
+    allowing the player to read each message said between  player and bot from
+    the  beginning  of the game and onward. For that we just need a simple log
+    reader  with an up and down  scroll  listing  the  entire  history  of the
+    conversations. 
+    
+    + The  player  will not be able to reset  these BOTS or the  history as we
+    want to establish an unmodifiable history between the player and the bots.
+    This is  deliberate  because  we want the bots to grow with the player and
+    give everyone their own unique  experience  with the bots. However, in the
+    debug build we can have it to where you can reset the history just so that
+    we can refine this feature.
+    
+    + Minor fix: Update the local symlink "digs" and "digs-debug"  to point to
+    the new version v.0.0.4.
+    
+    + The blood/gibbing system is nice so far but is still not quite there. We
+    want to overall make all  explosions  and blood far more  splashy, in that
+    there is a large  simulated  volume of actual liquid for the blood instead
+    of  the  same  firework  style  explosion.  We  need a  directional  fluid
+    simulation that will splatter the landscape  depending on impact. There is
+    still too little  blood and we need a large  amount  more. In  addition we
+    want to make  explosions  beefier and send flame  particles and expell the
+    dirt and stone  particles  sending  all of this  tumbling.  We want  every
+    action  towards  either a miner or the  terrain  to have a john woo  esque
+    poppy-ness  to it to  where  the  main  two  reactions  from  the one main
+    gameplay  component  of  shooting  either  the  terrain or a miner  always
+    elicits a satisfactory punch with very minimal  repetition. We need then a
+    more mature  particle  simulation  upgrade  however you could slice it. It
+    also needs to work well at the high blocky resolution we have for the game
+    because right now it still looks too blocky.
+    
+    +  In   addition  to  this  we  still  have  yet  to  exhibit  any  actual
+    dismemberment  for the miners. We should  remove  full  gibbing  and focus
+    purely  on  actual   dismemberment.   Lets  have   every  kill   elicit  a
+    dismemberment  from the entry of the attack  (unless its fire or an actual
+    explosion  which  should melt the miner for the fire and gib the miner for
+    the explosion). My point being we should have the projectile  weapons have
+    more   satisfying   umph  to  them  to  where  an   addicting   amount  of
+    outcomes  can come  from  each  tool.  Landscape  destruction  and  physic
+    simulation  is the bread and butter of this game so we should make tearing
+    up the landscape as addicting as getting  kills. Right now the  explosions
+    and attacks still leave a Worms-esque  circle wwhere we need more granular
+    physic  simulations  to where each crater looks  distinct.  Essentially we
+    want a lot more  feedback in this update  making each action  taken by the
+    player feeling weighty and powerful.
+    
+    + The rope system needs improvement. Too much time is being spent shooting
+    blindly  wiwthout  connecting, we should have each rope shot auto-aimed to
+    wwhatever  was being  pointed as so that the player can feel like they are
+    good at the rope either way.
+    
+    + In  addition  we should have the rope pull in the miner so that they can
+    easily  pull  themselves  out of holes  and fling  themselves  across  the
+    landscape, the rope should then be more of a grappling  hook (called STEAM
+    HOOK  in-game). It should also now let you rope into more than te grid and
+    use the  landscape so that more saves can be made before  falling into the
+    lava at the cost of the hook burrowwing into the terrain. We should have a
+    nice  satisfying puff of smoke come out from the launcher on the miner and
+    a puff of dirt or smoke from the  landscape  to give the  impression  of a
+    powerful tool. It should also impale miners to surfaces.
+    
+    + Speaking of impaling, in addition to the  dismemberment  working we need
+    full  Havok-like  ragdoll  physics to where each death can have the people
+    playground  style of physics to where each death can feel  unique from the
+    ragdoll and dismembered  parts going in different  directions based on the
+    power of each attack or damage  taken. We want the gore system to be meaty
+    to the level of Soldier of Fortune where the game is visceral and violent.
+    We need actual guts and bones too. Think of this as a  Doom-style  game in
+    terms of violence, and having the ragdoll corpse physics of Halo 2 or 3.
+    
+    + Finally on this topic we need  headshots  to be  possible,  to where any
+    tool  including the steam hook could pull one off (we need this to also be
+    treated like a DOUBLE KILL or TRIPLE KILL in that there is in-game  popups
+    saying HEADSHOT!). The headshots should be the goriest kill.
+    
+    + We need a forward dash  mechanic that works in mid-air and on the ground
+    that  gives you or the npc a  temporary  i-frame  so that  attacks  can be
+    dodged and saves can be made.
+    
+    + The water in the game is still  pretty  primative,  I'm not able to make
+    makeshift lakes or rivers with it, we need a pretty  significant  overhaul
+    to the  liquid  simulation  not in just for the blood but also in that the
+    water can actually propgate and act like water. Same for lava, when one of
+    the magma pockets gets popped in game the magma should drip out.
+    
+    + Getting a kill should  regenerate  50% of your health (or 50HP? Whatever
+    makes more sense and doesn't crashh our engine..)
+    
+    + The camera still needs more dynamism.  While it does feel smooth I think
+    there  should be some  subtle  improvements  like gently  pulling out when
+    moving in either  direction or when throwing a projectile,  gently pulling
+    in when using close range  weapons  like the hot rod or the  scatterbrain,
+    gently shifting in the opposite  direction of the projectile if the player
+    is charging up a shot of something and then  slingshoting a little towards
+    that direction upon  projectile  launch to give the throw  movement, and a
+    slow zoom out upon death. Needs gentle sway from left or right when moving
+    in either direction. Really subtle but nice tricks.
+    
+    + 256  color  palette  revamp.  Right  now the game  looks  great but when
+    backported to older systems will not be the accurate  representation.  Use
+    the DOOM  palette and find the closest  possible  conversion  of colors to
+    evoke this era of DOS games.
+
+    + In this patch the DROPSHIP will be  introduced, a ship that flies across
+    the top of the sky  (see the  airdrops  in  earlier  Worms  games)  at the
+    beginning  of the  game to drop off all the  miners.  As its  flying,  the
+    player  can  press  fire to launch  out of there so that  there can be new
+    first  spawns  each  time  between  player or npc. It will be like a comet
+    across the sky with a blue glow from its  exhaust,  and will be an exhibit
+    of the games  voxel  engine,  rendering  a space  ship  similar to how the
+    original  Dark Forces had Jane Orrs ship flying  around in the sky. At the
+    end of each match as the lava begins to rise, there will be a message from
+    the person  flying the dropship that will show up at the top of the screen
+    similar  to how the barks  show up, only the voice is far  deeper and more
+    crunchy, using the same bark system to essentially say different  versions
+    of a message to the players and npcs that the  dropship is coming and that
+    they should  prepare for  extraction. As it flies over,  players/npcs  can
+    either land on it  themselves  using  jumping and  steampacks OR using the
+    grappling  hook to latch onto it and be swung out of the match and waiting
+    out the rest of the match  while the lava  rises.  There  will be an alarm
+    sound using the games sound engine that will follow the broadcast from the
+    pilot that will help alert them to the rising lava and to look for the jet
+    so that they dont die and for a bit of fun.
+
+    + The  skybox  needs a major  overhaul.  Think of how  Worms has  parallax
+    scrolling  backgrounds  and  clouds, we should  have  different  layers of
+    parallax  background.  Depending  on which  level is  chosen,  we can have
+    several  different onion layers of other terrains rendered ffrom that seed
+    but given some fog to differentiate them. This can be variant in scope but
+    should be able to give the  background  layers  the  ability to evoke vast
+    caverns or mountainscapes. The clouds should be real-time raymarched cloud
+    systems  that  emulate a variety of patterns.  There will be no sun in the
+    game but we should still have a white little moon at the top most layer of
+    the  parallax  to where each stage has a puppet  theater  style  where the
+    world  unfurls  behind  the front  action of the stage and we can  further
+    showcase the voxel and lighting system.
+    
+    + The  lighting  system  should be improved but I'm not sure how, maybe we
+    need  shadows  and actual  global  illumination?  Not too much to where it
+    interferes with the intended  palette of the art style but enough to where
+    we can have a powerful array of lighting tools to make emergent  paintings
+    with the game  itself from each shot.  Something  subtle  though,  nothing
+    overstated,  just  enough  to  where  the  voxel  and  lighting  combo  is
+    completely utilized to its fullest.
+    
+    + While we are doing a major  increase  to the  ragdoll  physics we should
+    also  implement a QWOP style  skeletal  animation  system to the miners so
+    that we can  actually  have walk  cycles, jump and  steampack  animations,
+    pain, firing, etc different  states because I think the basic no animation
+    style looks kind of crap and doesn't  adequately  exhibit our voxel system
+    from the  side-view.  We dont need an increase in fidelity by any means we
+    just need more fluid animation of the miners to where it really feels like
+    they are running and jumping  through the landscape like N++ or super meat
+    boy.
+    
+    + On  top of the  NPC  behavior  being  greatly  expanded  upon  from  the
+    personality  and  memory  system  we will  also need  improvements  on the
+    lower-level.  We need more states and far more action pools for each state
+    to pull from. That way we dont have any random  behaviors like both of the
+    bots killing  themselves  randomly or just giving up out of nowwhere.  I'm
+    not saying these behaviors are  unacceptable  but if a bot kills itself it
+    should be because of its personality and not an error in its  pathfinding.
+    We wwant a wide berth of  possibilities  to the point that our personality
+    system can actully  shine. Perhaps an NPC could be more of a strategic one
+    and decide to dig  underground  more or take more  evaisve  measured,  and
+    another  could  be  aggressive  and use the most  powerful  tools to kill,
+    essentially  having the three other bots as archetypes  for typical player
+    behaviors possible within this game (we should identify those three)
+    
+    + We need to use the voice  system to have  actual  death  sounds from the
+    miners on death. I'm  imagining  a far more  garbled  and crunchy  classic
+    game-over style moan that gives a comedic kick to each death. There should
+    be grunts too. I really like how the current  speak-and-spell  style voice
+    sounds but I do wish its phonetics  could have a little more definition so
+    that  its  more  obvious  what  words  are  being  spoken  and we can have
+    something closer to an actual  text-to-speech  system however rudimentary.
+    We should  also have  different  voices for each of the three bots so that
+    they can be distinct from each other  vocally.  While  thinking on the bot
+    thing  again, they should have their own  distinct  looks if they  already
+    don't. They  should have  distinct  pitches,  tenors, and speeds from each
+    other to really lock this down.
+    
+    + In the customize game menu there should be the ability to customize your
+    miner.  You can  change  the color of your  outfit,  helmet,  etc but only
+    purely  cosmetic.  You should be able to  customize  the pitch, tenor, and
+    speed of your voice to match the bots
+    
+    + We need to add the ability to have one more bot to single player so that
+    there  can be true  four  player  battles  without  having to add a second
+    player  and  that  the  previous  things I wrote  about  the bot  could be
+    established.
+    
+    + Minor fix: Jumping again in the air will engage the steampack so long as
+    they continue to hold down the jump button, npcs can double jump too.
+
+    + The power of each tool needs improvment:
+    
+        [NOTE: WE NEED MUZZLE FLASHES FOR ALL PROJECTILE BASED WEAPONS]
+
+        * PULASKI:  This should cut through the  landscape  (and miners)  like
+        butter. Right now it bounces back immediately and it should be more of
+        a 'do not get in the way of this thrown object' type deal. The graphic
+        is also too  small, it should  resemble  an actual  spinning  axe when
+        thrown. Deaths from this should be particularly nasty.
+        
+        * POPPER:  This is totally  broken  right now. It is  supposed to be a
+        semi-automatic  pistol  that has  explosive  bullets  that tear up the
+        terrain but do poor damage. The range  currently  is very  limited and
+        the sound is very off. Three or four shots of this should pop a miners
+        body part off (unless there is a headshot),  but it is good in a pinch
+        for digging through the dirt with its fire rate
+        
+        * SMOKER: The smoke  particle  system is not  advanced  enough yet for
+        this to be truly  satisfying.  Thrown grenades should plume a trail of
+        smoke. The  explosion  should eject far more smoke,  enough to obscure
+        the  battlefield  so that it could be used to make it harder to be hit
+        in the  moment.  The  cooldown  needs to be higher.  Also,  there is a
+        glitch where it bounces off the miner and bounces back so quickly that
+        it bounces too much and causes a bunch of  noise/damage. We want it to
+        HURT if you get hit  directly by the smoker but not kill you if you're
+        at full HP, and we should have it stop bouncing  after a direct hit so
+        it can then roll down the landscape. The sound is also unsatisfying, I
+        like the one  sound we have  when its  thrown  but  there  are no thud
+        sounds from bounces or clink sounds from hitting rock and no sound for
+        the explosion of smoke itself. It should also follow the same logic as
+        the  firecracker  in that if you hold  down the mouse  button  you can
+        charge up the throw rather than spamming throws.
+        
+        * HOT RAIL: This works nicely so far for digging tunnels easily but is
+        greatly  nerfed  by a bug  where the miner  walking  through a certain
+        configuration of dirt will kill the miner and this frequently  happens
+        before any meaningful tunnel could be made meaning the bug is frequent
+        enough to where  dying in the  tunnel  being  made by the miner  while
+        making  the  tunnel is the  expected  behavior  of the tool. We should
+        extend the  functionality  to where just clicking without holding down
+        shoots out a fire bullet  projectile  that works like any other pistol
+        except  it does  low  damage  but  high  burn to the  miner,  and then
+        clicking and holding down begins the tunnel digging  functionality.
+        
+        *  HYDROSHOT:  Lets have a small but subtle  kickback  when using this
+        that can be exaggerated when pointing down so that we can have the fun
+        trick of using the hydroshot as extra  steampack fuel making it a less
+        effective steampack that could be used either in a pinch or to elevate
+        the  height  of a jump or to link  the  steampack  jumps  so that  the
+        cooldown  could be managed by shooting this down. Should also generate
+        a lot  more  water so that we can  actually  test our  water  physics.
+        Miners should drown if completely submerged for long enough if someone
+        traps one in a pool or waterfall or something like that.
+        
+        * GIANT  FUCKING  HAMMER: This should echo the hammer from Red Faction
+        Guriella more in that using this is explosive,  throwing whatever soil
+        it hits in every  direction. The simulation  should be so that this is
+        powerful enough to tumble certain  landscapes. We essentially need the
+        attack  power and the  destructive  powwer of the hammer to be greatly
+        exaggerated,  along  with a  slighlty  increased  kickback.  Much more
+        feedback  needed  from  destroying  either  a miner or the  landscape.
+        Smashing the landscape  should be a shower of different  particles and
+        smashing  a  miner  should  be  like a blood  firework  sending  their
+        gibs/bones/guts  flying  and there  being a mist of blood in the wake.
+        
+        
+        * BOLT  ACTION:  This is very off from what its  supposed  to be. It's
+        supposed  to be a revolver  like weapon  (think of how the R8 works in
+        the new Counter  Strike).  You hold it down, one second  passes, and a
+        powerful  revolver  like shot happens with some  knockback,  leaving a
+        big puff of smoke. The projectile  should be far more pronounced as it
+        is  supposed  to be a glowing  hot rod, even  though it is  hitscan it
+        should  have a  projectile  of hot steel  (think of the bolt from Half
+        Life 2) that impales the landscape (and immediately  severs a miner in
+        half or  removing  their legs  etc.). Much more  feedback  needed. The
+        sound is way too puny, we want it to be a  powerful  pop.  Needs to in
+        general feel way more powerful and sound way more powerful.
+        
+        *  SCATTERBRAIN:  Needs a lot  more  feedback.  Currently  there is no
+        muzzle  flash, the sound  isnt  strong/aggressive  enough,  there's no
+        reload sound effect, and the death from this with the current  physics
+        system results in a gib. We want this to usually split the miners into
+        a bunch of pieces, but rarely a full gib unless maybe every shell hits
+        the miner. The death  needs to be so that  killing  someone  with this
+        will PAINT the  landscape  red.  Feedback vs terrain  needs to be more
+        powerful as well, needs to be more  destructive annd essentially be so
+        hot that it melts the  terrain a bit,  scalding  it and steam  hissing
+        from the exit  craters.  Needs to be a  godlike  weapon  visually  and
+        physically.
+        
+        *  FIRECRACKER:  Currently the thrown  projectile is far too small and
+        not  glowing.  We need a hot  glowing  projectile  that has a distinct
+        trail that the eye can follow. The  explosion  is  satisfying  but not
+        satisfying  enough, we want a variety of chunks being blown out of the
+        landscape  and  repeated  use of this  weapon  to  cause  fires in the
+        tunnels dug by them. There  should be  significant  knockback if being
+        attacked  by these from the  explosion  itself to bolster  the smaller
+        damage given. The trail left by the thrown  firecracker should fall to
+        the ground and leave a light trail.
+        
+        * BORE  DRILL:  Should be  renamed  to 'BORING  DRILL'.  Needs a wider
+        drill  impact  because the current one is too skim.  Should also drive
+        the player  closer to the ground if activated in mid-air to make kills
+        with it easier.
+        
+        * MINING  RAIL:  Needs to have far more kick. Needs to  penetrate  far
+        more  terrain so it needs a much further  reach, to actually be a rail
+        gun  similar  to the ones of 90s fame. You  should  be able to blast a
+        line  through a  mountain  pretty  easily and snipe with it. Should be
+        renamed   game-wide  to   'RAILSHOT'.   Its  impact   craters   should
+        smolder.  The sound  needs to be far  beefier.  Charging  this  should
+        gently pan the camera towards where the crosshair is pointing  instead
+        of away from it so that sniping could be possible.
+        
+        * 
+
+    + The random dying from digging through the landscape needs to be fixed.
+    
+    + The mouse  should be able to be used in the menu so that  someone  could
+    click on options
+    
+    + There should be more time limit options including unlimited
+    
+    + The particle  simulation and physics  simulation is doing good but still
+    needs improvement. Because of the games low drawing resolution  explosions
+    are blocky while still being  satisfying.  Blood  included. In addition to
+    more detailed  particle systems we need more Red Faction Guriella inspired
+    simulation  to where the  landscape  will  collapse in onto itself so that
+    miners could  technically cave each other in or even get a kill by blowing
+    a chunk out of the  ceiling and having it fall down onto a miner.  Gravity
+    momentum  etc should apply to all voxels and groups of voxels  should have
+    their own states stored to mime how physics affect these  clusters.  Think
+    of Poly Bridge,  Besiege, Beam ng, Half Life 2, People  Playground and how
+    these phyiscs  systems work, we want an equitable  system  powering all of
+    the play so that a large  breadth of  systemic  play is possible  and that
+    player  creativity  can  cause for  rewarding  deaths. I want  blowing  up
+    terrain to have dirt and stone  pooling down into holds made by explosions
+    instead of static circle holes in the land being made.
+    
+    +  Lets  remove  Miners vs Machines  right now and the 'modes' in general,
+    lets just focus on one mode.
+    
+    + Lets make voxel  models for each weapon so that our miners can  actually
+    carry them and aim them and the muzzle  flashes can fire out of something.
+    We are working with a low  resolultion  drawing  style so these can be low
+    poly we just need  something  for the  miners to hold. Re: muzzle  flashes
+    from the  earlier  stuff  about the  weapons I think we should  have light
+    flash on the miner  shooting a projectile for added effect. Lets make each
+    muzzle flash a particle explosion that has wisps of smoke and make it like
+    a tiny firecracker each time to help with the combat feedback.
+    
+    + Remove all  instances  of HOW TO PLAY and MINERS  INDEX and QA FEEDBACK.
+    Remove other  boilerplate  stock text like GPL3 OR LATER or the V.0.0.3 or
+    the control  prompts in the menus. We want a more  miniamlist  Worms style
+    menu this time around.
+    
+    + Use provided font engine to replace the gold/yellow stock font with more
+    arcade/90s DOS appropriate fonts.
+    
+    + Cherry on top: A Worms-style slow mo instant replace of the coolest kill
+    of the match. Can be  decided  based on a certain  amount of factors  like
+    highest  award/killstreak  or most  kills  with one shot  etc. Also at the
+    post-game  screen we should have awards like  'Pyromaniac'  'Grave Digger'
+    etc related to the game so that players can have medals.  These can affect
+    the barks and personality  memories so that bots can remember what you won
+    and  what  they won and  rivalries  can form  between  a bot that has been
+    killed or has frequently killed another and you but also can gain favor if
+    teamed up with  another  player to kill one  player or if a truce is made.
+    Just some fun stuff.
+    
+    + The text spacing  should be a tiny bit more so that all of the text isnt
+    touching eachother its just a tiny bit too close just needs a pixel or two
+    of space inbetween

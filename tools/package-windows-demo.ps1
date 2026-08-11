@@ -46,7 +46,15 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     if ($env:VOX_PACKAGE_VERSION) {
         $Version = $env:VOX_PACKAGE_VERSION
     } else {
-        $Version = 'v0.0.3'
+        # Same single source as CMake and the Linux packager: the VERSION file
+        # at the root of the tree.  Read directly rather than through
+        # tools/vox-version.sh, which needs a POSIX shell this host may not
+        # have.
+        $VersionFile = Join-Path $Root 'VERSION'
+        if (-not (Test-Path -LiteralPath $VersionFile)) {
+            Stop-Package "Cannot read $VersionFile"
+        }
+        $Version = 'v' + ((Get-Content -LiteralPath $VersionFile -Raw).Trim())
     }
 }
 if ([string]::IsNullOrWhiteSpace($DistDir)) {
@@ -128,23 +136,19 @@ try {
     if ($LASTEXITCODE -ne 0) {
         Stop-Package 'CTest failed'
     }
-    Push-Location $Root
-    try {
-        & cargo test --workspace --locked
-        if ($LASTEXITCODE -ne 0) {
-            Stop-Package 'Cargo tests failed'
-        }
-    } finally {
-        Pop-Location
-    }
-
     $demo = Join-Path $build 'Release\digs_demo.exe'
     $share = Join-Path $build 'share'
     if (-not (Test-Path -LiteralPath $demo -PathType Leaf)) {
         Stop-Package 'the Release digs_demo.exe was not produced'
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $share 'digs\scripts\manifest.txt') -PathType Leaf)) {
+    # This named the Lua catalog manifest, which v0.0.4 removed. Check that
+    # CMake staged a share tree at all, rather than one file inside it that
+    # may come and go.
+    if (-not (Test-Path -LiteralPath (Join-Path $share 'digs') -PathType Container)) {
         Stop-Package 'the DIGS runtime data was not staged by CMake'
+    }
+    if (-not (Get-ChildItem -LiteralPath (Join-Path $share 'digs') -Recurse -File)) {
+        Stop-Package 'the staged DIGS runtime data tree is empty'
     }
 
     Push-Location $Root

@@ -1,5 +1,15 @@
 # VOX repository instructions
 
+## Read first
+
+`CONCERNS.md` — the traps in this codebase, which claims are proven less
+thoroughly than they look, and the decisions most likely to be wrong. Several
+entries describe defects that fail silently; you will not discover them from
+the tests passing.
+
+Then `docs/DEMO.md` for what the game currently is, and
+`docs/ROADMAP_V0.0.5.md` for what is planned next.
+
 ## Scope
 
 This is the independent VOX + DIGS repository. Do not copy PPD-COM runtime
@@ -14,10 +24,10 @@ unreviewed assets into this tree.
 
 ## Language boundaries
 
-- `engine/c89` is strict C89 and OS-independent.
-- `engine/cpp98` is strict C++98 behind the C ABI; no exceptions, RTTI, or
-  STL types cross the ABI.
-- Rust is for modern host/tools and never owns authoritative simulation state.
+- v0.0.4 is ISO C only. Every first-party translation unit is strict C89.
+- `engine/c89` is strict C89 and OS-independent. No C++, no Rust, no Lua.
+- A port owns presentation and platform services. Third-party host libraries
+  (SDL2) are permitted there; they are not first-party code.
 - NASM is optional x86 leaf optimization with a scalar C oracle.
 
 ## Validation

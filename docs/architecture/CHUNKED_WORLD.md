@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # Chunked world contract
 
-The active v0.0.3 development profile uses a bounded `512 x 320 x 10`
+The active v0.0.4 development profile uses a bounded `512 x 320 x 10`
 mini-voxel slab: 1,638,400 cells, exactly forty times the original 40,960-cell
 profile and four times the v0.0.1 dense slab. Cells are stored in stable
 `z/y/x` order, while a parallel `32 x 20` grid of `16 x 16 x 10` chunks

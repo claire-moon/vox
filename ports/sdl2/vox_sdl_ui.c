@@ -87,7 +87,12 @@ static vox_u8 vox_ui_glyph_row(char character, int row)
                 row == 3 ? 4U : row == 5 ? 4U : 0U);
     }
     if (character == '/') {
-        return (vox_u8)(1U << (row < 5 ? (4 - row) : 0));
+        /*
+         * Bit 4 is the leftmost column, so shifting by (4 - row) puts the
+         * top of the stroke on the left and drew a backslash.  Every "PAGE
+         * 1/2" in the game has been reading "PAGE 1\\2".
+         */
+        return (vox_u8)(row < 5 ? (1U << row) : 0U);
     }
     if (character == '+') {
         return row == 3 ? 14U : (row == 1 || row == 2 || row == 4 ||
@@ -278,8 +283,12 @@ int vox_ui_text_wrap(vox_ui_surface *surface, int x, int y, int width,
     int line_count;
     int max_characters;
     const char *cursor;
-    if (surface == 0 || text == 0 || width <= 0 || max_lines <= 0 ||
-        scale <= 0) {
+    /*
+     * A null surface measures without drawing.  Measuring with a second copy
+     * of this loop is how the two quietly disagree about where a word breaks,
+     * so callers that need a height call the same code with no target.
+     */
+    if (text == 0 || width <= 0 || max_lines <= 0 || scale <= 0) {
         return 0;
     }
     max_characters = width / (VOX_UI_DOS_ADVANCE * scale);
@@ -319,9 +328,11 @@ int vox_ui_text_wrap(vox_ui_surface *surface, int x, int y, int width,
                 line[index] = cursor[index];
             }
             line[candidate_length] = '\0';
-            vox_ui_text(surface, x, y + line_count *
-                        VOX_UI_DOS_LINE_HEIGHT * scale, scale,
-                        line, red, green, blue);
+            if (surface != 0) {
+                vox_ui_text(surface, x, y + line_count *
+                            VOX_UI_DOS_LINE_HEIGHT * scale, scale,
+                            line, red, green, blue);
+            }
         }
         consumed = line_length;
         if (last_space > 0 && candidate_length == last_space) {
@@ -340,4 +351,11 @@ int vox_ui_text_wrap(vox_ui_surface *surface, int x, int y, int width,
         ++line_count;
     }
     return line_count;
+}
+
+int vox_ui_text_wrap_lines(int width, int max_lines, int scale,
+                           const char *text)
+{
+    return vox_ui_text_wrap(0, 0, 0, width, max_lines, scale, text,
+                            0U, 0U, 0U);
 }

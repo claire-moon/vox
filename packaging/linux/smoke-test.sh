@@ -28,6 +28,13 @@ if [[ "$NAMED_BENCH_QUALIFY" == 1 ]]; then
 fi
 "$BINARY" --settings-self-test "$ROOT/qa/out/digs-settings-self-test.cfg"
 "$BINARY" --camera-self-test
+# v0.0.4: the save layer and the window widget. A tester running only this
+# script should still find out if either is broken on their machine.
+"$BINARY" --chronicle-self-test "$ROOT/qa/out/digs-chronicle-self-test.dat"
+"$BINARY" --menu-self-test
+# Does what the miners learn actually survive closing the game? This is
+# the one claim that needs more than one process to test.
+"$ROOT/session-evidence.sh" "$BINARY"
 "$BINARY" --smoke-test "$OUTPUT"
 [[ -s "$OUTPUT" ]] || vox_die "smoke test did not create $OUTPUT"
 printf 'Smoke image: %s\n' "$OUTPUT"

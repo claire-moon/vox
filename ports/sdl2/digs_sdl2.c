@@ -9,8 +9,10 @@
 #include "digs_miner_art.h"
 #include "vox/vox_audio.h"
 #include "vox/vox_game.h"
+#include "digs_lines.h"
+#include "digs_chronicle.h"
 #include "vox/vox_render.h"
-#include "vox/vox_script.h"
+#include "vox/vox_version.h"
 #include "vox_sdl_ui.h"
 
 #define DEMO_WIDTH 320U
@@ -35,7 +37,7 @@
 #define DEMO_INPUT_SWITCH_HYSTERESIS_MS 750U
 #define DEMO_CONTROLLER_ACTIVITY_MARGIN 0.08
 #define DEMO_CONTROLLER_CALIBRATION_MS 750U
-#define DEMO_SETTINGS_VERSION 4
+#define DEMO_SETTINGS_VERSION 6
 #define DEMO_ROPE_AIM_RANGE 48.0
 #define DEMO_NAME_CHARACTERS 12
 #define DEMO_NAME_CAPACITY 13
@@ -44,12 +46,24 @@
 #define DEMO_BANNER_TICKS 90U
 #define DEMO_HIT_MARKER_TICKS 12U
 #define DEMO_MINER_HIT_TICKS 8U
-#define DEMO_BUBBLE_TICKS 150U
+/*
+ * A bubble lasts as long as vox_digs_speech_duration says the line does.
+ *
+ * It used to be a flat 150 ticks whatever the line, so "HA!" sat there for
+ * two and a half seconds and a forty-character sentence got no longer -- and
+ * every reply looked like an interruption, because the simulation was
+ * pricing answers against a duration the picture did not share.
+ */
+#define DEMO_BUBBLE_TICKS_MAX 264U
+#define DEMO_BUBBLE_MAX_LINES 3
 #define DEMO_MULTIKILL_WINDOW 180U
 #define DEMO_BARK_COOLDOWN 180U
 #define DEMO_BOT_BARK_COOLDOWN 720U
 #define DEMO_GLOBAL_BARK_GAP 120U
 #define DEMO_BARK_PHRASE_COUNT 50U
+/* Contexts 0-5 are the ordinary moods; 6 is going into the lava. */
+#define DEMO_BARK_CONTEXT_COUNT 7
+#define DEMO_BARK_CONTEXT_DOOMED 6
 #define DEMO_NAME_GRID_COLUMNS 8
 #define DEMO_NAME_GRID_ITEMS 42
 #define DEMO_FRAME_CAP_COUNT 7
@@ -58,6 +72,13 @@
 #define DEMO_RENDER_OVERLAY_CAPACITY 8192U
 #define DEMO_HAPTIC_REFRESH_MS 42U
 #define DEMO_HAPTIC_LEVEL_COUNT 4
+#define DEMO_COSMETIC_COLOR_COUNT 6
+#define DEMO_RIGID_DEBRIS_VISUAL_CAP 32U
+#define DEMO_EFFECT_PARTICLE_CAP 320U
+/* Replay frames are captured every four simulation ticks.  Holding each
+ * picture for a bounded six presentation ticks makes the result reel read as
+ * a deliberate slow-motion recap rather than racing through its ledger. */
+#define DEMO_REPLAY_FRAME_HOLD_TICKS 5U
 
 #if (VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT) > DEMO_SCENE_MAX_PIXELS
 #error "DIGS native scene target exceeds the protected presentation cap"
@@ -93,14 +114,13 @@ typedef enum demo_screen {
     DEMO_PLAY = 3,
     DEMO_PAUSE = 4,
     DEMO_RESULTS = 5,
-    DEMO_FEEDBACK = 6,
-    DEMO_HOW_TO = 7,
-    DEMO_INDEX = 8,
+    DEMO_INBOX = 6,
+    DEMO_LOG = 7,
     DEMO_CONTROLS = 9,
-    DEMO_SCRIPT_ERROR = 10,
     DEMO_INPUT_OPTIONS = 11,
     DEMO_CUSTOMIZE = 12,
-    DEMO_NAME_EDITOR = 13
+    DEMO_NAME_EDITOR = 13,
+    DEMO_MINER = 14
 } demo_screen;
 
 typedef enum demo_input_preference {
@@ -113,11 +133,6 @@ typedef enum demo_input_source {
     DEMO_SOURCE_KEYBOARD = 0,
     DEMO_SOURCE_CONTROLLER = 1
 } demo_input_source;
-
-typedef enum demo_rope_mode {
-    DEMO_ROPE_HOLD = 0,
-    DEMO_ROPE_TOGGLE = 1
-} demo_rope_mode;
 
 typedef enum demo_controller_family {
     DEMO_PAD_GENERIC = 0,
@@ -178,7 +193,6 @@ typedef struct demo_player_input {
     int sensitivity;
     int deadzone;
     int aim_slowdown;
-    int rope_mode;
     vox_u32 switch_stamp;
     int suppress_ticks;
     double aim_direction_x;
@@ -242,7 +256,9 @@ typedef struct demo_banner_line {
 } demo_banner_line;
 
 typedef struct demo_speech_bubble {
-    char text[64];
+    /* demo_expand_line builds up to 96, and a name substitution can push a
+     * forty-six character line past sixty-four before it is ever wrapped. */
+    char text[96];
     vox_u16 ttl;
 } demo_speech_bubble;
 
@@ -269,14 +285,24 @@ typedef struct demo_app {
     int running;
     demo_screen screen;
     int selection;
+    int inbox_open;      /* -1 while listing, else the message open */
+    int scroll;          /* the active window's scroll, in pixels */
+    demo_screen scroll_screen;  /* which screen that scroll is for */
     int bots;
     int map_style;
     int arsenal;
     vox_u32 seed;
     int local_players;
-    int game_mode;
-    int friendly_fire;
-    int match_minutes;
+    int time_limit_index;
+    int lava_index;
+    /* The player's own voice: percentages and hertz, not indices, so the
+     * settings file says what it means. */
+    int voice_pitch;
+    int voice_tone;
+    int voice_speed;
+    /* Presentation-only profile colours for the two local human slots. */
+    int outfit_color[DEMO_LOCAL_MAX];
+    int helmet_color[DEMO_LOCAL_MAX];
     int score_limit_index;
     int respawn_mode;
     int respawn_delay_index;
@@ -292,6 +318,13 @@ typedef struct demo_app {
     int mouse_x;
     int mouse_y;
     int mouse_inside;
+    /*
+     * Player one aims with the mouse, and that aim is re-derived from the
+     * pointer every tick.  When a solo keyboard player steers with the arrow
+     * keys we latch here so the pointer stops overwriting them; genuine mouse
+     * movement clears it and silently takes aim back.
+     */
+    int keyboard_aim_active;
     int mouse_activity_x;
     int mouse_activity_y;
     int cursor_visible;
@@ -312,15 +345,11 @@ typedef struct demo_app {
     vox_i32 previous_player_x[VOX_DIGS_MAX_SLOTS];
     vox_i32 previous_player_y[VOX_DIGS_MAX_SLOTS];
     vox_u32 last_event_sequence;
-    vox_u16 index_selection;
-    vox_u16 index_scroll;
-    double index_visual_row;
     int binding_capture;
     int binding_player;
     int keyboard_previous_down[DEMO_LOCAL_MAX];
     int keyboard_next_down[DEMO_LOCAL_MAX];
     int rope_down[DEMO_LOCAL_MAX];
-    int rope_latched[DEMO_LOCAL_MAX];
     int controller_disconnected;
     int settings_writable;
     vox_u32 controller_nav_stamp;
@@ -373,9 +402,11 @@ typedef struct demo_app {
     vox_u32 cap_supported_mask;
     int cap_qualified;
     vox_u16 bot_health_ttl[VOX_DIGS_MAX_SLOTS];
-    vox_script_runtime scripts;
-    int scripts_ready;
-    char script_manifest[512];
+    vox_digs_replay_frame replay_frame;
+    vox_u16 replay_frame_valid;
+    vox_u16 replay_playing;
+    vox_u16 replay_frame_hold_ticks;
+    vox_u16 replay_hold_ticks;
 } demo_app;
 
 static vox_u8 demo_pixels[DEMO_WIDTH * DEMO_HEIGHT * VOX_SOFTWARE_RGB_BYTES];
@@ -387,6 +418,18 @@ static vox_u8 demo_render_touched[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
 static demo_render_patch demo_render_patches[DEMO_RENDER_OVERLAY_CAPACITY];
 static vox_u32 demo_render_patch_count;
 static vox_digs_match demo_match;
+/*
+ * Everything that outlives the process.  Loaded once at startup, written
+ * when a match ends, and never erased from inside a released build.
+ */
+static digs_chronicle demo_chronicle;
+static int demo_chronicle_ready;
+/*
+ * The reset row has to be chosen twice.  It destroys a history that cannot
+ * be recovered or replayed, and a single mis-keyed RETURN on a menu is not
+ * enough intent for that.
+ */
+static int demo_chronicle_reset_armed;
 static vox_world demo_title_world;
 static vox_ui_surface demo_ui;
 static vox_software_target demo_target;
@@ -399,11 +442,27 @@ static const int demo_frame_caps[DEMO_FRAME_CAP_COUNT] = {
     15, 30, 60, 90, 120, 144, 0
 };
 static const char *demo_frame_names[DEMO_FRAME_CAP_COUNT] = {
-    "15 LOW FPS", "30", "60", "90", "120", "144", "UNLIMITED"
+    "15 LOW", "30", "60", "90", "120", "144", "UNLIMITED"
 };
+/*
+ * Time limits, in minutes.  Zero is UNLIMITED, which is not really unlimited
+ * -- digs_validate_rules refuses match_ticks == 0 and the lava ramp divides
+ * by (match_ticks - lava_start_tick), so a genuinely endless match would
+ * either be rejected or divide by zero.  Ninety-nine minutes is past any
+ * session anyone will play and keeps every one of those invariants true.
+ */
+static const int demo_time_limits[6] = {1, 2, 3, 5, 10, 0};
+#define DEMO_TIME_UNLIMITED_MINUTES 99
+static const char *demo_time_limit_names[6] = {
+    "1:00", "2:00", "3:00", "5:00", "10:00", "UNLIMITED"
+};
+/* When the lava starts, counted from the end.  AUTO is the old behaviour. */
+static const char *demo_lava_names[5] = {
+    "AUTO", "OFF", "LAST 1:00", "LAST 2:00", "LAST 5:00"
+};
+static const int demo_lava_lead_seconds[5] = {30, -1, 60, 120, 300};
 static const char *demo_map_names[3] = {"COAL RIDGE", "DEEPWORKS", "FURNACE YARD"};
 static const char *demo_gi_names[3] = {"COMPATIBILITY", "BALANCED", "SHOWCASE"};
-static const char *demo_mode_names[2] = {"FREE FOR ALL", "MINERS VS MACHINES"};
 static const char *demo_toggle_names[2] = {"OFF", "ON"};
 static const char *demo_flash_names[3] = {"OFF", "REDUCED", "FULL"};
 static const char *demo_gore_names[3] = {"OFF", "REDUCED", "FULL"};
@@ -414,9 +473,15 @@ static const char *demo_deadzone_names[4] = {
     "AUTO", "SMALL", "NORMAL", "LARGE"
 };
 static const char *demo_slowdown_names[3] = {"OFF", "LOW", "MEDIUM"};
-static const char *demo_rope_mode_names[2] = {"HOLD", "TOGGLE"};
 static const char *demo_haptic_names[DEMO_HAPTIC_LEVEL_COUNT] = {
     "OFF", "LOW", "NORMAL", "HEAVY"
+};
+static const char *demo_cosmetic_color_names[DEMO_COSMETIC_COLOR_COUNT] = {
+    "IRON", "SLATE", "RUST", "MOSS", "SAND", "COAL"
+};
+static const vox_u16 demo_cosmetic_materials[DEMO_COSMETIC_COLOR_COUNT] = {
+    VOX_MAT_METAL, VOX_MAT_STONE, VOX_MAT_SOIL,
+    VOX_MAT_BIOMASS, VOX_MAT_SAND, VOX_MAT_COAL
 };
 static const char *demo_arsenal_names[DEMO_ARSENAL_COUNT] = {
     "FULL WORKS", "MINER KIT", "POWDER KEG"
@@ -427,161 +492,6 @@ static const int demo_respawn_delays[5] = {0, 1, 2, 3, 5};
 static const char *demo_respawn_mode_names[2] = {"AUTO", "ON FIRE"};
 static const char demo_name_grid[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
-static const char *demo_bark_phrases[6][DEMO_BARK_PHRASE_COUNT] = {
-    {
-        "BACK TO WORK!", "KEEP DIGGING!", "DIG THAT COAL!",
-        "THE SHIFT IS LONG!", "WHERE IS MY TEA?", "GOOD WORK MINER!",
-        "PICK UP THE COAL!", "MIND THE LAVA!", "I SMELL FIRE!",
-        "DOWN WE GO!", "THE ROCK LOOKS SHY!", "MY PICK IS HUMMING!",
-        "ONE MORE SHOVEL!", "THE BOILER NEEDS BREAKFAST!",
-        "DUST IN MY TEA AGAIN!", "THAT WALL OWES ME COAL!",
-        "HELLO LITTLE TUNNEL!", "THE CART WILL NOT PUSH ITSELF!",
-        "STEADY BOOTS STEADY!", "I FOUND A VERY SMALL ROCK!",
-        "CLOCK IN AND DIG DOWN!", "THE MINE IS LISTENING!",
-        "MY HELMET HAS A PLAN!", "COAL FIRST QUESTIONS LATER!",
-        "THIS SHAFT NEEDS WINDOWS!", "A FINE DAY FOR DIRT!",
-        "WHO POLISHED THE BEDROCK?", "THE DUST TASTES PRODUCTIVE!",
-        "I CALL THIS TUNNEL KEVIN!", "MY LAMP WANTS ADVENTURE!",
-        "SWING PICK REPEAT!", "NO ROCK LEFT UNBOTHERED!",
-        "THE DEEP SHIFT BEGINS!", "BOOTS DOWN LAMP UP!",
-        "I HEAR BONUS COAL!", "THE WALL BLINKED FIRST!",
-        "MAKE ROOM FOR THE CART!", "MY BEARD KNOWS NORTH!",
-        "DIG NEATLY OR DIG TWICE!", "THE BOILER SAYS HELLO!",
-        "TODAY WE MINE TOMORROW ALSO!", "THIS DIRT HAS POTENTIAL!",
-        "A TUNNEL IS JUST A HALLWAY!", "I BROUGHT THE GOOD PICK!",
-        "KEEP CALM AND FIND BEDROCK!", "THE SHIFT BELL FEARS ME!",
-        "EVERY PEBBLE COUNTS!", "MY LUNCH IS SOMEWHERE BELOW!",
-        "THE MOUNTAIN LOOKS NERVOUS!", "I AM PAID BY THE CRATER!"
-    },
-    {
-        "WHERE ARE YOU?", "COME OUT MINER!", "I HEAR YOU!",
-        "CHECK THE SHAFT!", "SHOW YOUR HELMET!", "I SEE TRACKS!",
-        "NO HIDING HERE!", "I SEE YOUR TUNNEL!", "TOO QUIET!",
-        "THE DUST MOVES!", "YOUR BOOTS ARE LOUD!", "I SAW THAT LAMP!",
-        "THE ROCKS ARE WHISPERING!", "COME OUT AND CLOCK IN!",
-        "I KNOW THAT COUGH!", "SOMEONE MOVED MY PEBBLE!",
-        "THIS TUNNEL SMELLS SUSPICIOUS!", "I HEAR A NERVOUS PICK!",
-        "YOUR SHADOW NEEDS A HELMET!", "THE SHAFT HAS EYES TODAY!",
-        "STOP HIDING BEHIND GEOLOGY!", "I FOUND YOUR FOOTPRINT!",
-        "THAT WAS NOT THE WIND!", "HELLO MYSTERY MINER!",
-        "I WILL CHECK EVERY CRATER!", "THE LAVA KNOWS WHERE YOU ARE!",
-        "YOUR CART LEFT TRACKS!", "AHA A FRESH TUNNEL!",
-        "I CAN HEAR YOUR BEARD!", "THE DUST JUST SNEEZED!",
-        "COME OUT TINY MENACE!", "WHO KICKED THAT COAL?",
-        "THE WALL POINTED THAT WAY!", "YOUR LAMP GAVE YOU AWAY!",
-        "I HAVE A MAP SORT OF!", "NO CORNER IS THAT DARK!",
-        "I SMELL FRESH TROUBLE!", "THE BOILER HEARD YOU TOO!",
-        "ARE YOU UNDER THIS ROCK?", "THE TUNNEL IS STILL WARM!",
-        "I COUNT ONE EXTRA SHADOW!", "SHOW YOURSELF SHIFT DODGER!",
-        "THOSE TRACKS ARE NOT MINE!", "I HEARD A WEAPON CLICK!",
-        "THE MINE CANNOT KEEP SECRETS!", "YOUR HIDING SPOT HAS ECHOES!",
-        "I WILL FOLLOW THE SMOKE!", "SOMETHING JUST DUCKED!",
-        "THE COAL LOOKS ALARMED!", "READY OR NOT I AM DIGGING!"
-    },
-    {
-        "I WILL GET YOU!", "EAT HOT IRON!", "GET OUT MINER!",
-        "HERE I COME!", "DUCK THIS!", "YOUR SHIFT ENDS NOW!",
-        "EAT THE BOILER!", "MAKE A CRATER!", "FIRE IN THE HOLE!",
-        "YOU ARE MINE!", "MIND THE FLYING HARDWARE!",
-        "SPECIAL DELIVERY MINER!", "THIS PICK HAS OPINIONS!",
-        "CLOCK OUT THE LOUD WAY!", "CATCH THIS BRASS SURPRISE!",
-        "YOUR HELMET NEEDS TESTING!", "I BROUGHT EXTRA CRATERS!",
-        "THE BOILER DEMANDS JUSTICE!", "DUCK LOWER!",
-        "LET US DISCUSS BALLISTICS!", "MY AIM IS MOSTLY CERTAIN!",
-        "TIME FOR RAPID EXCAVATION!", "HERE COMES THE TOOLBOX!",
-        "THE SHIFT JUST GOT PERSONAL!", "I HAVE A LOUD SOLUTION!",
-        "STAND STILL FOR SCIENCE!", "YOUR TUNNEL ENDS HERE!",
-        "MEET MY INDUSTRIAL METHOD!", "I FOUND THE FIRE BUTTON!",
-        "THIS ONE HAS YOUR NAME!", "PREPARE FOR UNPLANNED MINING!",
-        "I AM REDECORATING YOUR HILL!", "BRACE YOUR BOOTS!",
-        "THE CART SENDS REGARDS!", "I CALL THIS AGGRESSIVE DIGGING!",
-        "YOUR COVER LOOKS TEMPORARY!", "HOT METAL COMING THROUGH!",
-        "LET THE ROCKS DECIDE!", "I HAVE TOO MANY NAILS!",
-        "AIM LAMP FIRE!", "THIS WILL WAKE THE FOREMAN!",
-        "THE CRATER IS RESERVED!", "NOTHING PERSONAL JUST MINING!",
-        "YOUR BEARD CANNOT SAVE YOU!", "FULL STEAM AND BAD IDEAS!",
-        "THE MOUNTAIN WANTS A REMATCH!", "TRY DODGING THE TOOL CHEST!",
-        "I BROUGHT THUNDER UNDERGROUND!", "LOOK OUT BELOW AND ABOVE!",
-        "THE MINE HAS CHOSEN VIOLENCE!"
-    },
-    {
-        "TEA BREAK!", "NOT ENOUGH COAL!", "FALL BACK!",
-        "I NEED A PLAN!", "SAVE MY BEARD!", "TO THE SHAFT!",
-        "THE TUNNEL FALLS!", "I WILL BE BACK!", "TOO HOT HERE!",
-        "RUN MINER RUN!", "TACTICAL TEA IMMEDIATELY!",
-        "MY BOOTS VOTE NO!", "THE BOILER CAN COVER ME!",
-        "THIS WAY LOOKS LESS EXPLODEY!", "I FORGOT MY BRAVE PICK!",
-        "RETREAT WITH PROFESSIONAL DIGNITY!", "THE ROCKS ARE WINNING!",
-        "I NEED A SAFER HOLE!", "NOPE NOPE DOWN THE SHAFT!",
-        "MY HELMET SAYS LEAVE!", "TIME FOR REVERSE MINING!",
-        "I HAVE SEEN ENOUGH FIRE!", "THE CART IS MY EXIT PLAN!",
-        "SAVE THE TEA FIRST!", "THAT CRATER WAS TOO CLOSE!",
-        "I AM REPOSITIONING HEROICALLY!", "THE LAVA HAS BAD MANNERS!",
-        "NEW PLAN RUN SIDEWAYS!", "I REQUIRE MORE WALLS!",
-        "THIS TUNNEL NEEDS A BACK DOOR!", "MY BEARD IS RETREATING!",
-        "I LEFT THE STOVE ON!", "BACK TO THE NICE DARK CORNER!",
-        "THE SHIFT CAN WAIT!", "I NEED FRESH TROUSERS!",
-        "THAT SOUND MEANS GO!", "I AM TOO VALUABLE TO CRATER!",
-        "THE BOILER DID NOT WARN ME!", "MOVE BOOTS MOVE!",
-        "I PREFER DISTANT DANGER!", "THIS HILL IS COMPROMISED!",
-        "MY PLAN HAS BECOME RUNNING!", "FIND COVER FIND TEA!",
-        "THE FOREMAN WILL UNDERSTAND!", "I AM SAVING AMMUNITION AND ME!",
-        "TO THE EMERGENCY TUNNEL!", "THE DUST IS TOO EXCITED!",
-        "LET SOMEONE ELSE STAND THERE!", "I SHALL PANIC METHODICALLY!",
-        "THE SAFE DIRECTION IS AWAY!"
-    },
-    {
-        "THAT HURTS!", "MY BONES!", "WHO DID THAT?",
-        "MY TROUSERS!", "I AM HURT!", "THAT WAS MEAN!",
-        "GET THE MEDIC!", "OW MY BEARD!", "I FELT THAT!",
-        "YOU WILL PAY!", "MY HELMET RANG!", "THAT HIT MY EVERYTHING!",
-        "I NEEDED THAT LIMB!", "MY BOOTS HAVE COMPLAINTS!",
-        "THE MEDIC OWES ME TEA!", "THAT WAS NOT IN TRAINING!",
-        "MY SPINE JUST CLOCKED OUT!", "WHO THREW THE MOUNTAIN?",
-        "I HAVE DEVELOPED EXTRA PAIN!", "MY BEARD TOOK THE WORST OF IT!",
-        "THAT DENT HAS A DENT!", "I HEARD MY BONES ARGUE!",
-        "PLEASE STOP REMODELING ME!", "MY HELMET SAW STARS!",
-        "THAT WAS EXTREMELY RUDE!", "I AM LEAKING SHIFT HOURS!",
-        "MY KNEES HAVE RESIGNED!", "THAT TOOL WAS NOT FRIENDLY!",
-        "I TASTE COPPER AND REGRET!", "MY COAT NEEDS A MEDIC!",
-        "OW RIGHT IN THE MINER!", "THAT MOVED MY INTERNAL COAL!",
-        "MY ANKLES FILED A REPORT!", "I WAS USING THAT SHOULDER!",
-        "THE PAIN HAS ECHOES!", "MY LAMP WENT SIDEWAYS!",
-        "I AM MOSTLY BRUISE NOW!", "THAT RATTLED THE TOOLBOX!",
-        "MY TEETH CHANGED SHIFTS!", "I OBJECT TO THIS DAMAGE!",
-        "THAT FOUND THE SORE BIT!", "MY BOOTS CANNOT FEEL THEIR BOOTS!",
-        "I REQUIRE INDUSTRIAL BANDAGES!", "THE FLOOR HIT ME TOO!",
-        "MY BEARD IS IN SHOCK!", "THAT WAS A WHOLE CRATER!",
-        "I HAVE BEEN POORLY MINED!", "MY ELBOW HAS LEFT THE CHAT!",
-        "EVERYTHING HURTS IN STEREO!", "I WANT MY OLD SHAPE BACK!"
-    },
-    {
-        "SHIFT COMPLETE!", "THAT IS HOW WE DIG!", "GOOD WORK!",
-        "ANOTHER ONE DOWN!", "THAT ONE IS MINE!", "WHAT A BLAST!",
-        "THE SHAFT IS MINE!", "BACK IN THE CART!", "TOO EASY!",
-        "MINER WINS AGAIN!", "PUT THAT ON MY TIMESHEET!",
-        "THE BOILER APPLAUDS!", "CRATER DELIVERED ON TIME!",
-        "MY BEARD NEVER DOUBTED ME!", "THAT WAS TEXTBOOK MINING!",
-        "TEA FOR THE CHAMPION!", "THE MOUNTAIN KNOWS MY NAME!",
-        "CLOCK THAT VICTORY!", "A FINE PIECE OF LOUD WORK!",
-        "THE CART GETS A TROPHY!", "I CALL THAT QUALITY CONTROL!",
-        "ANOTHER SHIFT ANOTHER LEGEND!", "THE ROCKS CHEER QUIETLY!",
-        "PERFECTLY PLANNED PROBABLY!", "MY HELMET TAKES THE CREDIT!",
-        "THAT CRATER HAS STYLE!", "THE FOREMAN MISSED EVERYTHING!",
-        "BOOTS ONE TROUBLE ZERO!", "A WIN FOR INDUSTRIAL SCIENCE!",
-        "I DESERVE THE GOOD TEA!", "THE DUST SETTLED IN MY FAVOR!",
-        "THIS IS WHY I BROUGHT NAILS!", "THE SHIFT BELL SALUTES ME!",
-        "I MINED THE COMPETITION!", "THE BOILER NEVER MISFIRES TWICE!",
-        "A MASTERPIECE IN DIRT!", "THE TOOLBOX REMAINS UNDEFEATED!",
-        "VICTORY SMELLS LIKE COAL!", "MY CART HAS FRONT ROW SEATS!",
-        "THAT OUGHT TO BE IN THE MANUAL!", "THE DEEP SHIFT DELIVERS!",
-        "BRASS BOOTS AND BRILLIANCE!", "THE MOUNTAIN WILL REMEMBER THAT!",
-        "AN EFFICIENT LITTLE DISASTER!", "WRITE THAT DOWN FOREMAN!",
-        "THE LAMP STAYED ON MOSTLY!", "A CLEAN WIN AND DIRTY COAT!",
-        "MY PICK DEMANDS AN ENCORE!", "SHIFT WON LUNCH EARNED!",
-        "THE LAST COAL IS ON ME!"
-    }
-};
 static const vox_u16 demo_arsenal_masks[DEMO_ARSENAL_COUNT] = {
     0x07FFU, 0x00F1U, 0x030EU
 };
@@ -977,7 +887,9 @@ static void demo_audio_speak_text(demo_app *app, const char *text_value,
     speech.profile = profile;
     speech.priority = priority;
     speech.pan_q15 = pan_q15;
-    speech.gain_q15 = profile == VOX_AUDIO_SPEECH_DEEP ? 15000U : 11000U;
+    speech.gain_q15 = (profile == VOX_AUDIO_SPEECH_DEEP ||
+                       profile == VOX_AUDIO_SPEECH_CINDER) ? 15000U :
+                      profile == VOX_AUDIO_SPEECH_RIVET ? 13000U : 11000U;
     demo_audio_lock(app);
     speech.event_id = ++app->audio_event_id;
     (void)vox_audio_speak(&app->audio, &speech);
@@ -1043,198 +955,121 @@ static void demo_copy_text(char *destination, size_t capacity,
     destination[index] = '\0';
 }
 
-static int demo_bark_context(const demo_app *app, int player)
+
+
+
+
+
+
+/*
+ * Which voice speaks for this slot.
+ *
+ * The three opponents get their own; a human keeps the deep stock voice so
+ * you can tell yourself apart from them without looking.
+ */
+static vox_u8 demo_speech_profile(int player)
 {
-    if (app->miner_hit_ttl[player] > 0U) return 4;
-    if (app->victory_bark_ttl[player] > 0U) return 5;
-    if (demo_match.health[player] < 35U) return 3;
-    if (demo_match.weapon_cooldown[player] > 0U) return 2;
-    if (vox_digs_player_is_bot(&demo_match, (vox_u16)player)) {
-        int state = (int)demo_match.bots[player].mode;
-        return state >= 0 && state <= 3 ? state : 0;
+    if (player < 0 || (vox_u16)player >= demo_match.rules.player_count) {
+        return (vox_u8)VOX_AUDIO_SPEECH_HIGH;
     }
-    if (demo_match.player_actions[player] != 0U) return 1;
-    return 0;
+    if (!vox_digs_player_is_bot(&demo_match, (vox_u16)player)) {
+        return (vox_u8)VOX_AUDIO_SPEECH_CUSTOM;
+    }
+    switch (vox_digs_bot_archetype(&demo_match, (vox_u16)player)) {
+    case VOX_DIGS_ARCHETYPE_ENGINEER:
+        return (vox_u8)VOX_AUDIO_SPEECH_RIVET;
+    case VOX_DIGS_ARCHETYPE_BERSERKER:
+        return (vox_u8)VOX_AUDIO_SPEECH_CINDER;
+    default:
+        break;
+    }
+    return (vox_u8)VOX_AUDIO_SPEECH_FLAMEY;
 }
 
-static vox_u32 demo_bark_hash(vox_u32 seed, vox_u32 value)
+/*
+ * Speak a line the simulation already chose.
+ *
+ * The port no longer decides what anyone says.  It used to pick a phrase from
+ * a table and, one time in four, assemble one from adjective/noun/verb lists
+ * -- which is where the nonsense came from.  Selection now happens in the
+ * simulation, where it is hashed and reproducible, and all that is left here
+ * is substituting the name and putting it on the screen.
+ */
+/*
+ * Put a line into readable form: the one substitution there is, %T for
+ * whoever is being talked about.
+ *
+ * Shared rather than inlined into the speech bubble, because the inbox
+ * reader has to do exactly the same thing to exactly the same lines, and a
+ * message that reads "WHERE HAVE YOU BEEN, %T" is the sort of thing that
+ * ships.
+ */
+static void demo_expand_line(vox_u16 line_id, const char *about,
+                             char *out, size_t capacity)
 {
-    seed ^= value + 0x9E3779B9U + (seed << 6) + (seed >> 2);
-    seed *= 16777619U;
-    return seed;
-}
-
-static int demo_bark_target(int player)
-{
-    int target;
-    int best = -1;
-    long best_distance = 0x7FFFFFFFL;
-    long player_x = demo_match.players[player].position_x.value_q16 /
-                    65536L;
-    long player_y = demo_match.players[player].position_y.value_q16 /
-                    65536L;
-    for (target = 0; target < (int)demo_match.rules.player_count; ++target) {
-        long dx;
-        long dy;
-        long distance;
-        if (target == player || !demo_match.alive[target]) continue;
-        dx = demo_match.players[target].position_x.value_q16 / 65536L -
-             player_x;
-        dy = demo_match.players[target].position_y.value_q16 / 65536L -
-             player_y;
-        if (dx < 0L) dx = -dx;
-        if (dy < 0L) dy = -dy;
-        distance = dx + dy;
-        if (distance < best_distance) {
-            best_distance = distance;
-            best = target;
+    const char *source = digs_lines_text(line_id);
+    size_t written = 0U;
+    size_t in = 0U;
+    if (out == 0 || capacity == 0U) {
+        return;
+    }
+    if (source == 0) {
+        out[0] = '\0';
+        return;
+    }
+    if (about == 0) {
+        about = "SOMEBODY";
+    }
+    while (source[in] != '\0' && written + 1U < capacity) {
+        if (source[in] == '%' && source[in + 1] == 'T') {
+            size_t copied = 0U;
+            while (about[copied] != '\0' && written + 1U < capacity) {
+                out[written++] = about[copied++];
+            }
+            in += 2U;
+            continue;
         }
+        out[written++] = source[in++];
     }
-    return best;
+    out[written] = '\0';
 }
 
-static const char *demo_bark_material_name(vox_u16 material)
+static void demo_speak_line(demo_app *app, int player, int target,
+                            vox_u16 line_id, int bot)
 {
-    static const char *names[VOX_MAT_COUNT] = {
-        "OPEN AIR", "BEDROCK", "STONE", "SOIL", "COAL", "BIOMASS",
-        "SAND", "WATER", "LAVA", "METAL", "FLESH", "BLOOD",
-        "SMOKE", "FIREDAMP"
-    };
-    return material < VOX_MAT_COUNT ? names[material] : "ROCK";
-}
-
-static vox_u16 demo_bark_nearby_material(int player)
-{
-    int center_x = (int)(demo_match.players[player].position_x.value_q16 /
-                         65536L);
-    int center_y = (int)(demo_match.players[player].position_y.value_q16 /
-                         65536L);
-    int radius;
-    for (radius = 0; radius <= 6; ++radius) {
-        int y;
-        for (y = center_y - radius; y <= center_y + radius; ++y) {
-            int x;
-            for (x = center_x - radius; x <= center_x + radius; ++x) {
-                const vox_cell *cell;
-                if (x < 0 || y < 0 || x >= (int)VOX_WORLD_WIDTH ||
-                    y >= (int)VOX_WORLD_HEIGHT) continue;
-                cell = vox_world_cell(&demo_match.world, (vox_u32)x,
-                                      (vox_u32)y, VOX_WORLD_DEPTH - 1U);
-                if (cell != 0 && cell->material != VOX_MAT_AIR) {
-                    return cell->material;
-                }
+    const char *source = digs_lines_text(line_id);
+    char phrase[96];
+    if (player < 0 || player >= (int)demo_match.rules.player_count ||
+        source == 0 || source[0] == '\0') {
+        return;
+    }
+    demo_expand_line(line_id,
+                     (target >= 0 &&
+                      target < (int)demo_match.rules.player_count) ?
+                     demo_player_name(app, (vox_u16)target) : "SOMEBODY",
+                     phrase, sizeof(phrase));
+    /*
+     * One bubble on screen at a time.  Four miners shouting over each other
+     * turned the battlefield into a noticeboard, and the conversation is
+     * easier to follow -- and easier to read at this resolution -- when only
+     * the newest line is up.
+     */
+    {
+        int other;
+        for (other = 0; other < (int)VOX_DIGS_MAX_SLOTS; ++other) {
+            if (other != player) {
+                app->bubbles[other].ttl = 0U;
             }
         }
     }
-    return VOX_MAT_AIR;
-}
-
-static const char *demo_bark_hazard(int player)
-{
-    int center_x = (int)(demo_match.players[player].position_x.value_q16 /
-                         65536L);
-    int center_y = (int)(demo_match.players[player].position_y.value_q16 /
-                         65536L);
-    int y;
-    if (demo_match.lava_surface_y < VOX_WORLD_HEIGHT &&
-        center_y + 28 >= (int)demo_match.lava_surface_y) return "THE LAVA";
-    for (y = center_y - 8; y <= center_y + 8; ++y) {
-        int x;
-        for (x = center_x - 8; x <= center_x + 8; ++x) {
-            const vox_cell *cell;
-            if (x < 0 || y < 0 || x >= (int)VOX_WORLD_WIDTH ||
-                y >= (int)VOX_WORLD_HEIGHT) continue;
-            cell = vox_world_cell(&demo_match.world, (vox_u32)x,
-                                  (vox_u32)y, VOX_WORLD_DEPTH - 1U);
-            if (cell == 0) continue;
-            if (cell->material == VOX_MAT_LAVA) return "THE LAVA";
-            if (cell->material == VOX_MAT_FIREDAMP) return "THE FIREDAMP";
-            if (cell->material == VOX_MAT_SMOKE) return "THE SMOKE";
-            if (cell->material == VOX_MAT_WATER) return "THE WATER";
-        }
-    }
-    return "THAT TROUBLE";
-}
-
-static void demo_bark_generate(demo_app *app, int player, int context,
-                               vox_u32 hash, char *phrase)
-{
-    static const char *adjectives[12] = {
-        "BRASS", "DUSTY", "SNEAKY", "WOBBLY", "BOILING", "TINY",
-        "LOUD", "GRUMPY", "RUSTY", "FANCY", "CROOKED", "STEAMY"
-    };
-    static const char *nouns[12] = {
-        "BOILER", "PICK", "CART", "HELMET", "BEARD", "SHOVEL",
-        "LAMP", "CRATER", "TUNNEL", "BOOT", "GEAR", "PEBBLE"
-    };
-    static const char *verbs[12] = {
-        "RATTLES", "GRUMBLES", "DIGS", "SPARKS", "WOBBLES", "SINGS",
-        "PLOTS", "ROLLS", "HISSES", "CLANKS", "BOUNCES", "SNORES"
-    };
-    int target = demo_bark_target(player);
-    const char *target_name = target >= 0 ?
-        demo_player_name(app, (vox_u16)target) : "MYSTERY MINER";
-    vox_u16 weapon_id = demo_match.selected_weapon[player];
-    const vox_digs_weapon_properties *weapon =
-        vox_digs_weapon_get(weapon_id);
-    const char *weapon_name = weapon == 0 ? "TOOL" : weapon->name;
-    const char *material = demo_bark_material_name(
-        demo_bark_nearby_material(player));
-    const char *hazard = demo_bark_hazard(player);
-    const char *adjective = adjectives[(hash >> 4) % 12U];
-    const char *noun = nouns[(hash >> 9) % 12U];
-    const char *verb = verbs[(hash >> 14) % 12U];
-    if (context == 0) {
-        sprintf(phrase, "MY %s %s %s BY THE %s!", adjective, noun,
-                verb, material);
-    } else if (context == 1) {
-        sprintf(phrase, "%s, I HEAR YOU BY THE %s!", target_name,
-                material);
-    } else if (context == 2) {
-        sprintf(phrase, "%s, MEET MY %s!", target_name, weapon_name);
-    } else if (context == 3) {
-        sprintf(phrase, "GET ME AWAY FROM %s, %s!", hazard, target_name);
-    } else if (context == 4) {
-        sprintf(phrase, "%s HIT ME WITH THAT %s NONSENSE!", target_name,
-                adjective);
-    } else {
-        sprintf(phrase, "%s, MY %s %s VICTORIOUSLY!", target_name,
-                noun, verb);
-    }
-}
-
-static void demo_bark(demo_app *app, int player, int context, int bot)
-{
-    vox_u32 required_gap = bot ? DEMO_BOT_BARK_COOLDOWN :
-        (app->options.dummy_mode ? 0U : DEMO_BARK_COOLDOWN);
-    vox_u32 phrase_index;
-    const char *phrase;
-    char generated[64];
-    vox_u32 hash;
-    if (player < 0 || player >= (int)demo_match.rules.player_count ||
-        !demo_match.alive[player] || context < 0 || context >= 6) return;
-    if ((required_gap > 0U && app->last_bark_tick[player] != 0U &&
-         demo_match.tick < app->last_bark_tick[player] + required_gap) ||
-        (app->global_bark_tick != 0U &&
-         demo_match.tick < app->global_bark_tick + DEMO_GLOBAL_BARK_GAP)) {
-        return;
-    }
-    hash = demo_bark_hash(demo_match.rules.seed, demo_match.tick / 7U);
-    hash = demo_bark_hash(hash, (vox_u32)player * 131U +
-                          (vox_u32)context * 977U);
-    hash = demo_bark_hash(hash, ++app->bark_sequence[player]);
-    phrase_index = hash % DEMO_BARK_PHRASE_COUNT;
-    phrase = demo_bark_phrases[context][phrase_index];
-    if ((hash & 3U) == 0U) {
-        demo_bark_generate(app, player, context, hash, generated);
-        phrase = generated;
-    }
     demo_copy_text(app->bubbles[player].text,
                    sizeof(app->bubbles[player].text), phrase);
-    app->bubbles[player].ttl = DEMO_BUBBLE_TICKS;
+    /* The simulation owns how long a line occupies the room; the bubble
+     * shows it for exactly that, so both agree on what interrupting means. */
+    app->bubbles[player].ttl = vox_digs_speech_duration(line_id);
     app->last_bark_tick[player] = demo_match.tick;
     app->global_bark_tick = demo_match.tick;
-    demo_audio_speak_text(app, phrase, VOX_AUDIO_SPEECH_HIGH,
+    demo_audio_speak_text(app, phrase, demo_speech_profile(player),
                           bot ? VOX_AUDIO_PRIORITY_BOT_BARK :
                           VOX_AUDIO_PRIORITY_PLAYER_BARK,
                           demo_player_pan((vox_u16)player));
@@ -1347,6 +1182,14 @@ static void demo_audio_open(demo_app *app)
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
         return;
     }
+    /*
+     * The saved voice has to reach the engine the moment it exists, or the
+     * player's miner speaks in the default until they next open the screen
+     * and nudge something.
+     */
+    (void)vox_audio_set_voice(&app->audio, (vox_u16)app->voice_speed,
+                              (vox_u16)app->voice_pitch,
+                              (vox_u16)app->voice_tone);
     SDL_PauseAudioDevice(app->audio_device, 0);
 }
 
@@ -1360,65 +1203,6 @@ static void demo_audio_close(demo_app *app)
         SDL_CloseAudioDevice(app->audio_device);
         app->audio_device = 0U;
     }
-}
-
-static int demo_scripts_open(demo_app *app)
-{
-    static const char suffix[] = "share/digs/scripts/manifest.txt";
-    static const char source_path[] = "games/digs/scripts/manifest.txt";
-    vox_script_report report;
-    char *base;
-    vox_result status;
-    if (vox_script_runtime_init(&app->scripts, 0) != VOX_OK) {
-        return 0;
-    }
-    app->script_manifest[0] = '\0';
-    base = SDL_GetBasePath();
-    if (base != 0 && strlen(base) + sizeof(suffix) <
-        sizeof(app->script_manifest)) {
-        strcpy(app->script_manifest, base);
-        strcat(app->script_manifest, suffix);
-    }
-    if (base != 0) SDL_free(base);
-    status = app->script_manifest[0] == '\0' ? VOX_SCRIPT_ERR_IO :
-             vox_script_reload_manifest(&app->scripts,
-                                         app->script_manifest, &report);
-    if (status != VOX_OK) {
-        strcpy(app->script_manifest, source_path);
-        status = vox_script_reload_manifest(&app->scripts,
-                                             app->script_manifest, &report);
-    }
-    if (status != VOX_OK) {
-        fprintf(stderr, "DIGS script load failed: %s\n",
-                vox_script_last_error(&app->scripts));
-        return 0;
-    }
-    app->scripts_ready = 1;
-    return 1;
-}
-
-static int demo_scripts_reload(demo_app *app)
-{
-    vox_script_report report;
-    vox_result status;
-    if (!app->scripts_ready) return demo_scripts_open(app);
-    status = vox_script_reload_manifest(&app->scripts,
-                                         app->script_manifest, &report);
-    if (status != VOX_OK) {
-        fprintf(stderr, "DIGS F5 reload rejected: %s\n",
-                vox_script_last_error(&app->scripts));
-        return 0;
-    }
-    fprintf(stdout, "DIGS scripts reloaded source=%08lx catalog=%08lx\n",
-            (unsigned long)report.source_hash,
-            (unsigned long)report.catalog_hash);
-    return 1;
-}
-
-static void demo_scripts_close(demo_app *app)
-{
-    vox_script_runtime_shutdown(&app->scripts);
-    app->scripts_ready = 0;
 }
 
 static int demo_q16_to_screen(vox_i32 value, vox_u32 screen_size,
@@ -1487,7 +1271,7 @@ static void demo_bindings_default(demo_app *app)
     app->bindings.keyboard_right[0] = SDL_SCANCODE_D;
     app->bindings.keyboard_jump[0] = SDL_SCANCODE_SPACE;
     app->bindings.keyboard_steam[0] = SDL_SCANCODE_LSHIFT;
-    /* P1 ropes with the right mouse button.  A keyboard binding remains
+    /* P1 ropes with the middle mouse button.  A keyboard binding remains
      * available through Controls for players who deliberately want one. */
     app->bindings.keyboard_rope[0] = SDL_SCANCODE_UNKNOWN;
     app->bindings.keyboard_fire[0] = SDL_SCANCODE_E;
@@ -1695,7 +1479,6 @@ static void demo_input_defaults(demo_app *app)
         app->player_input[player].sensitivity = 1;
         app->player_input[player].deadzone = 0;
         app->player_input[player].aim_slowdown = 1;
-        app->player_input[player].rope_mode = DEMO_ROPE_HOLD;
         app->player_input[player].switch_stamp = 0U;
         app->player_input[player].suppress_ticks = 0;
         app->player_input[player].aim_direction_x = player == 0 ? 1.0 : -1.0;
@@ -1758,11 +1541,21 @@ static void demo_refresh_roster(demo_app *app)
 
 static void demo_match_settings_defaults(demo_app *app)
 {
+    int player;
     strcpy(app->human_names[0], "MINER 1");
     strcpy(app->human_names[1], "MINER 2");
     strcpy(app->bot_names[0], "RIVET");
     strcpy(app->bot_names[1], "CINDER");
-    app->match_minutes = 2;
+    strcpy(app->bot_names[2], "FLAMEY");
+    app->time_limit_index = 1;
+    app->lava_index = 0;
+    app->voice_pitch = 120;
+    app->voice_tone = 100;
+    app->voice_speed = 100;
+    for (player = 0; player < (int)DEMO_LOCAL_MAX; ++player) {
+        app->outfit_color[player] = player == 0 ? 0 : 3;
+        app->helmet_color[player] = 0;
+    }
     app->score_limit_index = 0;
     app->respawn_mode = 0;
     app->respawn_delay_index = 3;
@@ -1794,6 +1587,42 @@ static int demo_input_settings_path(char *path, int capacity,
     return 1;
 }
 
+/*
+ * Where the chronicle lives, next to settings.cfg.  The same override that
+ * lets the tests point settings somewhere harmless points this too, so a
+ * self-test never writes over a real player's history.
+ */
+static int demo_chronicle_path(char *path, int capacity)
+{
+    return demo_input_settings_path(path, capacity, "chronicle.dat");
+}
+
+/*
+ * Take everything this match taught them and put it away.
+ *
+ * Called once when the match ends.  Export first -- the drift and the pair
+ * accounts are computed there -- then write, atomically, so a crash halfway
+ * through leaves the previous history intact rather than half of two.
+ */
+static void demo_chronicle_commit(void)
+{
+    char path[1032];
+    if (!demo_chronicle_ready) {
+        return;
+    }
+    if (vox_digs_match_export_memory(&demo_match,
+                                     &demo_chronicle.memory) != VOX_OK) {
+        return;
+    }
+    if (demo_chronicle.matches_recorded < 65535U) {
+        demo_chronicle.matches_recorded++;
+    }
+    if (demo_chronicle_path(path, (int)sizeof(path))) {
+        (void)digs_chronicle_save(&demo_chronicle, path);
+    }
+}
+
+
 static void demo_validate_input_settings(demo_app *app)
 {
     int player;
@@ -1813,10 +1642,6 @@ static void demo_validate_input_settings(demo_app *app)
         if (input->aim_slowdown < 0 || input->aim_slowdown > 2) {
             input->aim_slowdown = 1;
         }
-        if (input->rope_mode < DEMO_ROPE_HOLD ||
-            input->rope_mode > DEMO_ROPE_TOGGLE) {
-            input->rope_mode = DEMO_ROPE_HOLD;
-        }
         input->active_source = input->preference == DEMO_INPUT_CONTROLLER ?
                                DEMO_SOURCE_CONTROLLER : DEMO_SOURCE_KEYBOARD;
         {
@@ -1829,6 +1654,16 @@ static void demo_validate_input_settings(demo_app *app)
                     invalid_binding = 1;
                 }
             }
+        }
+    }
+    for (player = 0; player < (int)DEMO_LOCAL_MAX; ++player) {
+        if (app->outfit_color[player] < 0 ||
+            app->outfit_color[player] >= DEMO_COSMETIC_COLOR_COUNT) {
+            app->outfit_color[player] = player == 0 ? 0 : 3;
+        }
+        if (app->helmet_color[player] < 0 ||
+            app->helmet_color[player] >= DEMO_COSMETIC_COLOR_COUNT) {
+            app->helmet_color[player] = 0;
         }
     }
     {
@@ -1883,8 +1718,23 @@ static void demo_validate_input_settings(demo_app *app)
         app->cap_cache_us = 0U;
         app->cap_cache_mask = 0U;
     }
-    if (app->match_minutes != 2 && app->match_minutes != 3) {
-        app->match_minutes = 2;
+    if (app->time_limit_index < 0 || app->time_limit_index > 5) {
+        app->time_limit_index = 1;
+    }
+    if (app->lava_index < 0 || app->lava_index > 4) {
+        app->lava_index = 0;
+    }
+    if (app->voice_pitch < (int)VOX_AUDIO_VOICE_PITCH_MIN ||
+        app->voice_pitch > (int)VOX_AUDIO_VOICE_PITCH_MAX) {
+        app->voice_pitch = 120;
+    }
+    if (app->voice_tone < (int)VOX_AUDIO_VOICE_FORMANT_MIN ||
+        app->voice_tone > (int)VOX_AUDIO_VOICE_FORMANT_MAX) {
+        app->voice_tone = 100;
+    }
+    if (app->voice_speed < (int)VOX_AUDIO_VOICE_RATE_MIN ||
+        app->voice_speed > (int)VOX_AUDIO_VOICE_RATE_MAX) {
+        app->voice_speed = 100;
     }
     if (app->score_limit_index < 0 || app->score_limit_index > 3) {
         app->score_limit_index = 0;
@@ -1910,7 +1760,10 @@ static int demo_load_input_settings(demo_app *app)
     demo_options saved_options;
     demo_bindings saved_bindings;
     char saved_human_names[DEMO_LOCAL_MAX][DEMO_NAME_CAPACITY];
-    int saved_match_minutes;
+    int saved_outfit_color[DEMO_LOCAL_MAX];
+    int saved_helmet_color[DEMO_LOCAL_MAX];
+    int saved_time_limit_index;
+    int saved_lava_index;
     int saved_score_limit_index;
     int saved_respawn_mode;
     int saved_respawn_delay_index;
@@ -1928,7 +1781,12 @@ static int demo_load_input_settings(demo_app *app)
     saved_bindings = app->bindings;
     memcpy(saved_human_names, app->human_names,
            sizeof(saved_human_names));
-    saved_match_minutes = app->match_minutes;
+    memcpy(saved_outfit_color, app->outfit_color,
+           sizeof(saved_outfit_color));
+    memcpy(saved_helmet_color, app->helmet_color,
+           sizeof(saved_helmet_color));
+    saved_time_limit_index = app->time_limit_index;
+    saved_lava_index = app->lava_index;
     saved_score_limit_index = app->score_limit_index;
     saved_respawn_mode = app->respawn_mode;
     saved_respawn_delay_index = app->respawn_delay_index;
@@ -1950,7 +1808,7 @@ static int demo_load_input_settings(demo_app *app)
         } else if (sscanf(line, "P1_SLOWDOWN=%d", &value) == 1) {
             app->player_input[0].aim_slowdown = value;
         } else if (sscanf(line, "P1_ROPE_MODE=%d", &value) == 1) {
-            app->player_input[0].rope_mode = value;
+            (void)value; /* v0.0.5 always uses toggle grapple behavior. */
         } else if (sscanf(line, "P2_MODE=%d", &value) == 1) {
             app->player_input[1].preference = value;
         } else if (sscanf(line, "P2_SENSITIVITY=%d", &value) == 1) {
@@ -1960,7 +1818,7 @@ static int demo_load_input_settings(demo_app *app)
         } else if (sscanf(line, "P2_SLOWDOWN=%d", &value) == 1) {
             app->player_input[1].aim_slowdown = value;
         } else if (sscanf(line, "P2_ROPE_MODE=%d", &value) == 1) {
-            app->player_input[1].rope_mode = value;
+            (void)value; /* v0.0.5 always uses toggle grapple behavior. */
         } else if (sscanf(line, "MASTER_VOLUME=%d", &value) == 1) {
             app->options.master_volume = value;
         } else if (sscanf(line, "FRAME_CAP_INDEX=%d", &value) == 1) {
@@ -1998,8 +1856,27 @@ static int demo_load_input_settings(demo_app *app)
         } else if (sscanf(line, "CAP_SUPPORTED_MASK=%lu",
                           &unsigned_value) == 1) {
             app->cap_cache_mask = (vox_u32)unsigned_value;
+        } else if (sscanf(line, "TIME_LIMIT_INDEX=%d", &value) == 1) {
+            app->time_limit_index = value;
+        } else if (sscanf(line, "LAVA_INDEX=%d", &value) == 1) {
+            app->lava_index = value;
+        } else if (sscanf(line, "VOICE_PITCH=%d", &value) == 1) {
+            app->voice_pitch = value;
+        } else if (sscanf(line, "VOICE_TONE=%d", &value) == 1) {
+            app->voice_tone = value;
+        } else if (sscanf(line, "VOICE_SPEED=%d", &value) == 1) {
+            app->voice_speed = value;
+        } else if (sscanf(line, "P1_OUTFIT=%d", &value) == 1) {
+            app->outfit_color[0] = value;
+        } else if (sscanf(line, "P1_HELMET=%d", &value) == 1) {
+            app->helmet_color[0] = value;
+        } else if (sscanf(line, "P2_OUTFIT=%d", &value) == 1) {
+            app->outfit_color[1] = value;
+        } else if (sscanf(line, "P2_HELMET=%d", &value) == 1) {
+            app->helmet_color[1] = value;
         } else if (sscanf(line, "MATCH_MINUTES=%d", &value) == 1) {
-            app->match_minutes = value;
+            /* Schema 4 and earlier stored the minutes directly. */
+            app->time_limit_index = value == 3 ? 2 : 1;
         } else if (sscanf(line, "SCORE_LIMIT_INDEX=%d", &value) == 1) {
             app->score_limit_index = value;
         } else if (sscanf(line, "RESPAWN_MODE=%d", &value) == 1) {
@@ -2065,14 +1942,26 @@ static int demo_load_input_settings(demo_app *app)
         }
     }
     (void)fclose(file);
-    if (version != 1 && version != 2 && version != 3 &&
+    /*
+     * Every schema this build knows how to read, not just the current one.
+     * Bumping DEMO_SETTINGS_VERSION without adding the outgoing number here
+     * silently discards the settings of everybody upgrading -- which is what
+     * happened to schema four the moment five was introduced.
+     */
+    if (version != 1 && version != 2 && version != 3 && version != 4 &&
+        version != 5 &&
         version != DEMO_SETTINGS_VERSION) {
         memcpy(app->player_input, saved_input, sizeof(saved_input));
         app->options = saved_options;
         app->bindings = saved_bindings;
         memcpy(app->human_names, saved_human_names,
                sizeof(saved_human_names));
-        app->match_minutes = saved_match_minutes;
+        memcpy(app->outfit_color, saved_outfit_color,
+               sizeof(saved_outfit_color));
+        memcpy(app->helmet_color, saved_helmet_color,
+               sizeof(saved_helmet_color));
+        app->time_limit_index = saved_time_limit_index;
+        app->lava_index = saved_lava_index;
         app->score_limit_index = saved_score_limit_index;
         app->respawn_mode = saved_respawn_mode;
         app->respawn_delay_index = saved_respawn_delay_index;
@@ -2085,8 +1974,8 @@ static int demo_load_input_settings(demo_app *app)
         }
         return 0;
     }
-    /* v0.0.4 moved the default P1 rope control from Q to the mouse's right
-     * button.  Old default configs must not silently keep the retired key. */
+    /* The current increment moved the default P1 rope control from Q to middle mouse.
+     * Old default configs must not silently keep the retired key. */
     if (version < DEMO_SETTINGS_VERSION &&
         app->bindings.keyboard_rope[0] == SDL_SCANCODE_Q) {
         app->bindings.keyboard_rope[0] = SDL_SCANCODE_UNKNOWN;
@@ -2120,13 +2009,11 @@ static int demo_save_input_settings(demo_app *app)
         const demo_player_input *input = &app->player_input[player];
         if (fprintf(file,
                     "P%d_MODE=%d\nP%d_SENSITIVITY=%d\n"
-                    "P%d_DEADZONE=%d\nP%d_SLOWDOWN=%d\n"
-                    "P%d_ROPE_MODE=%d\n",
+                    "P%d_DEADZONE=%d\nP%d_SLOWDOWN=%d\n",
                     player + 1, input->preference,
                     player + 1, input->sensitivity,
                     player + 1, input->deadzone,
-                    player + 1, input->aim_slowdown,
-                    player + 1, input->rope_mode) < 0) {
+                    player + 1, input->aim_slowdown) < 0) {
             (void)fclose(file);
             (void)remove(temporary);
             return 0;
@@ -2173,9 +2060,11 @@ static int demo_save_input_settings(demo_app *app)
                 "CAMERA_SHAKE=%d\nDAMAGE_NUMBERS=%d\n"
                 "DAMAGE_NUMBER_SIZE=%d\nDAMAGE_NUMBER_COLOR=%d\n"
                 "FX_PROFILE=%d\nMASTER_VOLUME=%d\nLAPTOP_MODE=%d\n"
-                "DUMMY_MODE=%d\nHAPTIC_LEVEL=%d\nMATCH_MINUTES=%d\n"
+                "DUMMY_MODE=%d\nHAPTIC_LEVEL=%d\nTIME_LIMIT_INDEX=%d\n"
                 "CAP_PROFILE=%lu\nCAP_FRAME_US=%lu\n"
                 "CAP_SUPPORTED_MASK=%lu\n"
+                "LAVA_INDEX=%d\nVOICE_PITCH=%d\nVOICE_TONE=%d\n"
+                "VOICE_SPEED=%d\n"
                 "SCORE_LIMIT_INDEX=%d\nRESPAWN_MODE=%d\n"
                 "RESPAWN_DELAY_INDEX=%d\nP1_NAME=%s\nP2_NAME=%s\n"
                 "P1_BARK=%d\nP2_BARK=%d\nPAD_BARK=%d\n",
@@ -2187,16 +2076,28 @@ static int demo_save_input_settings(demo_app *app)
                 app->options.damage_number_color, app->options.fx_profile,
                 app->options.master_volume, app->options.laptop_mode,
                 app->options.dummy_mode, app->options.haptic_level,
-                app->match_minutes,
+                app->time_limit_index,
                 (unsigned long)app->cap_cache_profile,
                 (unsigned long)app->cap_cache_us,
                 (unsigned long)app->cap_cache_mask,
-                app->score_limit_index, app->respawn_mode,
+                app->lava_index, app->voice_pitch,
+                app->voice_tone, app->voice_speed,
+                app->score_limit_index,
+                app->respawn_mode,
                 app->respawn_delay_index, app->human_names[0],
                 app->human_names[1],
                 (int)app->bindings.keyboard_bark[0],
                 (int)app->bindings.keyboard_bark[1],
                 (int)app->bindings.pad_bark) < 0) {
+        (void)fclose(file);
+        (void)remove(temporary);
+        return 0;
+    }
+    if (fprintf(file,
+                "P1_OUTFIT=%d\nP1_HELMET=%d\n"
+                "P2_OUTFIT=%d\nP2_HELMET=%d\n",
+                app->outfit_color[0], app->helmet_color[0],
+                app->outfit_color[1], app->helmet_color[1]) < 0) {
         (void)fclose(file);
         (void)remove(temporary);
         return 0;
@@ -2874,8 +2775,224 @@ static void demo_dark_panel(int x, int y, int width, int height)
     vox_ui_frame(&demo_ui, x, y, width, height, DEMO_VGA_BROWN);
 }
 
-static void demo_menu_item(int y, const char *label, int selected)
+
+/*
+ * One window, used by every screen.
+ *
+ * Screens used to place each row at a hand-picked y inside a hand-placed
+ * panel.  That works until a screen grows a row, and then it draws straight
+ * through its own footer -- which is what CUSTOMIZE was doing.  Rows are laid
+ * out by a cursor now, anything past the bottom of the content region is
+ * scrolled to rather than drawn over, and a bar appears when there is more
+ * than fits.
+ *
+ * The row registry keeps working unchanged: rows register where they are
+ * actually drawn, so the mouse follows the scroll for free.
+ */
+#define DEMO_WINDOW_ROW 14
+#define DEMO_WINDOW_VALUE_ROW 13
+
+typedef struct demo_window {
+    int x;
+    int y;
+    int width;
+    int height;
+    int content_top;      /* first pixel of the scrolling region */
+    int content_bottom;   /* one past the last usable pixel */
+    int cursor;           /* next row position, in content space */
+    int scroll;           /* how far the content is pushed up */
+    int selected_top;     /* where the selected row landed, content space */
+    int selected_height;
+} demo_window;
+
+static demo_window demo_win;
+
+static void demo_window_begin(int x, int y, int width, int height,
+                              const char *title, int scroll)
 {
+    demo_win.x = x;
+    demo_win.y = y;
+    demo_win.width = width;
+    demo_win.height = height;
+    demo_win.content_top = y + (title != 0 ? 26 : 10);
+    demo_win.content_bottom = y + height - 20;
+    demo_win.cursor = 0;
+    demo_win.scroll = scroll < 0 ? 0 : scroll;
+    demo_win.selected_top = -1;
+    demo_win.selected_height = 0;
+    demo_dark_panel(x, y, width, height);
+    if (title != 0) {
+        vox_ui_text_center_shadow(&demo_ui, x + width / 2, y + 8, 1, title,
+                                  DEMO_VGA_YELLOW);
+    }
+}
+
+/* Reserve the next row and return its screen y, or -1 when it is scrolled
+ * out of sight.  Callers skip drawing on -1; nothing else changes. */
+static int demo_window_row(int height, int selected)
+{
+    int screen_y = demo_win.content_top + demo_win.cursor - demo_win.scroll;
+    if (selected) {
+        demo_win.selected_top = demo_win.cursor;
+        demo_win.selected_height = height;
+    }
+    demo_win.cursor += height;
+    if (screen_y < demo_win.content_top ||
+        screen_y + height > demo_win.content_bottom) {
+        return -1;
+    }
+    return screen_y;
+}
+
+static void demo_window_gap(int pixels)
+{
+    demo_win.cursor += pixels;
+}
+
+/*
+ * Close the window: draw the bar if the content overflows, the footer, and
+ * report the scroll the caller should hold next frame so the selected row
+ * stays on screen.  Returning it rather than writing through a pointer keeps
+ * every screen's call site to one line.
+ */
+static int demo_window_end(const char *footer)
+{
+    int region = demo_win.content_bottom - demo_win.content_top;
+    int scroll = demo_win.scroll;
+    int overflow = demo_win.cursor - region;
+    if (overflow < 0) {
+        overflow = 0;
+    }
+    /* Follow the selection rather than leaving it off screen. */
+    if (demo_win.selected_top >= 0) {
+        if (demo_win.selected_top < scroll) {
+            scroll = demo_win.selected_top;
+        } else if (demo_win.selected_top + demo_win.selected_height >
+                   scroll + region) {
+            scroll = demo_win.selected_top + demo_win.selected_height - region;
+        }
+    }
+    if (scroll > overflow) {
+        scroll = overflow;
+    }
+    if (scroll < 0) {
+        scroll = 0;
+    }
+    if (overflow > 0) {
+        int track_x = demo_win.x + demo_win.width - 6;
+        int track_h = region;
+        int grip_h = (region * region) / (region + overflow);
+        int grip_y;
+        if (grip_h < 8) {
+            grip_h = 8;
+        }
+        grip_y = demo_win.content_top +
+                 ((track_h - grip_h) * scroll) / overflow;
+        vox_ui_rect(&demo_ui, track_x, demo_win.content_top, 2, track_h,
+                    DEMO_VGA_DARK_GRAY);
+        vox_ui_rect(&demo_ui, track_x, grip_y, 2, grip_h,
+                    DEMO_VGA_LIGHT_CYAN);
+    }
+    if (footer != 0) {
+        vox_ui_text_center(&demo_ui, demo_win.x + demo_win.width / 2,
+                           demo_win.y + demo_win.height - 12, 1, footer,
+                           DEMO_VGA_DARK_GRAY);
+    }
+    return scroll;
+}
+
+/*
+ * Where the rows a screen just drew actually are.
+ *
+ * The mouse handlers were all guarded by screen == DEMO_PLAY, so no menu had
+ * ever been clickable.  Rather than write a rectangle table per screen and
+ * keep it in step with the drawing by hand -- which is how those things drift
+ * -- each row registers itself as it is drawn.  The registry is rebuilt every
+ * frame, so it cannot describe a layout that is no longer on screen.
+ */
+#define DEMO_MENU_ROW_MAX 32
+#define DEMO_ROW_ACTION 0
+#define DEMO_ROW_VALUE 1
+
+typedef struct demo_menu_row {
+    int x;
+    int y;
+    int width;
+    int height;
+    int index;
+    int kind;
+} demo_menu_row;
+
+static demo_menu_row demo_menu_rows[DEMO_MENU_ROW_MAX];
+static int demo_menu_row_count;
+
+static void demo_rows_reset(void)
+{
+    demo_menu_row_count = 0;
+}
+
+static void demo_row_register(int x, int y, int width, int height, int index,
+                              int kind)
+{
+    demo_menu_row *row;
+    if (demo_menu_row_count >= DEMO_MENU_ROW_MAX || index < 0) {
+        return;
+    }
+    row = &demo_menu_rows[demo_menu_row_count++];
+    row->x = x;
+    row->y = y;
+    row->width = width;
+    row->height = height;
+    row->index = index;
+    row->kind = kind;
+}
+
+/* Which row the pointer is over, or -1.  Nearest match wins on overlap. */
+static const demo_menu_row *demo_row_at(int x, int y)
+{
+    int i;
+    for (i = 0; i < demo_menu_row_count; ++i) {
+        const demo_menu_row *row = &demo_menu_rows[i];
+        if (x >= row->x && x < row->x + row->width &&
+            y >= row->y && y < row->y + row->height) {
+            return row;
+        }
+    }
+    return 0;
+}
+
+/*
+ * One colour per miner, everywhere they appear.
+ *
+ * The lead's note: each NPC differentiated in gameplay, in the log and in
+ * the inbox, "with the player characters being the only white text".  A
+ * single helper is what keeps a miner the same colour in all four places --
+ * three separate colour choices would drift the first time one moved.
+ */
+static void demo_identity_colour(vox_u16 identity, vox_u8 *red,
+                                 vox_u8 *green, vox_u8 *blue)
+{
+    vox_u8 r = 255U;
+    vox_u8 g = 255U;
+    vox_u8 b = 255U;
+    if (identity == VOX_DIGS_IDENTITY_RIVET) {
+        r = 85U; g = 255U; b = 255U;        /* cold, technical */
+    } else if (identity == VOX_DIGS_IDENTITY_CINDER) {
+        r = 255U; g = 85U; b = 85U;         /* loud, hot */
+    } else if (identity == VOX_DIGS_IDENTITY_FLAMEY) {
+        r = 255U; g = 255U; b = 85U;        /* matches, mischief */
+    }
+    /* Anyone else -- the player, or an unknown slot -- stays white. */
+    *red = r;
+    *green = g;
+    *blue = b;
+}
+
+static void demo_menu_item(int y, const char *label, int index,
+                           int selection)
+{
+    int selected = index >= 0 && index == selection;
+    demo_row_register(82, y - 2, 156, 11, index, DEMO_ROW_ACTION);
     if (selected) {
         vox_ui_rect(&demo_ui, 82, y - 2, 156, 11, DEMO_VGA_BLUE);
         vox_ui_frame(&demo_ui, 82, y - 2, 156, 11,
@@ -2885,6 +3002,379 @@ static void demo_menu_item(int y, const char *label, int selected)
     } else {
         vox_ui_text_center_shadow(&demo_ui, 160, y, 1, label,
                                   DEMO_VGA_LIGHT_GRAY);
+    }
+}
+
+/* Whose name goes on a message, by identity rather than by slot. */
+static const char *demo_identity_name(const demo_app *app, vox_u16 identity)
+{
+    if (identity == VOX_DIGS_IDENTITY_PLAYER) {
+        return app->player_names[0][0] != '\0' ? app->player_names[0] : "YOU";
+    }
+    if (identity < (vox_u16)VOX_DIGS_MAX_BOTS) {
+        return app->bot_names[identity];
+    }
+    return "THE MINE";
+}
+
+/*
+ * INBOX: what the miners wrote while you were away.
+ *
+ * A list until you open one, then the message itself.  There is no reply --
+ * the point is that they have been getting on with it without you.
+ */
+/*
+ * MY MINER: the parts of your own miner that are yours.
+ *
+ * Its own screen rather than three more rows on CUSTOMIZE, which is already
+ * full -- and because outfit and helmet colour are coming here next, and a
+ * page that is about the miner is easier to add to than a page that is about
+ * the match.
+ */
+static void demo_apply_voice(demo_app *app)
+{
+    if (app->audio_device == 0U) {
+        return;
+    }
+    demo_audio_lock(app);
+    (void)vox_audio_set_voice(&app->audio, (vox_u16)app->voice_speed,
+                              (vox_u16)app->voice_pitch,
+                              (vox_u16)app->voice_tone);
+    demo_audio_unlock(app);
+}
+
+static void demo_value_line(int y, const char *label, const char *value,
+                            int index, int selection)
+{
+    int selected = index >= 0 && index == selection;
+    demo_row_register(44, y - 2, 232, 11, index, DEMO_ROW_VALUE);
+    if (selected) {
+        vox_ui_rect(&demo_ui, 44, y - 2, 232, 11, DEMO_VGA_BLUE);
+        vox_ui_frame(&demo_ui, 44, y - 2, 232, 11,
+                     DEMO_VGA_LIGHT_CYAN);
+    }
+    vox_ui_text(&demo_ui, 50, y, 1, label, DEMO_VGA_LIGHT_GRAY);
+    vox_ui_text(&demo_ui, 170, y, 1, value,
+                selected ? 255U : 170U, selected ? 255U : 170U,
+                selected ? 85U : 170U);
+}
+
+
+/* The two row kinds, laid out by the window instead of by hand. */
+static void demo_window_item(const char *label, int index, int selection)
+{
+    int y = demo_window_row(DEMO_WINDOW_ROW, index == selection);
+    if (y >= 0) {
+        demo_menu_item(y + 2, label, index, selection);
+    }
+}
+
+static void demo_window_value(const char *label, const char *value,
+                              int index, int selection)
+{
+    int y = demo_window_row(DEMO_WINDOW_VALUE_ROW, index == selection);
+    if (y >= 0) {
+        demo_value_line(y + 2, label, value, index, selection);
+    }
+}
+
+static void demo_draw_miner(demo_app *app)
+{
+    char value[24];
+    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
+    (void)vox_software_render_ex(&demo_title_world, &demo_target,
+                                 &demo_render_config);
+    demo_window_begin(28, 8, 264, 184, "MY MINER", app->scroll);
+    {
+        int y = demo_window_row(16, 0);
+        if (y >= 0) {
+            vox_ui_text_center(&demo_ui, 160, y + 4, 1,
+                               app->player_names[0][0] != '\0' ?
+                               app->player_names[0] : "MINER",
+                               DEMO_VGA_LIGHT_CYAN);
+        }
+    }
+    sprintf(value, "%d HZ", app->voice_pitch);
+    demo_window_value("VOICE PITCH", value, 0, app->selection);
+    sprintf(value, "%d%%", app->voice_tone);
+    demo_window_value("VOICE TONE", value, 1, app->selection);
+    sprintf(value, "%d%%", app->voice_speed);
+    demo_window_value("VOICE SPEED", value, 2, app->selection);
+    demo_window_value("P1 OUTFIT",
+                      demo_cosmetic_color_names[app->outfit_color[0]], 3,
+                      app->selection);
+    demo_window_value("P1 HELMET",
+                      demo_cosmetic_color_names[app->helmet_color[0]], 4,
+                      app->selection);
+    demo_window_value("P2 OUTFIT",
+                      demo_cosmetic_color_names[app->outfit_color[1]], 5,
+                      app->selection);
+    demo_window_value("P2 HELMET",
+                      demo_cosmetic_color_names[app->helmet_color[1]], 6,
+                      app->selection);
+    demo_window_gap(8);
+    demo_window_item("HEAR IT", 7, app->selection);
+    demo_window_item("RESTORE DEFAULTS", 8, app->selection);
+    demo_window_item("BACK", 9, app->selection);
+    app->scroll = demo_window_end("ARROWS CHANGE  ENTER SELECTS");
+}
+
+static void demo_handle_miner_key(demo_app *app, SDL_Keycode key)
+{
+    int direction = key == SDLK_LEFT ? -1 : (key == SDLK_RIGHT ? 1 : 0);
+    if (key == SDLK_ESCAPE) {
+        app->screen = DEMO_CUSTOMIZE;
+        app->selection = 9;
+        demo_audio_play(app, DEMO_SOUND_SELECT);
+    } else if (key == SDLK_UP) {
+        app->selection = (app->selection + 9) % 10;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_DOWN) {
+        app->selection = (app->selection + 1) % 10;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (direction != 0) {
+        if (app->selection == 0) {
+            app->voice_pitch += direction * 5;
+        } else if (app->selection == 1) {
+            app->voice_tone += direction * 2;
+        } else if (app->selection == 2) {
+            app->voice_speed += direction * 2;
+        } else if (app->selection == 3) {
+            app->outfit_color[0] = (app->outfit_color[0] + direction +
+                                    DEMO_COSMETIC_COLOR_COUNT) %
+                                   DEMO_COSMETIC_COLOR_COUNT;
+        } else if (app->selection == 4) {
+            app->helmet_color[0] = (app->helmet_color[0] + direction +
+                                    DEMO_COSMETIC_COLOR_COUNT) %
+                                   DEMO_COSMETIC_COLOR_COUNT;
+        } else if (app->selection == 5) {
+            app->outfit_color[1] = (app->outfit_color[1] + direction +
+                                    DEMO_COSMETIC_COLOR_COUNT) %
+                                   DEMO_COSMETIC_COLOR_COUNT;
+        } else if (app->selection == 6) {
+            app->helmet_color[1] = (app->helmet_color[1] + direction +
+                                    DEMO_COSMETIC_COLOR_COUNT) %
+                                   DEMO_COSMETIC_COLOR_COUNT;
+        }
+        demo_validate_input_settings(app);
+        demo_apply_voice(app);
+        (void)demo_save_input_settings(app);
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+        if (app->selection == 7) {
+            /* Hearing it is the only way to judge it. */
+            demo_apply_voice(app);
+            demo_audio_speak_text(app, "THAT WILL DO",
+                                  (vox_u8)VOX_AUDIO_SPEECH_CUSTOM,
+                                  VOX_AUDIO_PRIORITY_PLAYER_BARK, 0);
+        } else if (app->selection == 8) {
+            app->voice_pitch = 120;
+            app->voice_tone = 100;
+            app->voice_speed = 100;
+            app->outfit_color[0] = 0;
+            app->helmet_color[0] = 0;
+            app->outfit_color[1] = 3;
+            app->helmet_color[1] = 0;
+            demo_apply_voice(app);
+            (void)demo_save_input_settings(app);
+            demo_audio_play(app, DEMO_SOUND_SELECT);
+        } else if (app->selection == 9) {
+            app->screen = DEMO_CUSTOMIZE;
+            app->selection = 9;
+            demo_audio_play(app, DEMO_SOUND_SELECT);
+        }
+    }
+}
+
+static void demo_draw_inbox(demo_app *app)
+{
+    vox_u16 count = demo_chronicle.inbox_count;
+    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
+    (void)vox_software_render_ex(&demo_title_world, &demo_target,
+                                 &demo_render_config);
+    demo_window_begin(28, 8, 264, 184, "INBOX", app->scroll);
+    if (count == 0U) {
+        int y = demo_window_row(60, 0);
+        if (y >= 0) {
+            vox_ui_text_center(&demo_ui, 160, y + 26, 1, "NO MAIL TODAY!",
+                               DEMO_VGA_LIGHT_GRAY);
+        }
+        app->scroll = demo_window_end("ESC  BACK");
+        return;
+    }
+    if (app->inbox_open < 0) {
+        vox_u16 i;
+        for (i = 0U; i < count && i < DIGS_INBOX_CAPACITY; ++i) {
+            const digs_inbox_message *message = &demo_chronicle.inbox[i];
+            char row[48];
+            sprintf(row, "%s%s", demo_identity_name(app, message->from),
+                    message->unread ? "   NEW" : "");
+            demo_window_item(row, (int)i, app->selection);
+        }
+        app->scroll = demo_window_end("UP DOWN  ENTER READ  ESC BACK");
+        return;
+    }
+    {
+        const digs_inbox_message *message =
+            &demo_chronicle.inbox[app->inbox_open];
+        const char *you =
+            demo_identity_name(app, (vox_u16)VOX_DIGS_IDENTITY_PLAYER);
+        vox_u16 i;
+        vox_u8 red;
+        vox_u8 green;
+        vox_u8 blue;
+        char header[48];
+        int y;
+        demo_identity_colour(message->from, &red, &green, &blue);
+        sprintf(header, "FROM %s", demo_identity_name(app, message->from));
+        y = demo_window_row(16, 0);
+        if (y >= 0) {
+            vox_ui_text(&demo_ui, 40, y, 1, header, red, green, blue);
+            vox_ui_rect(&demo_ui, 40, y + 10, 224, 1, DEMO_VGA_DARK_GRAY);
+        }
+        for (i = 0U; i < message->line_count && i < DIGS_INBOX_LINES; ++i) {
+            char text[128];
+            int lines;
+            demo_expand_line(message->lines[i], you, text, sizeof(text));
+            lines = vox_ui_text_wrap_lines(224, 3, 1, text);
+            if (lines < 1) {
+                lines = 1;
+            }
+            y = demo_window_row(lines * VOX_UI_DOS_LINE_HEIGHT + 6, 0);
+            if (y >= 0) {
+                (void)vox_ui_text_wrap(&demo_ui, 40, y, 224, 3, 1, text,
+                                       DEMO_VGA_LIGHT_GRAY);
+            }
+        }
+        app->scroll = demo_window_end("ESC  BACK TO INBOX");
+    }
+}
+
+/*
+ * LOG: everything anyone has said, oldest first.
+ *
+ * No filtering and no summary -- it is a record, and the value of a record
+ * is that it is complete and you can scroll back through it.
+ */
+static void demo_draw_log(demo_app *app)
+{
+    /*
+     * Entries wrap rather than being cut.  The speaker's name is written
+     * once and the sentence continues indented under it, which reads like a
+     * transcript and keeps the colour column scannable.
+     *
+     * Because an entry is now one, two or three rows tall, the scroll has to
+     * move in pixels rather than in entries -- which is what the window does
+     * anyway, so the log just measures each entry and asks for that height.
+     */
+    const int name_indent = 54;
+    const int body_width = 200;
+    vox_u16 total = demo_chronicle.log_count;
+    vox_u16 index;
+    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
+    (void)vox_software_render_ex(&demo_title_world, &demo_target,
+                                 &demo_render_config);
+    demo_window_begin(20, 8, 280, 184, "LOG", app->scroll);
+    if (total == 0U) {
+        int y = demo_window_row(20, 0);
+        if (y >= 0) {
+            vox_ui_text_center(&demo_ui, 160, y + 6, 1, "NOTHING SAID YET",
+                               DEMO_VGA_DARK_GRAY);
+        }
+        app->scroll = demo_window_end("ESC  BACK");
+        return;
+    }
+    for (index = 0U; index < total; ++index) {
+        const digs_log_entry *entry = digs_chronicle_log_at(&demo_chronicle,
+                                                            index);
+        char text[128];
+        char name[32];
+        vox_u8 red;
+        vox_u8 green;
+        vox_u8 blue;
+        int lines;
+        int y;
+        if (entry == 0) {
+            continue;
+        }
+        demo_expand_line(entry->line, demo_identity_name(app, entry->target),
+                         text, sizeof(text));
+        lines = vox_ui_text_wrap_lines(body_width, 3, 1, text);
+        if (lines < 1) {
+            lines = 1;
+        }
+        y = demo_window_row(lines * VOX_UI_DOS_LINE_HEIGHT + 3, 0);
+        if (y < 0) {
+            continue;
+        }
+        demo_identity_colour(entry->speaker, &red, &green, &blue);
+        sprintf(name, "%s:", demo_identity_name(app, entry->speaker));
+        vox_ui_text(&demo_ui, 26, y, 1, name, red, green, blue);
+        (void)vox_ui_text_wrap(&demo_ui, 26 + name_indent, y, body_width, 3,
+                               1, text, red, green, blue);
+    }
+    app->scroll = demo_window_end("UP DOWN SCROLL   ESC BACK");
+}
+
+static void demo_handle_inbox_key(demo_app *app, SDL_Keycode key)
+{
+    vox_u16 count = demo_chronicle.inbox_count;
+    if (key == SDLK_ESCAPE) {
+        if (app->inbox_open >= 0) {
+            app->inbox_open = -1;
+        } else {
+            app->screen = DEMO_TITLE;
+            app->selection = 1;
+        }
+        demo_audio_play(app, DEMO_SOUND_SELECT);
+        return;
+    }
+    if (app->inbox_open >= 0 || count == 0U) {
+        return;
+    }
+    if (key == SDLK_UP) {
+        app->selection = (app->selection + (int)count - 1) % (int)count;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_DOWN) {
+        app->selection = (app->selection + 1) % (int)count;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+        app->inbox_open = app->selection;
+        /*
+         * Reading it is what marks it read, and the count on the title
+         * follows immediately -- so the chronicle is written now rather than
+         * at some later checkpoint that a crash could eat.
+         */
+        if (digs_chronicle_mark_read(&demo_chronicle,
+                                     (vox_u16)app->selection)) {
+            char path[1032];
+            if (demo_chronicle_path(path, (int)sizeof(path))) {
+                (void)digs_chronicle_save(&demo_chronicle, path);
+            }
+        }
+        demo_audio_play(app, DEMO_SOUND_SELECT);
+    }
+}
+
+static void demo_handle_log_key(demo_app *app, SDL_Keycode key)
+{
+    if (key == SDLK_ESCAPE) {
+        app->screen = DEMO_TITLE;
+        app->selection = 2;
+        demo_audio_play(app, DEMO_SOUND_SELECT);
+    } else if (key == SDLK_UP) {
+        app->scroll -= VOX_UI_DOS_LINE_HEIGHT + 3;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_DOWN) {
+        app->scroll += VOX_UI_DOS_LINE_HEIGHT + 3;
+        demo_audio_play(app, DEMO_SOUND_MOVE);
+    } else if (key == SDLK_PAGEUP) {
+        app->scroll -= 130;
+    } else if (key == SDLK_PAGEDOWN) {
+        app->scroll += 130;
+    }
+    if (app->scroll < 0) {
+        app->scroll = 0;
     }
 }
 
@@ -2898,98 +3388,82 @@ static void demo_draw_title(demo_app *app)
                               DEMO_VGA_YELLOW);
     vox_ui_rect(&demo_ui, 82, 65, 156, 1, DEMO_VGA_DARK_GRAY);
     vox_ui_rect(&demo_ui, 82, 66, 156, 1, DEMO_VGA_BROWN);
-    demo_menu_item(73, "START MATCH", app->selection == 0);
-    demo_menu_item(87, "FOUNDRY LAB", app->selection == 1);
-    demo_menu_item(101, "HOW TO PLAY", app->selection == 2);
-    demo_menu_item(115, "MINER'S INDEX", app->selection == 3);
-    demo_menu_item(129, "CONTROLS", app->selection == 4);
-    demo_menu_item(143, "OPTIONS", app->selection == 5);
-    demo_menu_item(157, "QA FEEDBACK", app->selection == 6);
-    demo_menu_item(171, "QUIT", app->selection == 7);
-    vox_ui_text_center(&demo_ui, 160, 181, 1,
-                       "GPL-3.0-OR-LATER  V0.0.3",
-                       DEMO_VGA_DARK_GRAY);
+    {
+        char inbox_label[24];
+        vox_u16 unread = digs_chronicle_unread(&demo_chronicle);
+        if (unread > 0U) {
+            sprintf(inbox_label, "INBOX (%u)", (unsigned int)unread);
+        } else {
+            strcpy(inbox_label, "INBOX");
+        }
+        demo_menu_item(73, "BEGIN", 0, app->selection);
+        demo_menu_item(87, inbox_label, 1, app->selection);
+        demo_menu_item(101, "LOG", 2, app->selection);
+        demo_menu_item(115, "PRACTICE", 3, app->selection);
+        demo_menu_item(129, "CONTROLS", 4, app->selection);
+        demo_menu_item(143, "OPTIONS", 5, app->selection);
+        demo_menu_item(157, "QUIT", 6, app->selection);
+    }
 }
 
-static void demo_value_line(int y, const char *label, const char *value,
-                            int selected)
-{
-    if (selected) {
-        vox_ui_rect(&demo_ui, 44, y - 2, 232, 11, DEMO_VGA_BLUE);
-        vox_ui_frame(&demo_ui, 44, y - 2, 232, 11,
-                     DEMO_VGA_LIGHT_CYAN);
-    }
-    vox_ui_text(&demo_ui, 50, y, 1, label, DEMO_VGA_LIGHT_GRAY);
-    vox_ui_text(&demo_ui, 170, y, 1, value,
-                selected ? 255U : 170U, selected ? 255U : 170U,
-                selected ? 85U : 170U);
-}
 
 static void demo_draw_setup(demo_app *app)
 {
-    char value[64];
+    char value[24];
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
-    demo_dark_panel(28, 8, 264, 184);
-    vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "MATCH SETUP",
-                              DEMO_VGA_YELLOW);
+    demo_window_begin(28, 8, 264, 184, "MATCH SETUP", app->scroll);
     sprintf(value, "%d", app->local_players);
-    demo_value_line(43, "LOCAL PLAYERS", value, app->selection == 0);
+    demo_window_value("LOCAL PLAYERS", value, 0, app->selection);
     sprintf(value, "%d", app->bots);
-    demo_value_line(57, "BOTS", value, app->selection == 1);
-    demo_value_line(71, "MODE", demo_mode_names[app->game_mode],
-                    app->selection == 2);
-    demo_value_line(85, "FRIENDLY FIRE", demo_toggle_names[app->friendly_fire],
-                    app->selection == 3);
-    demo_value_line(99, "MAP", demo_map_names[app->map_style],
-                    app->selection == 4);
-    sprintf(value, "%08lX", (unsigned long)app->seed);
-    demo_value_line(113, "SEED", value, app->selection == 5);
-    demo_value_line(127, "ARSENAL", demo_arsenal_names[app->arsenal],
-                    app->selection == 6);
-    demo_menu_item(140, "CUSTOMIZE GAME", app->selection == 7);
-    demo_menu_item(154, "START MATCH", app->selection == 8);
-    demo_menu_item(168, "BACK", app->selection == 9);
-    vox_ui_text_center(&demo_ui, 160, 180, 1,
-                       "ARROWS CHANGE  ENTER SELECTS", DEMO_VGA_DARK_GRAY);
+    demo_window_value("BOTS", value, 1, app->selection);
+    demo_window_value("MAP", demo_map_names[app->map_style], 2,
+                      app->selection);
+    demo_window_value("ARSENAL", demo_arsenal_names[app->arsenal], 3,
+                      app->selection);
+    demo_window_gap(8);
+    demo_window_item("CUSTOMIZE GAME", 4, app->selection);
+    demo_window_item("START MATCH", 5, app->selection);
+    demo_window_item("BACK", 6, app->selection);
+    app->scroll = demo_window_end("ARROWS CHANGE  ENTER SELECTS");
 }
 
 static void demo_draw_customize(demo_app *app)
 {
-    char value[32];
+    char value[24];
     int player;
     int active_players = app->local_players + app->bots;
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
-    demo_dark_panel(28, 8, 264, 184);
-    vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "CUSTOMIZE GAME",
-                              DEMO_VGA_YELLOW);
+    demo_window_begin(28, 8, 264, 184, "CUSTOMIZE GAME", app->scroll);
     for (player = 0; player < (int)VOX_DIGS_MAX_SLOTS; ++player) {
         char label[12];
         sprintf(label, "PLAYER %d", player + 1);
-        demo_value_line(34 + player * 13, label,
-                        player < active_players ?
-                        app->player_names[player] : "EMPTY",
-                        app->selection == player);
+        demo_window_value(label,
+                          player < active_players ?
+                          app->player_names[player] : "EMPTY",
+                          player, app->selection);
     }
-    sprintf(value, "%d:00", app->match_minutes);
-    demo_value_line(88, "TIME LIMIT", value, app->selection == 4);
-    demo_value_line(101, "SCORE LIMIT",
-                    demo_score_limit_names[app->score_limit_index],
-                    app->selection == 5);
-    demo_value_line(114, "RESPAWN",
-                    demo_respawn_mode_names[app->respawn_mode],
-                    app->selection == 6);
-    sprintf(value, "%d SEC",
-            demo_respawn_delays[app->respawn_delay_index]);
-    demo_value_line(127, "SPAWN DELAY", value, app->selection == 7);
-    demo_menu_item(145, "RESTORE DEFAULTS", app->selection == 8);
-    demo_menu_item(163, "BACK", app->selection == 9);
-    vox_ui_text_center(&demo_ui, 160, 180, 1,
-                       "ENTER EDITS NAMES  ARROWS CHANGE",
-                       DEMO_VGA_DARK_GRAY);
+    demo_window_gap(6);
+    demo_window_value("TIME LIMIT",
+                      demo_time_limit_names[app->time_limit_index], 4,
+                      app->selection);
+    demo_window_value("LAVA RISES", demo_lava_names[app->lava_index], 5,
+                      app->selection);
+    demo_window_value("SCORE LIMIT",
+                      demo_score_limit_names[app->score_limit_index], 6,
+                      app->selection);
+    demo_window_value("RESPAWN", demo_respawn_mode_names[app->respawn_mode],
+                      7, app->selection);
+    sprintf(value, "%d SEC", demo_respawn_delays[app->respawn_delay_index]);
+    demo_window_value("SPAWN DELAY", value, 8, app->selection);
+    demo_window_gap(6);
+    demo_window_item("MY MINER", 9, app->selection);
+    demo_window_item("RESTORE DEFAULTS", 10, app->selection);
+    demo_window_item("BACK", 11, app->selection);
+    app->scroll = demo_window_end("ENTER EDITS NAMES  ARROWS CHANGE");
 }
 
 static const char *demo_name_grid_label(int item, char *label)
@@ -3048,71 +3522,67 @@ static void demo_draw_options(demo_app *app)
 {
     char volume[16];
     char cap_value[32];
-    int page;
     demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
     (void)vox_software_render_ex(&demo_title_world, &demo_target,
                                  &demo_render_config);
-    demo_dark_panel(28, 8, 264, 184);
-    vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "OPTIONS",
-                              DEMO_VGA_YELLOW);
+    demo_window_begin(28, 8, 264, 184, "OPTIONS", app->scroll);
     sprintf(volume, "%d%%", app->options.master_volume * 10);
     if ((app->cap_supported_mask & ((vox_u32)1U <<
          app->options.frame_cap_index)) == 0U) {
-        sprintf(cap_value, "%s UNSUPPORTED",
+        sprintf(cap_value, "%s N/A",
                 demo_frame_names[app->options.frame_cap_index]);
-    } else sprintf(cap_value, "%s",
-                   demo_frame_names[app->options.frame_cap_index]);
-    page = app->selection < 8 ? 0 : 1;
-    if (page == 0) {
-        demo_value_line(36, "FRAME CAP", cap_value, app->selection == 0);
-        demo_value_line(51, "LIGHTFIELD",
-                        demo_gi_names[app->options.gi_quality],
-                        app->selection == 1);
-        demo_value_line(66, "MASTER VOLUME", volume,
-                        app->selection == 2);
-        demo_value_line(81, "LAPTOP MODE",
-                        demo_toggle_names[app->options.laptop_mode],
-                        app->selection == 3);
-        demo_value_line(96, "HAPTICS",
-                        demo_haptic_names[app->options.haptic_level],
-                        app->selection == 4);
-        demo_value_line(111, "FX PROFILE",
-                        demo_fx_names[app->options.fx_profile],
-                        app->selection == 5);
-        demo_value_line(126, "FLASHES",
-                        demo_flash_names[app->options.flash_mode],
-                        app->selection == 6);
-        demo_value_line(141, "GORE",
-                        demo_gore_names[app->options.gore_level],
-                        app->selection == 7);
-        vox_ui_text_center(&demo_ui, 160, 174, 1,
-                           "UP DOWN  PAGE 1/2", DEMO_VGA_DARK_GRAY);
     } else {
-        demo_value_line(36, "CAMERA SHAKE",
-                        demo_toggle_names[app->options.camera_shake],
-                        app->selection == 8);
-        demo_value_line(51, "DAMAGE NUMBERS",
-                        demo_toggle_names[app->options.damage_numbers],
-                        app->selection == 9);
-        demo_value_line(66, "NUMBER SIZE",
-                        app->options.damage_number_size ? "LARGE" : "SMALL",
-                        app->selection == 10);
-        demo_value_line(81, "NUMBER COLOR",
-                        demo_number_color_names[
-                            app->options.damage_number_color],
-                        app->selection == 11);
-        demo_value_line(96, "FULLSCREEN",
-                        demo_toggle_names[app->options.fullscreen],
-                        app->selection == 12);
-        demo_value_line(111, "DUMMY MODE",
-                        demo_toggle_names[app->options.dummy_mode],
-                        app->selection == 13);
-        demo_menu_item(130, "INPUT & CONTROLLER", app->selection == 14);
-        demo_menu_item(146, "BACK", app->selection == 15);
-        vox_ui_text_center(&demo_ui, 160, 174, 1,
-                           "UP DOWN  PAGE 2/2  F8 CAPS",
-                           DEMO_VGA_DARK_GRAY);
+        sprintf(cap_value, "%s",
+                demo_frame_names[app->options.frame_cap_index]);
     }
+    /*
+     * One scrolling list instead of two hand-split pages.  The paging
+     * existed because the rows did not fit; the window scrolls, so it does
+     * not need to exist, and nobody has to remember which page a setting
+     * was on.
+     */
+    demo_window_value("FRAME CAP", cap_value, 0, app->selection);
+    demo_window_value("LIGHTFIELD", demo_gi_names[app->options.gi_quality],
+                      1, app->selection);
+    demo_window_value("MASTER VOLUME", volume, 2, app->selection);
+    demo_window_value("LAPTOP MODE",
+                      demo_toggle_names[app->options.laptop_mode], 3,
+                      app->selection);
+    demo_window_value("HAPTICS",
+                      demo_haptic_names[app->options.haptic_level], 4,
+                      app->selection);
+    demo_window_value("FX PROFILE", demo_fx_names[app->options.fx_profile],
+                      5, app->selection);
+    demo_window_value("FLASHES", demo_flash_names[app->options.flash_mode],
+                      6, app->selection);
+    demo_window_value("GORE", demo_gore_names[app->options.gore_level], 7,
+                      app->selection);
+    demo_window_value("CAMERA SHAKE",
+                      demo_toggle_names[app->options.camera_shake], 8,
+                      app->selection);
+    demo_window_value("DAMAGE NUMBERS",
+                      demo_toggle_names[app->options.damage_numbers], 9,
+                      app->selection);
+    demo_window_value("NUMBER SIZE",
+                      app->options.damage_number_size ? "LARGE" : "SMALL",
+                      10, app->selection);
+    demo_window_value("NUMBER COLOR",
+                      demo_number_color_names[
+                          app->options.damage_number_color], 11,
+                      app->selection);
+    demo_window_value("FULLSCREEN",
+                      demo_toggle_names[app->options.fullscreen], 12,
+                      app->selection);
+    demo_window_value("DUMMY MODE",
+                      demo_toggle_names[app->options.dummy_mode], 13,
+                      app->selection);
+    demo_window_gap(6);
+    demo_window_item(demo_chronicle_reset_armed ?
+                     "PRESS AGAIN TO ERASE" : "RESET MINER MEMORY", 14,
+                     app->selection);
+    demo_window_item("INPUT & CONTROLLER", 15, app->selection);
+    demo_window_item("BACK", 16, app->selection);
+    app->scroll = demo_window_end("UP DOWN  F8 RE-TEST CAPS");
 }
 
 static void demo_input_mode_value(demo_app *app, int player,
@@ -3153,76 +3623,38 @@ static void demo_draw_input_options(demo_app *app)
     for (slot = 0; slot < (int)DEMO_CONTROLLER_MAX; ++slot) {
         if (app->controllers[slot].calibrating) calibrating = 1;
     }
-    page = app->selection < 7 ? 0 : 1;
+    page = app->selection < 6 ? 0 : 1;
     if (page == 0) {
-        demo_value_line(36, "P1 MODE", p1_mode, app->selection == 0);
+        demo_value_line(36, "P1 MODE", p1_mode, 0, app->selection);
         demo_value_line(51, "P1 SENSITIVITY",
                         demo_sensitivity_names[
-                            app->player_input[0].sensitivity],
-                        app->selection == 1);
+                            app->player_input[0].sensitivity], 1, app->selection);
         demo_value_line(66, "P1 DEADZONE",
-                        demo_deadzone_names[app->player_input[0].deadzone],
-                        app->selection == 2);
+                        demo_deadzone_names[app->player_input[0].deadzone], 2, app->selection);
         demo_value_line(81, "P1 AIM SLOW",
                         demo_slowdown_names[
-                            app->player_input[0].aim_slowdown],
-                        app->selection == 3);
-        demo_value_line(96, "P1 ROPE",
-                        demo_rope_mode_names[
-                            app->player_input[0].rope_mode],
-                        app->selection == 4);
-        demo_value_line(111, "P2 MODE", p2_mode, app->selection == 5);
-        demo_value_line(126, "P2 SENSITIVITY",
+                            app->player_input[0].aim_slowdown], 3, app->selection);
+        demo_value_line(96, "P2 MODE", p2_mode, 4, app->selection);
+        demo_value_line(111, "P2 SENSITIVITY",
                         demo_sensitivity_names[
-                            app->player_input[1].sensitivity],
-                        app->selection == 6);
+                            app->player_input[1].sensitivity], 5, app->selection);
         vox_ui_text_center(&demo_ui, 160, 174, 1,
                            "UP DOWN  PAGE 1/2", DEMO_VGA_DARK_GRAY);
     } else {
         demo_value_line(36, "P2 DEADZONE",
-                        demo_deadzone_names[app->player_input[1].deadzone],
-                        app->selection == 7);
+                        demo_deadzone_names[app->player_input[1].deadzone], 6, app->selection);
         demo_value_line(51, "P2 AIM SLOW",
                         demo_slowdown_names[
-                            app->player_input[1].aim_slowdown],
-                        app->selection == 8);
-        demo_value_line(66, "P2 ROPE",
-                        demo_rope_mode_names[
-                            app->player_input[1].rope_mode],
-                        app->selection == 9);
-        demo_value_line(81, "CALIBRATE PADS",
-                        calibrating ? "KEEP STICKS STILL" : "START",
-                        app->selection == 10);
-        demo_menu_item(101, "RESTORE INPUT DEFAULTS",
-                       app->selection == 11);
-        demo_menu_item(117, "BACK", app->selection == 12);
+                            app->player_input[1].aim_slowdown], 7, app->selection);
+        demo_value_line(66, "CALIBRATE PADS",
+                        calibrating ? "KEEP STICKS STILL" : "START", 8, app->selection);
+        demo_menu_item(86, "RESTORE INPUT DEFAULTS", 9, app->selection);
+        demo_menu_item(102, "BACK", 10, app->selection);
         vox_ui_text_center(&demo_ui, 160, 174, 1,
                            "UP DOWN  PAGE 2/2", DEMO_VGA_DARK_GRAY);
     }
 }
 
-static void demo_draw_feedback(demo_app *app)
-{
-    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
-    (void)vox_software_render_ex(&demo_title_world, &demo_target,
-                                 &demo_render_config);
-    demo_dark_panel(24, 18, 272, 166);
-    vox_ui_text_center_shadow(&demo_ui, 160, 28, 1, "QA FEEDBACK",
-                              DEMO_VGA_YELLOW);
-    vox_ui_text(&demo_ui, 39, 62, 1,
-                "1 OPEN QA/VOX_QA_FEEDBACK.XLSX", DEMO_VGA_LIGHT_GRAY);
-    vox_ui_text(&demo_ui, 39, 78, 1,
-                "2 RECORD STEPS EXPECTED ACTUAL", DEMO_VGA_LIGHT_GRAY);
-    vox_ui_text(&demo_ui, 39, 94, 1,
-                "3 RUN TOOLS/VOX-TEST-COCKPIT.SH", DEMO_VGA_LIGHT_GRAY);
-    vox_ui_text(&demo_ui, 39, 110, 1,
-                "4 ATTACH PACKET TO GITHUB ISSUE", DEMO_VGA_LIGHT_GRAY);
-    vox_ui_text_center(&demo_ui, 160, 134, 1,
-                       "CLAIRE-MOON/VOX  DEMO FEEDBACK",
-                       DEMO_VGA_LIGHT_CYAN);
-    vox_ui_text_center(&demo_ui, 160, 158, 1,
-                       "ENTER OR ESC RETURNS", DEMO_VGA_YELLOW);
-}
 
 static void demo_short_label(char *destination, int capacity,
                              const char *source, int max_characters)
@@ -3244,123 +3676,6 @@ static void demo_short_label(char *destination, int capacity,
     destination[length] = '\0';
 }
 
-static void demo_draw_how_to(demo_app *app)
-{
-    char prompt[80];
-    int family = demo_prompt_family(app);
-    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
-    (void)vox_software_render_ex(&demo_title_world, &demo_target,
-                                 &demo_render_config);
-    demo_dark_panel(10, 8, 300, 184);
-    vox_ui_text_center_shadow(&demo_ui, 160, 16, 1, "HOW TO PLAY",
-                              DEMO_VGA_YELLOW);
-    vox_ui_text(&demo_ui, 20, 40, 1, "MOVE", DEMO_VGA_LIGHT_CYAN);
-    vox_ui_text(&demo_ui, 72, 40, 1, "A D OR LEFT STICK", DEMO_VGA_WHITE);
-    vox_ui_text(&demo_ui, 20, 52, 1, "JUMP", DEMO_VGA_LIGHT_CYAN);
-    sprintf(prompt, "SPACE OR [%s]",
-            demo_pad_button_label(family, app->bindings.pad_jump));
-    vox_ui_text(&demo_ui, 72, 52, 1, prompt, DEMO_VGA_WHITE);
-    vox_ui_text(&demo_ui, 20, 64, 1, "ROPE", DEMO_VGA_LIGHT_CYAN);
-    sprintf(prompt, "RMB OR [%s]  HOLD/TOGGLE IN OPTIONS",
-            demo_pad_button_label(family, app->bindings.pad_rope));
-    vox_ui_text(&demo_ui, 72, 64, 1, prompt, DEMO_VGA_WHITE);
-    vox_ui_text(&demo_ui, 20, 76, 1, "AIM", DEMO_VGA_LIGHT_CYAN);
-    vox_ui_text(&demo_ui, 72, 76, 1, "MOUSE OR RIGHT STICK", DEMO_VGA_WHITE);
-    vox_ui_text(&demo_ui, 20, 88, 1, "FIRE", DEMO_VGA_LIGHT_CYAN);
-    sprintf(prompt, "LMB E OR [%s]",
-            demo_pad_button_label(family, app->bindings.pad_fire));
-    vox_ui_text(&demo_ui, 72, 88, 1, prompt, DEMO_VGA_WHITE);
-    vox_ui_text(&demo_ui, 20, 100, 1, "STEAM", DEMO_VGA_LIGHT_CYAN);
-    sprintf(prompt, "SHIFT OR [%s]  ZL+R-STICK ZOOMS",
-            demo_pad_button_label(family, app->bindings.pad_steam));
-    vox_ui_text(&demo_ui, 72, 100, 1, prompt, DEMO_VGA_WHITE);
-    vox_ui_text_wrap(&demo_ui, 20, 119, 280, 5, 1,
-        "DESTROY TERRAIN OUTSMART RIVALS AND STAY ABOVE THE RISING LAVA. "
-        "SPAWNS HAVE A FIVE SECOND SHIELD THAT ENDS WHEN YOU ATTACK. "
-        "ROPE TO SOLID BEAMS OR ROCK AND USE TOOLS TO BUILD YOUR OWN ROUTE.",
-        170U, 170U, 170U);
-    sprintf(prompt, "ESC OR [%s] RETURNS",
-            demo_pad_button_label(family, demo_pad_back_button(family)));
-    vox_ui_text_center(&demo_ui, 160, 178, 1, prompt, DEMO_VGA_YELLOW);
-}
-
-static void demo_draw_index(demo_app *app)
-{
-    const vox_script_catalog *catalog;
-    const vox_script_entry *entry;
-    vox_u16 count;
-    vox_u16 row;
-    double target_row;
-    double factor;
-    int highlight_y;
-    char footer[64];
-    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
-    (void)vox_software_render_ex(&demo_title_world, &demo_target,
-                                 &demo_render_config);
-    demo_dark_panel(6, 6, 308, 188);
-    vox_ui_text_center_shadow(&demo_ui, 160, 14, 1, "MINER'S INDEX",
-                              DEMO_VGA_YELLOW);
-    catalog = app->scripts_ready ? vox_script_catalog_get(&app->scripts) : 0;
-    count = catalog == 0 ? 0U : catalog->entry_count;
-    if (count == 0U) {
-        vox_ui_text_center(&demo_ui, 160, 92, 1,
-                           "CATALOG UNAVAILABLE", DEMO_VGA_LIGHT_RED);
-        return;
-    }
-    if (app->index_selection >= count) {
-        app->index_selection = (vox_u16)(count - 1U);
-    }
-    target_row = (double)(app->index_selection - app->index_scroll);
-    factor = app->frame_seconds * 18.0;
-    if (factor < 0.05) factor = 0.05;
-    if (factor > 1.0) factor = 1.0;
-    app->index_visual_row += (target_row - app->index_visual_row) * factor;
-    highlight_y = 39 + (int)(app->index_visual_row * 20.0);
-    vox_ui_rect(&demo_ui, 11, highlight_y - 2, 111, 12, DEMO_VGA_BLUE);
-    vox_ui_frame(&demo_ui, 11, highlight_y - 2, 111, 12,
-                 DEMO_VGA_LIGHT_CYAN);
-    if (app->index_scroll > 0U) {
-        vox_ui_text_center(&demo_ui, 66, 28, 1, "^ MORE ^",
-                           DEMO_VGA_LIGHT_CYAN);
-    }
-    for (row = 0U; row < VOX_SCRIPT_INDEX_VISIBLE_ROWS; ++row) {
-        vox_u16 ordinal = (vox_u16)(app->index_scroll + row);
-        if (ordinal < count) {
-            char label[20];
-            const vox_script_entry *listed =
-                vox_script_catalog_entry(catalog, ordinal);
-            demo_short_label(label, (int)sizeof(label),
-                             listed == 0 ? "UNKNOWN" : listed->title, 17);
-            vox_ui_text(&demo_ui, 15, 39 + (int)row * 20, 1, label,
-                        ordinal == app->index_selection ? 255U : 170U,
-                        ordinal == app->index_selection ? 255U : 170U,
-                        ordinal == app->index_selection ? 85U : 170U);
-        }
-    }
-    if ((vox_u16)(app->index_scroll + VOX_SCRIPT_INDEX_VISIBLE_ROWS) <
-        count) {
-        vox_ui_text_center(&demo_ui, 66, 163, 1, "V MORE V",
-                           DEMO_VGA_LIGHT_CYAN);
-    }
-    vox_ui_frame(&demo_ui, 128, 31, 180, 140, DEMO_VGA_BROWN);
-    entry = vox_script_catalog_entry(catalog, app->index_selection);
-    if (entry != 0) {
-        char heading[30];
-        demo_short_label(heading, (int)sizeof(heading), entry->title, 27);
-        vox_ui_text(&demo_ui, 134, 38, 1, heading, DEMO_VGA_YELLOW);
-        vox_ui_text(&demo_ui, 134, 49, 1, entry->category,
-                    DEMO_VGA_LIGHT_CYAN);
-        (void)vox_ui_text_wrap(&demo_ui, 134, 63, 168, 4, 1,
-                               entry->summary, 255U, 255U, 255U);
-        (void)vox_ui_text_wrap(&demo_ui, 134, 101, 168, 7, 1,
-                               entry->detail, 170U, 170U, 170U);
-    }
-    sprintf(footer, "UP DOWN BROWSE  ESC OR [%s] BACK",
-            demo_pad_button_label(demo_prompt_family(app),
-                demo_pad_back_button(demo_prompt_family(app))));
-    vox_ui_text_center(&demo_ui, 160, 180, 1, footer,
-                       DEMO_VGA_DARK_GRAY);
-}
 
 static const char *demo_scancode_label(SDL_Scancode code)
 {
@@ -3446,8 +3761,7 @@ static void demo_draw_controls(demo_app *app)
                               DEMO_VGA_YELLOW);
     demo_value_line(36, "DEVICE",
         app->binding_player == 0 ? "P1 KEYBOARD" :
-        (app->binding_player == 1 ? "P2 KEYBOARD" : "CONTROLLER"),
-        app->selection == 0);
+        (app->binding_player == 1 ? "P2 KEYBOARD" : "CONTROLLER"), 0, app->selection);
     for (action = 0; action < 9; ++action) {
         const char *binding_name;
         if (app->binding_player < 2) {
@@ -3455,7 +3769,7 @@ static void demo_draw_controls(demo_app *app)
                 app, app->binding_player, action);
             if (app->binding_player == 0 && action == 4 && binding != 0 &&
                 *binding == SDL_SCANCODE_UNKNOWN) {
-                binding_name = "RMB (MOUSE)";
+                binding_name = "MMB (MOUSE)";
             } else {
                 binding_name = binding == 0 ? "UNBOUND" :
                                demo_scancode_label(*binding);
@@ -3468,29 +3782,13 @@ static void demo_draw_controls(demo_app *app)
                 demo_pad_button_label(demo_prompt_family(app), *binding);
         }
         sprintf(line, "%s", binding_name);
-        demo_value_line(44 + action * 11, actions[action], line,
-                        app->selection == action + 1);
+        demo_value_line(44 + action * 11, actions[action], line, action + 1, app->selection);
     }
-    demo_menu_item(148, "RESTORE DEFAULTS", app->selection == 10);
-    demo_menu_item(163, "BACK", app->selection == 11);
+    demo_menu_item(148, "RESTORE DEFAULTS", 10, app->selection);
+    demo_menu_item(163, "BACK", 11, app->selection);
     vox_ui_text_center(&demo_ui, 160, 180, 1,
         app->binding_capture ? "PRESS A NEW KEY  ESC CANCELS" :
         "ENTER REBINDS  LEFT RIGHT DEVICE", DEMO_VGA_LIGHT_CYAN);
-}
-
-static void demo_draw_script_error(demo_app *app)
-{
-    demo_render_config.gi_quality = (vox_u16)app->options.gi_quality;
-    (void)vox_software_render_ex(&demo_title_world, &demo_target,
-                                 &demo_render_config);
-    demo_dark_panel(18, 24, 284, 152);
-    vox_ui_text_center_shadow(&demo_ui, 160, 35, 1, "SCRIPT ERROR",
-                              DEMO_VGA_LIGHT_RED);
-    (void)vox_ui_text_wrap(&demo_ui, 32, 68, 256, 8, 1,
-                           vox_script_last_error(&app->scripts),
-                           255U, 255U, 255U);
-    vox_ui_text_center(&demo_ui, 160, 154, 1,
-                       "F5 RETRIES  ESC QUITS", DEMO_VGA_YELLOW);
 }
 
 static vox_i32 demo_material_temperature(vox_u16 material)
@@ -3532,7 +3830,7 @@ static void demo_render_voxel(int x, int y, vox_u16 material)
     vox_u32 cell_index;
     vox_cell *cell;
     if (x < 0 || y < 0 || x >= (int)VOX_WORLD_WIDTH ||
-        y >= (int)VOX_WORLD_HEIGHT || material == VOX_MAT_AIR) {
+        y >= (int)VOX_WORLD_HEIGHT) {
         return;
     }
     plane_index = (vox_u32)y * VOX_WORLD_WIDTH + (vox_u32)x;
@@ -3570,16 +3868,50 @@ static void demo_voxelize_miner(const demo_app *app, vox_u16 player)
                                VOX_WORLD_WIDTH, VOX_WORLD_WIDTH);
     int y = demo_q16_to_screen(body->position_y.value_q16,
                                VOX_WORLD_HEIGHT, VOX_WORLD_HEIGHT);
+    vox_i32 speed_x = body->velocity_x.value_q16;
     vox_u16 part;
     digs_miner_pose_default(&pose);
-    pose.coat_material = app->miner_hit_ttl[player] > 0U ?
-                         VOX_MAT_BLOOD : coats[player];
+    if (player < (vox_u16)app->local_players && player < DEMO_LOCAL_MAX) {
+        int outfit = app->outfit_color[player];
+        int helmet = app->helmet_color[player];
+        if (outfit < 0 || outfit >= DEMO_COSMETIC_COLOR_COUNT) outfit = 0;
+        if (helmet < 0 || helmet >= DEMO_COSMETIC_COLOR_COUNT) helmet = 0;
+        pose.coat_material = app->miner_hit_ttl[player] > 0U ?
+                             VOX_MAT_BLOOD :
+                             demo_cosmetic_materials[outfit];
+        pose.helmet_material = demo_cosmetic_materials[helmet];
+    } else {
+        pose.coat_material = app->miner_hit_ttl[player] > 0U ?
+                             VOX_MAT_BLOOD : coats[player];
+        pose.helmet_material = VOX_MAT_METAL;
+    }
     pose.facing_right = demo_match.facing_right[player];
     pose.steam_pack = 1U;
     pose.steam_thrusting =
         (demo_match.player_actions[player] & VOX_DIGS_ACTION_STEAM) != 0U &&
         demo_match.steam_q16[player] > 0U;
     pose.steam_variant = (vox_u16)((demo_match.tick + player * 17U) & 7U);
+    pose.animation_phase = (vox_u16)((demo_match.tick + player * 3U) & 3U);
+    pose.animation = DIGS_MINER_ANIMATION_IDLE;
+    if (app->miner_hit_ttl[player] > 0U) {
+        pose.animation = DIGS_MINER_ANIMATION_PAIN;
+    } else if (pose.steam_thrusting != 0U) {
+        pose.animation = DIGS_MINER_ANIMATION_STEAM;
+    } else if ((demo_match.player_actions[player] & VOX_DIGS_ACTION_FIRE) !=
+               0U || demo_match.weapon_charging[player] != 0U ||
+               demo_match.rail_charging[player] != 0U) {
+        pose.animation = DIGS_MINER_ANIMATION_FIRE;
+    } else if ((demo_match.player_actions[player] & VOX_DIGS_ACTION_JUMP) !=
+               0U || body->velocity_y.value_q16 < -8192L) {
+        pose.animation = DIGS_MINER_ANIMATION_JUMP;
+    } else {
+        if (speed_x < 0L) speed_x = -speed_x;
+        if ((demo_match.player_actions[player] &
+             (VOX_DIGS_ACTION_LEFT | VOX_DIGS_ACTION_RIGHT)) != 0U ||
+            speed_x > 8192L) {
+            pose.animation = DIGS_MINER_ANIMATION_WALK;
+        }
+    }
     for (part = 0U; part < VOX_DIGS_ANATOMY_PART_COUNT; ++part) {
         if ((demo_match.anatomy[player][part].flags &
              VOX_DIGS_PART_SEVERED) != 0U) {
@@ -3684,6 +4016,147 @@ static void demo_voxelize_lava_horizon(void)
     }
 }
 
+/* The ship is an authoritative collision/launch object, but its visible hull
+ * belongs to the port.  Draw it into the temporary top render layer from its
+ * current match state so launch and extraction read as an event without
+ * turning a presentation mesh into terrain or hash state. */
+static void demo_voxelize_dropship(void)
+{
+    const vox_digs_dropship *ship = &demo_match.dropship;
+    int center_x;
+    int center_y;
+    int tail_direction;
+    int offset;
+    if (ship->phase == VOX_DIGS_DROPSHIP_PHASE_DEPARTED) return;
+    center_x = (int)(ship->position_x_q16 / 65536L);
+    center_y = (int)(ship->position_y_q16 / 65536L);
+    /* A tiny, deliberately blocky hull: broad enough to communicate the
+     * collision footprint without obscuring the launch platform. */
+    for (offset = -5; offset <= 5; ++offset) {
+        demo_render_voxel(center_x + offset, center_y, VOX_MAT_METAL);
+        if (offset >= -3 && offset <= 3) {
+            demo_render_voxel(center_x + offset, center_y - 1,
+                              VOX_MAT_METAL);
+        }
+    }
+    demo_render_voxel(center_x - 2, center_y - 2, VOX_MAT_METAL);
+    demo_render_voxel(center_x - 1, center_y - 2, VOX_MAT_METAL);
+    demo_render_voxel(center_x, center_y - 2, VOX_MAT_LAVA);
+    demo_render_voxel(center_x + 1, center_y - 2, VOX_MAT_METAL);
+    demo_render_voxel(center_x + 2, center_y - 2, VOX_MAT_METAL);
+    tail_direction = ship->velocity_x_q16 < 0L ? 1 : -1;
+    if (ship->phase == VOX_DIGS_DROPSHIP_PHASE_LAUNCH ||
+        ship->phase == VOX_DIGS_DROPSHIP_PHASE_EXTRACTION) {
+        for (offset = 1; offset <= 4; ++offset) {
+            demo_render_voxel(center_x + tail_direction * (5 + offset),
+                              center_y, VOX_MAT_WATER);
+            if (offset <= 2) {
+                demo_render_voxel(center_x + tail_direction * (5 + offset),
+                                  center_y + 1, VOX_MAT_SMOKE);
+            }
+        }
+    }
+}
+
+/* A held tool is a tiny presentation-only voxel silhouette.  The gameplay
+ * weapon remains the selected authoritative ID; this only makes its muzzle
+ * direction legible at the same scale as the miner art. */
+static void demo_voxelize_weapon_model(vox_u16 player)
+{
+    const vox_physics_body *body = &demo_match.players[player];
+    vox_u16 weapon = demo_match.selected_weapon[player];
+    int body_x = (int)(body->position_x.value_q16 / 65536L);
+    int body_y = (int)(body->position_y.value_q16 / 65536L);
+    int muzzle_x = body_x + (demo_match.facing_right[player] ? 3 : -3);
+    int muzzle_y = body_y - 2;
+    int delta_x = (int)demo_match.aim_x[player] - body_x;
+    int delta_y = (int)demo_match.aim_y[player] - body_y;
+    int step_x;
+    int step_y;
+    int length;
+    vox_u16 material;
+    if (weapon >= VOX_DIGS_TOOL_COUNT) return;
+    if (delta_x == 0 && delta_y == 0) {
+        step_x = demo_match.facing_right[player] ? 1 : -1;
+        step_y = 0;
+    } else if ((delta_x < 0 ? -delta_x : delta_x) >=
+               (delta_y < 0 ? -delta_y : delta_y)) {
+        step_x = delta_x < 0 ? -1 : 1;
+        step_y = delta_y < 0 ? -1 : (delta_y > 0 ? 1 : 0);
+    } else {
+        step_x = delta_x < 0 ? -1 : (delta_x > 0 ? 1 : 0);
+        step_y = delta_y < 0 ? -1 : 1;
+    }
+    material = weapon == VOX_DIGS_TOOL_CINDER_FLASK ||
+               weapon == VOX_DIGS_TOOL_RAIL_GUN ? VOX_MAT_LAVA :
+               VOX_MAT_METAL;
+    for (length = 0; length < 4; ++length) {
+        demo_render_voxel(muzzle_x + step_x * length,
+                          muzzle_y + step_y * length, material);
+    }
+    demo_render_voxel(muzzle_x + step_x * 4, muzzle_y + step_y * 4,
+                      weapon == VOX_DIGS_TOOL_SMOKE_POT ? VOX_MAT_SMOKE :
+                      material);
+}
+
+/* Bodies in the authoritative rigid pool used to be visible only in replay
+ * snapshots.  Render one compact physical mark per live segment rather than
+ * painting thick terrain-coloured bars over the scene.  The simulation still
+ * owns every body; this is a deliberately quiet, non-authoritative readout. */
+static vox_u16 demo_rigid_material(vox_u16 index,
+                                   const vox_rigid_body *body)
+{
+    if ((body->flags & VOX_RIGID_BODY_SCRAP) != 0U) return VOX_MAT_METAL;
+    if ((body->flags & VOX_RIGID_BODY_CORPSE) != 0U) return VOX_MAT_FLESH;
+    if (index < VOX_RIGID_MAX_BODIES &&
+        demo_match.rigid_material[index] != VOX_MAT_AIR &&
+        demo_match.rigid_material[index] < VOX_MAT_COUNT) {
+        return demo_match.rigid_material[index];
+    }
+    return VOX_MAT_STONE;
+}
+
+static void demo_voxelize_rigid_bodies(void)
+{
+    static const int direction_x[8] = {1, 1, 0, -1, -1, -1, 0, 1};
+    static const int direction_y[8] = {0, 1, 1, 1, 0, -1, -1, -1};
+    vox_u16 debris_seen = 0U;
+    vox_u16 index;
+    for (index = 0U; index < demo_match.ragdolls.body_count &&
+         index < VOX_RIGID_MAX_BODIES; ++index) {
+        const vox_rigid_body *body = &demo_match.ragdolls.bodies[index];
+        vox_i32 normalized;
+        int direction;
+        int center_x;
+        int center_y;
+        int draw_tail;
+        int corpse;
+        vox_u16 material;
+        if ((body->flags & VOX_RIGID_BODY_ACTIVE) == 0U) continue;
+        corpse = (body->flags & VOX_RIGID_BODY_CORPSE) != 0U;
+        if (!corpse) {
+            if (debris_seen >= DEMO_RIGID_DEBRIS_VISUAL_CAP) continue;
+            debris_seen++;
+        }
+        normalized = body->angle_q16 % 65536L;
+        if (normalized < 0L) normalized += 65536L;
+        direction = (int)(((vox_u32)normalized >> 13) & 7U);
+        center_x = (int)(body->position_x_q16 / 65536L);
+        center_y = (int)(body->position_y_q16 / 65536L);
+        material = demo_rigid_material(index, body);
+        demo_render_voxel(center_x, center_y, material);
+        draw_tail = ((body->flags & VOX_RIGID_BODY_SCRAP) != 0U) ||
+                    (!corpse && body->half_width_q16 >= (2L << 16) &&
+                     (index & 1U) == 0U) ||
+                    (corpse && body->half_width_q16 >= (2L << 16) &&
+                     (index % 3U) == 0U);
+        if (draw_tail) {
+            demo_render_voxel(center_x + direction_x[direction],
+                              center_y + direction_y[direction], material);
+        }
+    }
+}
+
 static void demo_build_render_world(demo_app *app)
 {
     vox_u16 player;
@@ -3692,10 +4165,13 @@ static void demo_build_render_world(demo_app *app)
      * Give that exact boundary a top-layer voxel horizon so bedrock or deep
      * terrain cannot visually hide the rising hazard. */
     demo_voxelize_lava_horizon();
+    demo_voxelize_rigid_bodies();
+    demo_voxelize_dropship();
     for (player = 0U; player < VOX_DIGS_MAX_SLOTS; ++player) {
         if (demo_match.alive[player]) {
             demo_voxelize_rope(player);
             demo_voxelize_miner(app, player);
+            demo_voxelize_weapon_model(player);
         }
     }
     demo_voxelize_rail_traces(app);
@@ -3711,20 +4187,56 @@ static void demo_build_render_world(demo_app *app)
             demo_render_voxel(x, y, material);
         }
     }
-    for (index = 0U; index < demo_match.rules.fx_budget; ++index) {
-        const vox_digs_effect *effect = &demo_match.effects[index];
-        if (effect->active) {
-            int x = demo_q16_to_screen(effect->position_x_q16,
-                                       VOX_WORLD_WIDTH, VOX_WORLD_WIDTH);
-            int y = demo_q16_to_screen(effect->position_y_q16,
-                                       VOX_WORLD_HEIGHT, VOX_WORLD_HEIGHT);
-            int gore = effect->material == VOX_MAT_FLESH ||
-                       effect->material == VOX_MAT_BLOOD;
-            if (!gore || app->options.gore_level == 2 ||
-                (app->options.gore_level == 1 && (index % 3U) == 0U)) {
-                demo_render_voxel(x, y, effect->material);
-            }
+}
+
+static vox_u16 demo_replay_fluid_material(vox_u16 material)
+{
+    if (material == VOX_FLUID_WATER) return VOX_MAT_WATER;
+    if (material == VOX_FLUID_LAVA) return VOX_MAT_LAVA;
+    if (material == VOX_FLUID_BLOOD) return VOX_MAT_BLOOD;
+    return VOX_MAT_AIR;
+}
+
+static vox_u16 demo_replay_rigid_material(vox_u16 flags)
+{
+    if ((flags & VOX_RIGID_BODY_SCRAP) != 0U) return VOX_MAT_METAL;
+    if ((flags & VOX_RIGID_BODY_CORPSE) != 0U) return VOX_MAT_FLESH;
+    return VOX_MAT_STONE;
+}
+
+static void demo_build_replay_render_world(const vox_digs_replay_frame *frame)
+{
+    vox_u16 row;
+    vox_u16 column;
+    vox_u16 index;
+    if (frame == 0) return;
+    for (row = 0U; row < frame->terrain_height; ++row) {
+        for (column = 0U; column < frame->terrain_width; ++column) {
+            vox_u16 cell_index = (vox_u16)(row * frame->terrain_width +
+                                           column);
+            demo_render_voxel((int)frame->terrain_origin_x + column,
+                              (int)frame->terrain_origin_y + row,
+                              frame->terrain_material[cell_index]);
         }
+    }
+    for (index = 0U; index < frame->fluid_count; ++index) {
+        const vox_digs_replay_fluid *fluid = &frame->fluids[index];
+        vox_u16 material = demo_replay_fluid_material(fluid->material);
+        if (material != VOX_MAT_AIR) {
+            demo_render_voxel((int)fluid->x, (int)fluid->y, material);
+        }
+    }
+    for (index = 0U; index < frame->rigid_count; ++index) {
+        const vox_digs_replay_rigid *rigid = &frame->rigids[index];
+        demo_render_voxel((int)(rigid->position_x_q16 >> 16),
+                          (int)(rigid->position_y_q16 >> 16),
+                          demo_replay_rigid_material(rigid->flags));
+    }
+    for (index = 0U; index < frame->effect_count; ++index) {
+        const vox_digs_replay_effect *effect = &frame->effects[index];
+        demo_render_voxel((int)(effect->position_x_q16 >> 16),
+                          (int)(effect->position_y_q16 >> 16),
+                          effect->material);
     }
 }
 
@@ -3813,6 +4325,287 @@ static void demo_camera_exterior_pixel(vox_u8 *destination, int source_y,
     destination[0] = (vox_u8)(16U + shade_y * 18U / VOX_WORLD_HEIGHT);
     destination[1] = (vox_u8)(24U + shade_y * 22U / VOX_WORLD_HEIGHT);
     destination[2] = (vox_u8)(42U + shade_y * 28U / VOX_WORLD_HEIGHT);
+}
+
+/* This is deliberately an original, small presentation palette rather than
+ * an imported game palette.  It keeps the new sky/fog treatment bounded and
+ * coherent with the renderer's material colours while the provenance question
+ * around an exact DOOM palette remains open. */
+static const vox_u8 demo_atmosphere_palette[][3] = {
+    {12U, 19U, 35U},
+    {25U, 36U, 58U},
+    {47U, 65U, 91U},
+    {78U, 99U, 124U},
+    {112U, 128U, 145U},
+    {180U, 191U, 202U},
+    {236U, 240U, 244U},
+    {39U, 43U, 58U},
+    {58U, 73U, 83U}
+};
+
+static void demo_atmosphere_quantize(vox_u8 *red, vox_u8 *green,
+                                     vox_u8 *blue)
+{
+    int best = 0;
+    int best_distance = 2147483647;
+    int index;
+    for (index = 0; index < (int)(sizeof(demo_atmosphere_palette) /
+                                  sizeof(demo_atmosphere_palette[0]));
+         ++index) {
+        int delta_red = (int)*red -
+                        (int)demo_atmosphere_palette[index][0];
+        int delta_green = (int)*green -
+                          (int)demo_atmosphere_palette[index][1];
+        int delta_blue = (int)*blue -
+                         (int)demo_atmosphere_palette[index][2];
+        int distance = delta_red * delta_red + delta_green * delta_green +
+                       delta_blue * delta_blue;
+        if (distance < best_distance) {
+            best_distance = distance;
+            best = index;
+        }
+    }
+    *red = demo_atmosphere_palette[best][0];
+    *green = demo_atmosphere_palette[best][1];
+    *blue = demo_atmosphere_palette[best][2];
+}
+
+static int demo_render_pixel_is_air(const vox_u8 *pixel, vox_u32 world_y)
+{
+    return pixel[0] == (vox_u8)(16U + world_y * 18U / VOX_WORLD_HEIGHT) &&
+           pixel[1] == (vox_u8)(24U + world_y * 22U / VOX_WORLD_HEIGHT) &&
+           pixel[2] == (vox_u8)(42U + world_y * 28U / VOX_WORLD_HEIGHT);
+}
+
+static void demo_view_advance(vox_i32 *position_q16, vox_u32 *error,
+                              vox_i32 step_q16, vox_u32 remainder,
+                              vox_u32 denominator)
+{
+    *position_q16 += step_q16;
+    if (remainder != 0U && *error >= denominator - remainder) {
+        *error -= denominator - remainder;
+        ++*position_q16;
+    } else {
+        *error += remainder;
+    }
+}
+
+/* Keep the atmospheric pass subordinate to the terrain palette.  The former
+ * two hard horizon silhouettes and per-cell cloud dither read as accidental
+ * foreground geometry at this resolution.  A tiny air-only fog bias and one
+ * seed-derived moon retain depth without replacing the renderer's material
+ * decisions or canonical state. */
+static void demo_atmosphere_pixel(const demo_app *app, vox_u32 world_x,
+                                  vox_u32 world_y, vox_u8 *pixel)
+{
+    vox_u32 seed = demo_match.rules.seed;
+    int red;
+    int green;
+    int blue;
+    int fog;
+    int moon_x;
+    int moon_y;
+    int moon_radius;
+    int delta_x;
+    int delta_y;
+    (void)app;
+    red = (int)pixel[0];
+    green = (int)pixel[1];
+    blue = (int)pixel[2];
+    fog = (int)(world_y / 80U);
+    red += fog;
+    green += fog;
+    blue += fog * 2;
+    moon_x = 28 + (int)(seed % (VOX_WORLD_WIDTH - 56U));
+    moon_y = 18 + (int)((seed >> 16) % 28U);
+    moon_radius = 5 + (int)((seed >> 8) & 3U);
+    delta_x = (int)world_x - moon_x;
+    delta_y = (int)world_y - moon_y;
+    if (world_y < 72U &&
+        delta_x * delta_x + delta_y * delta_y <= moon_radius * moon_radius) {
+        red = 236;
+        green = 240;
+        blue = 244;
+        pixel[0] = (vox_u8)red;
+        pixel[1] = (vox_u8)green;
+        pixel[2] = (vox_u8)blue;
+        demo_atmosphere_quantize(&pixel[0], &pixel[1], &pixel[2]);
+        return;
+    }
+    if (red > 255) red = 255;
+    if (green > 255) green = 255;
+    if (blue > 255) blue = 255;
+    pixel[0] = (vox_u8)red;
+    pixel[1] = (vox_u8)green;
+    pixel[2] = (vox_u8)blue;
+}
+
+static void demo_apply_atmosphere(const demo_app *app,
+                                  const vox_software_view *view)
+{
+    vox_i32 world_y_q16;
+    vox_i32 step_x_q16;
+    vox_i32 step_y_q16;
+    vox_u32 remainder_x;
+    vox_u32 remainder_y;
+    vox_u32 error_y = 0U;
+    vox_u32 pixel_y;
+    if (app == 0 || view == 0) return;
+    step_x_q16 = view->width_q16 / (vox_i32)DEMO_WIDTH;
+    step_y_q16 = view->height_q16 / (vox_i32)DEMO_HEIGHT;
+    remainder_x = (vox_u32)(view->width_q16 % (vox_i32)DEMO_WIDTH);
+    remainder_y = (vox_u32)(view->height_q16 % (vox_i32)DEMO_HEIGHT);
+    world_y_q16 = view->origin_y_q16;
+    for (pixel_y = 0U; pixel_y < DEMO_HEIGHT; ++pixel_y) {
+        vox_u32 world_y = (vox_u32)world_y_q16 >> 16;
+        vox_i32 world_x_q16 = view->origin_x_q16;
+        vox_u32 error_x = 0U;
+        vox_u32 pixel_x;
+        if (world_y >= VOX_WORLD_HEIGHT) world_y = VOX_WORLD_HEIGHT - 1U;
+        for (pixel_x = 0U; pixel_x < DEMO_WIDTH; ++pixel_x) {
+            vox_u32 world_x = (vox_u32)world_x_q16 >> 16;
+            vox_u8 *pixel = &demo_pixels[(pixel_y * DEMO_WIDTH + pixel_x) *
+                                          VOX_SOFTWARE_RGB_BYTES];
+            if (world_x >= VOX_WORLD_WIDTH) world_x = VOX_WORLD_WIDTH - 1U;
+            if (demo_render_pixel_is_air(pixel, world_y)) {
+                demo_atmosphere_pixel(app, world_x, world_y, pixel);
+            }
+            demo_view_advance(&world_x_q16, &error_x, step_x_q16,
+                              remainder_x, DEMO_WIDTH);
+        }
+        demo_view_advance(&world_y_q16, &error_y, step_y_q16,
+                          remainder_y, DEMO_HEIGHT);
+    }
+}
+
+/* Effects are deliberately not temporary terrain.  Rendering them into the
+ * voxel overlay made a one-cell blood drop or smoke mote replace a fully lit
+ * terrain surface, which reads as a noisy rectangular scar at the window's
+ * nearest-neighbour scale.  Blend compact screen-space marks after the
+ * Lightfield instead; authoritative fluids, corpses, and debris remain in
+ * their appropriate world paths. */
+static void demo_blend_particle_pixel(int x, int y, vox_u8 red,
+                                      vox_u8 green, vox_u8 blue,
+                                      vox_u16 strength)
+{
+    vox_u8 *pixel;
+    if (x < 0 || y < 0 || x >= (int)DEMO_WIDTH || y >= (int)DEMO_HEIGHT ||
+        strength == 0U || strength > 2U) {
+        return;
+    }
+    pixel = &demo_pixels[((vox_u32)y * DEMO_WIDTH + (vox_u32)x) *
+                         VOX_SOFTWARE_RGB_BYTES];
+    pixel[0] = (vox_u8)(((vox_u16)pixel[0] * (3U - strength) +
+                         (vox_u16)red * strength) / 3U);
+    pixel[1] = (vox_u8)(((vox_u16)pixel[1] * (3U - strength) +
+                         (vox_u16)green * strength) / 3U);
+    pixel[2] = (vox_u8)(((vox_u16)pixel[2] * (3U - strength) +
+                         (vox_u16)blue * strength) / 3U);
+}
+
+static int demo_effect_view_position(const vox_software_view *view,
+                                     const vox_digs_effect *effect,
+                                     int *screen_x, int *screen_y)
+{
+    double local_x;
+    double local_y;
+    if (view == 0 || effect == 0 || screen_x == 0 || screen_y == 0 ||
+        view->width_q16 <= 0L || view->height_q16 <= 0L) {
+        return 0;
+    }
+    local_x = (double)(effect->position_x_q16 - view->origin_x_q16) /
+              (double)view->width_q16;
+    local_y = (double)(effect->position_y_q16 - view->origin_y_q16) /
+              (double)view->height_q16;
+    if (local_x < 0.0 || local_y < 0.0 || local_x >= 1.0 ||
+        local_y >= 1.0) {
+        return 0;
+    }
+    *screen_x = (int)(local_x * (double)DEMO_WIDTH);
+    *screen_y = (int)(local_y * (double)DEMO_HEIGHT);
+    return *screen_x >= 0 && *screen_y >= 0 &&
+           *screen_x < (int)DEMO_WIDTH && *screen_y < (int)DEMO_HEIGHT;
+}
+
+static void demo_effect_particle_colour(const vox_digs_effect *effect,
+                                        vox_u8 *red, vox_u8 *green,
+                                        vox_u8 *blue)
+{
+    if (effect->material == VOX_MAT_BLOOD) {
+        *red = 184U;
+        *green = 44U;
+        *blue = 39U;
+    } else if (effect->material == VOX_MAT_FLESH) {
+        *red = 165U;
+        *green = 86U;
+        *blue = 69U;
+    } else if (effect->material == VOX_MAT_LAVA) {
+        *red = 236U;
+        *green = 84U;
+        *blue = 22U;
+    } else if (effect->material == VOX_MAT_WATER) {
+        *red = 58U;
+        *green = 117U;
+        *blue = 196U;
+    } else if (effect->material == VOX_MAT_SMOKE ||
+               effect->material == VOX_MAT_FIREDAMP) {
+        *red = 104U;
+        *green = 104U;
+        *blue = 118U;
+    } else if (effect->material == VOX_MAT_METAL) {
+        *red = 148U;
+        *green = 155U;
+        *blue = 166U;
+    } else {
+        *red = 176U;
+        *green = 150U;
+        *blue = 82U;
+    }
+}
+
+static void demo_draw_effect_particles(const demo_app *app,
+                                       const vox_software_view *view)
+{
+    vox_u16 index;
+    vox_u16 drawn = 0U;
+    if (app == 0 || view == 0) return;
+    for (index = 0U; index < demo_match.rules.fx_budget &&
+         index < VOX_DIGS_MAX_EFFECTS; ++index) {
+        const vox_digs_effect *effect = &demo_match.effects[index];
+        int gore;
+        int screen_x;
+        int screen_y;
+        int tail_x = 0;
+        int tail_y = 0;
+        vox_u8 red;
+        vox_u8 green;
+        vox_u8 blue;
+        vox_u16 strength;
+        if (!effect->active) continue;
+        gore = effect->material == VOX_MAT_FLESH ||
+               effect->material == VOX_MAT_BLOOD;
+        if (gore && (app->options.gore_level == 0 ||
+            (app->options.gore_level == 1 && (index % 3U) != 0U))) {
+            continue;
+        }
+        if (drawn >= DEMO_EFFECT_PARTICLE_CAP ||
+            !demo_effect_view_position(view, effect, &screen_x, &screen_y)) {
+            continue;
+        }
+        demo_effect_particle_colour(effect, &red, &green, &blue);
+        strength = gore ? 2U : 1U;
+        demo_blend_particle_pixel(screen_x, screen_y, red, green, blue,
+                                  strength);
+        if (effect->velocity_x_q16 > 4096L) tail_x = -1;
+        else if (effect->velocity_x_q16 < -4096L) tail_x = 1;
+        if (effect->velocity_y_q16 > 4096L) tail_y = -1;
+        else if (effect->velocity_y_q16 < -4096L) tail_y = 1;
+        if (tail_x != 0 || tail_y != 0) {
+            demo_blend_particle_pixel(screen_x + tail_x, screen_y + tail_y,
+                                      red, green, blue, 1U);
+        }
+        drawn++;
+    }
 }
 
 static void demo_update_player_camera(demo_app *app)
@@ -3941,6 +4734,52 @@ static void demo_update_player_camera(demo_app *app)
     demo_constrain_camera(app);
     app->camera_trauma -= dt * 1.8;
     if (app->camera_trauma < 0.0) app->camera_trauma = 0.0;
+}
+
+/* The replay ledger is render-only, but its player snapshots give results a
+ * real camera path: frame the killer/victim exchange, use the captured zoom
+ * as a lower bound, and give headshots a modest close-in treatment.  Nothing
+ * here writes to demo_match or participates in its canonical hash. */
+static void demo_update_replay_camera(demo_app *app)
+{
+    const vox_digs_replay_frame *frame;
+    vox_u16 killer;
+    vox_u16 victim;
+    double focus_x;
+    double focus_y;
+    double scale;
+    if (app == 0 || app->replay_frame_valid == 0U) return;
+    frame = &app->replay_frame;
+    killer = demo_match.replay.killer;
+    victim = demo_match.replay.victim;
+    focus_x = (double)frame->camera_x_q16 / 65536.0;
+    focus_y = (double)frame->camera_y_q16 / 65536.0;
+    if (killer < VOX_DIGS_MAX_SLOTS) {
+        focus_x = (double)frame->player_x_q16[killer] / 65536.0;
+        focus_y = (double)frame->player_y_q16[killer] / 65536.0;
+    }
+    if (killer < VOX_DIGS_MAX_SLOTS && victim < VOX_DIGS_MAX_SLOTS) {
+        focus_x = (focus_x + (double)frame->player_x_q16[victim] /
+                   65536.0) * 0.5;
+        focus_y = (focus_y + (double)frame->player_y_q16[victim] /
+                   65536.0) * 0.5;
+    }
+    scale = (double)frame->camera_zoom_q16 / 65536.0;
+    if (scale < 2.4) scale = 2.4;
+    if (demo_match.replay.headshot != 0U) scale += 0.65;
+    else if (demo_match.replay.multi_kill > 1U) scale += 0.35;
+    if ((frame->tick / VOX_DIGS_REPLAY_CAPTURE_STRIDE) % 6U < 2U) {
+        scale += 0.12;
+    }
+    app->camera_world_x = focus_x;
+    app->camera_world_y = focus_y - 3.0;
+    app->camera_scale = scale;
+    app->camera_velocity_x = 0.0;
+    app->camera_velocity_y = 0.0;
+    app->camera_scale_velocity = 0.0;
+    app->camera_shake_x = 0.0;
+    app->camera_shake_y = 0.0;
+    demo_constrain_camera(app);
 }
 
 static void demo_camera_view(const demo_app *app,
@@ -4429,33 +5268,91 @@ static void demo_draw_world_feedback(demo_app *app)
                                       255U : 255U);
         }
         if (!hide_bubbles && app->bubbles[player].ttl > 0U) {
-            int bubble_x = x - 49;
-            int bubble_y = y < 130 ? y + 13 : y - 41;
-            int bubble_min_y = app->local_players > 1 ? 110 : 98;
-            int bubble_max_y = app->options.debug ? 132 : 156;
+            /*
+             * The box is sized to the line, not the other way round.
+             *
+             * It used to be a fixed 100 by 18 with a two-line cap, which at
+             * six pixels per glyph is thirty characters -- and the authored
+             * lines run to forty-six, so most of them were cut mid-sentence.
+             * The same call started the text three pixels down and drew two
+             * eight-pixel lines into an eighteen-pixel box, which is where
+             * the glyph bottoms landed on the frame.
+             */
+            const int pad_x = 5;
+            const int pad_top = 4;
+            const int pad_bottom = 5;
+            const int text_width = 140;
+            int lines = vox_ui_text_wrap_lines(text_width,
+                                               DEMO_BUBBLE_MAX_LINES, 1,
+                                               app->bubbles[player].text);
+            int box_h;
+            int box_w;
+            int bubble_x;
+            int bubble_y;
+            int bubble_min_y;
+            int bubble_max_y;
+            vox_u8 red;
+            vox_u8 green;
+            vox_u8 blue;
+            if (lines < 1) {
+                lines = 1;
+            }
+            box_h = pad_top + lines * VOX_UI_DOS_LINE_HEIGHT + pad_bottom;
+            box_w = text_width + pad_x * 2;
+            /* Shrink to the widest line so a short remark is not a banner. */
+            if (lines == 1) {
+                int measured = vox_ui_text_width(app->bubbles[player].text, 1);
+                if (measured > 0 && measured < text_width) {
+                    box_w = measured + pad_x * 2;
+                }
+            }
+            bubble_x = x - box_w / 2;
+            bubble_y = y < 130 ? y + 13 : y - (box_h + 23);
+            bubble_min_y = app->local_players > 1 ? 110 : 98;
+            bubble_max_y = (app->options.debug ? 150 : 174) - box_h;
             if (bubble_x < 2) bubble_x = 2;
-            if (bubble_x > (int)DEMO_WIDTH - 102) {
-                bubble_x = (int)DEMO_WIDTH - 102;
+            if (bubble_x > (int)DEMO_WIDTH - box_w - 2) {
+                bubble_x = (int)DEMO_WIDTH - box_w - 2;
             }
             if (bubble_y < bubble_min_y) bubble_y = bubble_min_y;
-            if (bubble_y > bubble_max_y) {
-                bubble_y = bubble_max_y;
-            }
-            vox_ui_rect(&demo_ui, bubble_x, bubble_y, 100, 18,
+            if (bubble_y > bubble_max_y) bubble_y = bubble_max_y;
+            demo_identity_colour(vox_digs_memory_identity(&demo_match,
+                                                          (vox_u16)player),
+                                 &red, &green, &blue);
+            vox_ui_rect(&demo_ui, bubble_x, bubble_y, box_w, box_h,
                         DEMO_VGA_BLACK);
-            vox_ui_frame(&demo_ui, bubble_x, bubble_y, 100, 18,
+            vox_ui_frame(&demo_ui, bubble_x, bubble_y, box_w, box_h,
                          DEMO_VGA_LIGHT_GRAY);
-            (void)vox_ui_text_wrap(&demo_ui, bubble_x + 4,
-                                   bubble_y + 3, 92, 2, 1,
+            (void)vox_ui_text_wrap(&demo_ui, bubble_x + pad_x,
+                                   bubble_y + pad_top, box_w - pad_x * 2,
+                                   DEMO_BUBBLE_MAX_LINES, 1,
                                    app->bubbles[player].text,
-                                   255U, 255U, 255U);
+                                   red, green, blue);
         }
-        if (app->options.debug && vox_digs_player_is_bot(&demo_match,
-                                                         (vox_u16)player)) {
-            vox_u16 mode = demo_match.bots[player].mode;
-            const char *name = mode < 4U ? ai_names[mode] : "AI";
-            vox_ui_text_center(&demo_ui, x, y + 10, 1, name,
-                               DEMO_VGA_LIGHT_CYAN);
+        if (app->options.debug) {
+            /*
+             * With F1 held down, label every miner with the tool it is
+             * actually holding.  Without this the archetype weapon
+             * preferences can only be read off a histogram after the fact,
+             * which makes them impossible to judge while playing.
+             */
+            const vox_digs_weapon_properties *held =
+                vox_digs_weapon_get(demo_match.selected_weapon[player]);
+            if (held != 0) {
+                vox_ui_text_center(&demo_ui, x, y + 10, 1, held->name,
+                                   DEMO_VGA_YELLOW);
+            }
+            if (vox_digs_player_is_bot(&demo_match, (vox_u16)player)) {
+                vox_u16 mode = demo_match.bots[player].mode;
+                vox_u16 archetype = vox_digs_bot_archetype(&demo_match,
+                                                           (vox_u16)player);
+                const char *name = mode < 4U ? ai_names[mode] : "AI";
+                const char *who = vox_digs_archetype_name(archetype);
+                char label[48];
+                sprintf(label, "%s %s", who != 0 ? who : "BOT", name);
+                vox_ui_text_center(&demo_ui, x, y + 18, 1, label,
+                                   DEMO_VGA_LIGHT_CYAN);
+            }
         }
     }
     for (player = 0; app->screen == DEMO_PLAY &&
@@ -4546,6 +5443,9 @@ static void demo_draw_play(demo_app *app)
     vox_software_view view;
     vox_result render_status;
     demo_update_player_camera(app);
+    if (app->replay_frame_valid) {
+        demo_update_replay_camera(app);
+    }
     demo_camera_view(app, &view);
     /* Laptop Mode changes only presentation cost. The authoritative world,
      * effects, inputs and 60 Hz simulation remain byte-for-byte identical. */
@@ -4553,6 +5453,9 @@ static void demo_draw_play(demo_app *app)
         VOX_GI_COMPATIBILITY : (vox_u16)app->options.gi_quality;
     demo_render_overlay_begin();
     demo_build_render_world(app);
+    if (app->replay_frame_valid) {
+        demo_build_replay_render_world(&app->replay_frame);
+    }
     render_status = vox_software_render_view_ex(&demo_match.world,
         &demo_target, &demo_render_config, &view);
     demo_render_overlay_restore();
@@ -4560,6 +5463,11 @@ static void demo_draw_play(demo_app *app)
         /* A validated camera should never reach this path. Keep presentation
          * readable instead of exposing uninitialized or stale pixels. */
         memset(demo_pixels, 0, sizeof(demo_pixels));
+    } else {
+        demo_apply_atmosphere(app, &view);
+        if (!app->replay_frame_valid) {
+            demo_draw_effect_particles(app, &view);
+        }
     }
     app->scene_tick = demo_match.tick;
     app->scene_laptop = app->options.laptop_mode;
@@ -4587,8 +5495,8 @@ static void demo_draw_play(demo_app *app)
                                "CONTROLLER LOST  RECONNECT OR RECLAIM",
                                DEMO_VGA_LIGHT_RED);
         }
-        demo_menu_item(105, "RESUME", app->selection == 0);
-        demo_menu_item(120, "EXIT TO TITLE", app->selection == 1);
+        demo_menu_item(105, "RESUME", 0, app->selection);
+        demo_menu_item(120, "EXIT TO TITLE", 1, app->selection);
     }
     demo_apply_flash(app);
 }
@@ -4597,16 +5505,51 @@ static void demo_draw_results(demo_app *app)
 {
     char line[64];
     int player;
+    int replay_applied = 0;
+    vox_i32 saved_x[VOX_DIGS_MAX_SLOTS];
+    vox_i32 saved_y[VOX_DIGS_MAX_SLOTS];
+    vox_i32 saved_previous_x[VOX_DIGS_MAX_SLOTS];
+    vox_i32 saved_previous_y[VOX_DIGS_MAX_SLOTS];
+    vox_u16 saved_alive[VOX_DIGS_MAX_SLOTS];
+    vox_u16 saved_health[VOX_DIGS_MAX_SLOTS];
+    if (app->replay_frame_valid) {
+        for (player = 0; player < (int)VOX_DIGS_MAX_SLOTS; ++player) {
+            saved_x[player] = demo_match.players[player].position_x.value_q16;
+            saved_y[player] = demo_match.players[player].position_y.value_q16;
+            saved_previous_x[player] = app->previous_player_x[player];
+            saved_previous_y[player] = app->previous_player_y[player];
+            saved_alive[player] = demo_match.alive[player];
+            saved_health[player] = demo_match.health[player];
+            demo_match.players[player].position_x.value_q16 =
+                app->replay_frame.player_x_q16[player];
+            demo_match.players[player].position_y.value_q16 =
+                app->replay_frame.player_y_q16[player];
+            demo_match.alive[player] = app->replay_frame.player_alive[player];
+            demo_match.health[player] =
+                app->replay_frame.player_health[player];
+            app->previous_player_x[player] =
+                app->replay_frame.player_x_q16[player];
+            app->previous_player_y[player] =
+                app->replay_frame.player_y_q16[player];
+        }
+        replay_applied = 1;
+    }
     demo_draw_play(app);
+    if (replay_applied) {
+        for (player = 0; player < (int)VOX_DIGS_MAX_SLOTS; ++player) {
+            demo_match.players[player].position_x.value_q16 = saved_x[player];
+            demo_match.players[player].position_y.value_q16 = saved_y[player];
+            demo_match.alive[player] = saved_alive[player];
+            demo_match.health[player] = saved_health[player];
+            app->previous_player_x[player] = saved_previous_x[player];
+            app->previous_player_y[player] = saved_previous_y[player];
+        }
+    }
     demo_dark_panel(55, 36, 210, 132);
     vox_ui_text_center_shadow(&demo_ui, 160, 46, 1, "MATCH RESULTS",
                               DEMO_VGA_YELLOW);
     if (demo_match.result_draw) {
         strcpy(line, "DRAW");
-    } else if (demo_match.rules.team_mode ==
-               VOX_DIGS_MODE_MINERS_VS_MACHINES) {
-        strcpy(line, demo_match.winner_team == VOX_DIGS_TEAM_MINERS ?
-                     "MINERS WIN" : "MACHINES WIN");
     } else if (demo_match.winner_player < VOX_DIGS_MAX_SLOTS) {
         sprintf(line, "%s WINS",
                 app->player_names[demo_match.winner_player]);
@@ -4629,12 +5572,30 @@ static void demo_draw_results(demo_app *app)
     sprintf(line, "STATE HASH %08lX", (unsigned long)demo_match.state_hash);
     vox_ui_text_center(&demo_ui, 160, 132, 1, line,
                        DEMO_VGA_LIGHT_CYAN);
-    vox_ui_text_center(&demo_ui, 160, 150, 1,
+    if (app->replay_frame_valid || app->replay_playing ||
+        demo_match.replay.active) {
+        sprintf(line, "BEST KILL REPLAY %u/%u",
+                (unsigned int)demo_match.replay.play_cursor,
+                (unsigned int)demo_match.replay.frame_count);
+        vox_ui_text_center(&demo_ui, 160, 145, 1, line,
+                           DEMO_VGA_LIGHT_RED);
+    }
+    vox_ui_text_center(&demo_ui, 160, 158, 1,
                        "ENTER RETURNS TO TITLE", DEMO_VGA_YELLOW);
 }
 
 static void demo_render(demo_app *app)
 {
+    /* A screen never inherits another screen's scroll position. */
+    if (app->screen != app->scroll_screen) {
+        app->scroll = 0;
+        app->scroll_screen = app->screen;
+    }
+    /*
+     * Rebuilt every frame from what actually gets drawn, so the registry can
+     * never describe a layout that is no longer on screen.
+     */
+    demo_rows_reset();
     if (app->screen == DEMO_TITLE) {
         demo_draw_title(app);
     } else if (app->screen == DEMO_SETUP) {
@@ -4645,18 +5606,16 @@ static void demo_render(demo_app *app)
         demo_draw_name_editor(app);
     } else if (app->screen == DEMO_OPTIONS) {
         demo_draw_options(app);
-    } else if (app->screen == DEMO_FEEDBACK) {
-        demo_draw_feedback(app);
-    } else if (app->screen == DEMO_HOW_TO) {
-        demo_draw_how_to(app);
-    } else if (app->screen == DEMO_INDEX) {
-        demo_draw_index(app);
+    } else if (app->screen == DEMO_MINER) {
+        demo_draw_miner(app);
+    } else if (app->screen == DEMO_INBOX) {
+        demo_draw_inbox(app);
+    } else if (app->screen == DEMO_LOG) {
+        demo_draw_log(app);
     } else if (app->screen == DEMO_CONTROLS) {
         demo_draw_controls(app);
     } else if (app->screen == DEMO_INPUT_OPTIONS) {
         demo_draw_input_options(app);
-    } else if (app->screen == DEMO_SCRIPT_ERROR) {
-        demo_draw_script_error(app);
     } else if (app->screen == DEMO_RESULTS) {
         demo_draw_results(app);
     } else {
@@ -4755,9 +5714,6 @@ static int demo_start_match(demo_app *app, int foundry)
         rules.bot_mask = (vox_u16)(rules.bot_mask |
                                    (vox_u16)(1U << player));
     }
-    rules.team_mode = (vox_u16)(foundry ? VOX_DIGS_MODE_FFA :
-                                app->game_mode);
-    rules.friendly_fire = (vox_u16)app->friendly_fire;
     rules.fx_budget = app->options.fx_profile == 0 ? VOX_DIGS_FX_RETRO :
                       (app->options.fx_profile == 2 ? VOX_DIGS_FX_CARNAGE :
                        VOX_DIGS_FX_STANDARD);
@@ -4770,10 +5726,35 @@ static int demo_start_match(demo_app *app, int foundry)
         rules.lava_start_tick = rules.match_ticks - 60U;
         rules.score_limit = 100U;
     } else {
-        rules.match_ticks = (vox_u32)app->match_minutes * 60U *
+        /*
+         * UNLIMITED is ninety-nine minutes, not infinity.  Zero match_ticks
+         * is rejected by digs_validate_rules and the lava ramp divides by
+         * (match_ticks - lava_start_tick), so a genuinely endless match
+         * would either fail validation or divide by zero.  Ninety-nine
+         * minutes is past any session anyone will sit through.
+         */
+        int minutes = demo_time_limits[app->time_limit_index];
+        vox_u32 lead;
+        if (minutes <= 0) {
+            minutes = DEMO_TIME_UNLIMITED_MINUTES;
+        }
+        rules.match_ticks = (vox_u32)minutes * 60U *
                             VOX_DIGS_TICKS_PER_SECOND;
-        rules.lava_start_tick = rules.match_ticks -
-                                30U * VOX_DIGS_TICKS_PER_SECOND;
+        if (demo_lava_lead_seconds[app->lava_index] < 0) {
+            /*
+             * Lava OFF still has to start, because lava_start_tick must be
+             * below match_ticks.  One tick before the end means it never
+             * gets off the floor.
+             */
+            lead = 1U;
+        } else {
+            lead = (vox_u32)demo_lava_lead_seconds[app->lava_index] *
+                   VOX_DIGS_TICKS_PER_SECOND;
+            if (lead >= rules.match_ticks) {
+                lead = rules.match_ticks - 1U;
+            }
+        }
+        rules.lava_start_tick = rules.match_ticks - lead;
         rules.score_limit = (vox_u32)
                             demo_score_limits[app->score_limit_index];
         rules.respawn_mode = (vox_u16)app->respawn_mode;
@@ -4781,12 +5762,17 @@ static int demo_start_match(demo_app *app, int foundry)
             (demo_respawn_delays[app->respawn_delay_index] *
              (int)VOX_DIGS_TICKS_PER_SECOND);
     }
-    if (vox_digs_match_init(&demo_match, &rules) != VOX_OK) {
+    if (vox_digs_match_init_ex(&demo_match, &rules,
+                               demo_chronicle_ready ?
+                               &demo_chronicle.memory : 0) != VOX_OK) {
         return 0;
     }
     if (foundry) {
         demo_prepare_foundry_world();
         demo_match.state_hash = vox_digs_hash(&demo_match);
+    }
+    if (vox_digs_dropship_begin(&demo_match) != VOX_OK) {
+        return 0;
     }
     app->foundry = foundry;
     (void)demo_normalize_camera_zoom(app);
@@ -4807,11 +5793,15 @@ static int demo_start_match(demo_app *app, int foundry)
     memset(app->last_bark_tick, 0, sizeof(app->last_bark_tick));
     memset(app->bark_sequence, 0, sizeof(app->bark_sequence));
     memset(app->rope_down, 0, sizeof(app->rope_down));
-    memset(app->rope_latched, 0, sizeof(app->rope_latched));
     memset(app->haptic, 0, sizeof(app->haptic));
     memset(app->rail_traces, 0, sizeof(app->rail_traces));
     memset(app->rail_origin_x_q16, 0, sizeof(app->rail_origin_x_q16));
     memset(app->rail_origin_y_q16, 0, sizeof(app->rail_origin_y_q16));
+    memset(&app->replay_frame, 0, sizeof(app->replay_frame));
+    app->replay_frame_valid = 0U;
+    app->replay_playing = 0U;
+    app->replay_frame_hold_ticks = 0U;
+    app->replay_hold_ticks = 0U;
     app->scene_valid = 0;
     app->global_bark_tick = 0U;
     memset(app->banners, 0, sizeof(app->banners));
@@ -4857,7 +5847,7 @@ static int demo_start_match(demo_app *app, int foundry)
     app->screen = DEMO_PLAY;
     app->selection = 0;
     demo_audio_play(app, DEMO_SOUND_START);
-    demo_audio_speak_text(app, "GET TO WORK!", VOX_AUDIO_SPEECH_DEEP,
+    demo_audio_speak_text(app, "FIRE TO LAUNCH!", VOX_AUDIO_SPEECH_DEEP,
                           VOX_AUDIO_PRIORITY_ANNOUNCER,
                           VOX_AUDIO_PAN_CENTER);
     return 1;
@@ -4937,10 +5927,6 @@ static int demo_aim_near_visible_target(int player, double direction_x,
         int target_x;
         int target_y;
         if (target == player || !demo_match.alive[target]) continue;
-        if (demo_match.rules.team_mode == VOX_DIGS_MODE_MINERS_VS_MACHINES &&
-            (demo_match.rules.bot_mask & (vox_u16)(1U << target)) == 0U) {
-            continue;
-        }
         target_x = (int)(demo_match.players[target].position_x.value_q16 /
                          65536L);
         target_y = (int)(demo_match.players[target].position_y.value_q16 /
@@ -5024,6 +6010,7 @@ static void demo_submit_human_input(demo_app *app)
         int previous_down = 0;
         int next_down = 0;
         int physical_rope = 0;
+        int rope_pressed = 0;
         int use_controller;
         SDL_Scancode *left = demo_keyboard_binding(app, player, 0);
         SDL_Scancode *right = demo_keyboard_binding(app, player, 1);
@@ -5081,7 +6068,8 @@ static void demo_submit_human_input(demo_app *app)
         if (!use_controller) {
             previous_down = previous_key != 0 && keys[*previous_key];
             next_down = next_key != 0 && keys[*next_key];
-            if (player == 0 && app->mouse_inside) {
+            if (player == 0 && app->mouse_inside &&
+                !app->keyboard_aim_active) {
                 demo_mouse_world(app, &app->aim_world_x[0],
                                  &app->aim_world_y[0]);
             }
@@ -5099,17 +6087,76 @@ static void demo_submit_human_input(demo_app *app)
                 keys[*rope]) physical_rope = 1;
             if (fire_key != 0 && keys[*fire_key]) fire = 1;
             if (player == 0 && app->mouse_inside) {
+                /*
+                 * Left fires, middle throws the rope, right runs the steam
+                 * pack.  Rope moved off the right button so the two
+                 * continuous-hold actions sit under the two large buttons
+                 * and the rope gets its own.
+                 */
                 if ((mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0U) {
                     fire = 1;
                 }
-                if ((mouse_buttons & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0U) {
+                if ((mouse_buttons & SDL_BUTTON(SDL_BUTTON_MIDDLE)) != 0U) {
                     physical_rope = 1;
+                }
+                if ((mouse_buttons & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0U) {
+                    input.actions = (vox_u16)(input.actions |
+                                              VOX_DIGS_ACTION_STEAM);
                 }
             }
             if (bark_key != 0 && keys[*bark_key]) bark = 1;
             if (player == 0) {
                 if (keys[SDL_SCANCODE_W]) move_y = -32767;
                 if (keys[SDL_SCANCODE_S]) move_y = 32767;
+                /*
+                 * Arrow keys are player two's movement, so they only steer
+                 * player one's aim when nobody else is using them.  That
+                 * keeps two-player controls exactly as they were while
+                 * giving the common solo case full keyboard play.
+                 */
+                if (app->local_players == 1) {
+                    int aimed = 0;
+                    /*
+                     * Solo play leaves player two's whole right-hand cluster
+                     * free, so it becomes a complete keyboard scheme: left
+                     * hand moves and jumps, right hand aims, fires, thrusts,
+                     * and ropes. Nothing here is reachable with two locals.
+                     */
+                    if (keys[SDL_SCANCODE_RCTRL] ||
+                        keys[SDL_SCANCODE_RETURN] ||
+                        keys[SDL_SCANCODE_KP_ENTER]) {
+                        fire = 1;
+                    }
+                    if (keys[SDL_SCANCODE_RSHIFT]) {
+                        input.actions = (vox_u16)(input.actions |
+                                                  VOX_DIGS_ACTION_STEAM);
+                    }
+                    if (keys[SDL_SCANCODE_SLASH] ||
+                        keys[SDL_SCANCODE_RALT]) {
+                        physical_rope = 1;
+                    }
+                    if (keys[SDL_SCANCODE_UP] &&
+                        app->aim_world_y[0] > 0U) {
+                        --app->aim_world_y[0];
+                        aimed = 1;
+                    }
+                    if (keys[SDL_SCANCODE_DOWN]) {
+                        ++app->aim_world_y[0];
+                        aimed = 1;
+                    }
+                    if (keys[SDL_SCANCODE_LEFT] &&
+                        app->aim_world_x[0] > 0U) {
+                        --app->aim_world_x[0];
+                        aimed = 1;
+                    }
+                    if (keys[SDL_SCANCODE_RIGHT]) {
+                        ++app->aim_world_x[0];
+                        aimed = 1;
+                    }
+                    if (aimed) {
+                        app->keyboard_aim_active = 1;
+                    }
+                }
             } else {
                 if (keys[SDL_SCANCODE_UP]) move_y = -32767;
                 if (keys[SDL_SCANCODE_DOWN]) move_y = 32767;
@@ -5140,13 +6187,9 @@ static void demo_submit_human_input(demo_app *app)
                 controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT);
             int zoom_direction = demo_controller_zoom_step(
                 controller, zoom_modifier, aim_y);
-            int rope_held;
             if (zoom_direction != 0) demo_change_zoom(app, zoom_direction);
             physical_rope = demo_controller_button(
                 controller, app->bindings.pad_rope);
-            rope_held = app->player_input[player].rope_mode ==
-                        DEMO_ROPE_TOGGLE ? app->rope_latched[player] :
-                        physical_rope;
             if (demo_radial_response(left_x, left_y,
                 demo_input_deadzone(&app->player_input[player], controller),
                 app->player_input[player].sensitivity,
@@ -5185,7 +6228,7 @@ static void demo_submit_human_input(demo_app *app)
                                        app->bindings.pad_bark)) bark = 1;
             if (zoom_modifier <= 16000) {
                 demo_update_controller_aim(app, player, controller,
-                                           aim_x, aim_y, rope_held);
+                                           aim_x, aim_y, physical_rope);
             }
         }
         if (app->player_input[player].suppress_ticks > 0) {
@@ -5198,19 +6241,15 @@ static void demo_submit_human_input(demo_app *app)
             next_down = 0;
             app->rope_down[player] = physical_rope;
             --app->player_input[player].suppress_ticks;
-        } else if (app->player_input[player].rope_mode == DEMO_ROPE_TOGGLE) {
-            if (physical_rope && !app->rope_down[player]) {
-                app->rope_latched[player] = !app->rope_latched[player];
-            }
-            app->rope_down[player] = physical_rope;
         } else {
-            app->rope_latched[player] = 0;
+            rope_pressed = physical_rope && !app->rope_down[player];
             app->rope_down[player] = physical_rope;
         }
-        if ((app->player_input[player].rope_mode == DEMO_ROPE_TOGGLE &&
-             app->rope_latched[player]) ||
-            (app->player_input[player].rope_mode == DEMO_ROPE_HOLD &&
-             physical_rope)) {
+        /* The simulation owns attachment persistence.  The port submits one
+         * rope action per physical edge, so a second press reaches the core
+         * as a retarget request instead of being consumed as a local latch
+         * release. */
+        if (rope_pressed) {
             input.actions = (vox_u16)(input.actions |
                                       VOX_DIGS_ACTION_ROPE);
         }
@@ -5230,6 +6269,40 @@ static void demo_submit_human_input(demo_app *app)
             input.actions = (vox_u16)(input.actions |
                                       VOX_DIGS_ACTION_FIRE);
         }
+        /*
+         * Keep holding jump after the hop tops out and the steampack takes
+         * over, so nobody has to discover a separate control to get height.
+         * A dedicated steam binding still works, and still works on the
+         * ground, which this deliberately does not.
+         *
+         * This is an input binding and lives here rather than in the
+         * simulation: making it a movement rule applied it to bots too, and
+         * a bot holds JUMP as its reflex for being blocked and latches that
+         * for a whole decision window.  All three of them flew constantly,
+         * which cost sixteen extra unattributed deaths over a 10800-tick
+         * soak.  Bots reach for the steampack where they mean it instead.
+         */
+        if ((input.actions & VOX_DIGS_ACTION_JUMP) != 0U &&
+            demo_match.alive[player] &&
+            demo_match.jump_hold_ticks[player] == 0U &&
+            (demo_match.players[player].flags &
+             VOX_PHYSICS_BODY_GROUNDED) == 0U) {
+            input.actions = (vox_u16)(input.actions |
+                                      VOX_DIGS_ACTION_STEAM);
+        }
+        /*
+         * Speaking goes through the input stream like everything else,
+         * because what gets said moves contract state and therefore the
+         * match hash -- a bark raised straight into the port would make a
+         * replay diverge from the match it was recorded from.
+         *
+         * This has to be set BEFORE the submit.  It was not, so the bit was
+         * written onto an input that had already been handed over and the
+         * bark button did nothing at all.
+         */
+        if (bark && !app->bark_down[player] && demo_match.alive[player]) {
+            input.actions = (vox_u16)(input.actions | VOX_DIGS_ACTION_BARK);
+        }
         (void)vox_digs_submit_input(&demo_match, &input);
         if (player < (int)DEMO_LOCAL_MAX) {
             if (previous_down && !app->keyboard_previous_down[player]) {
@@ -5240,9 +6313,6 @@ static void demo_submit_human_input(demo_app *app)
             }
             app->keyboard_previous_down[player] = previous_down;
             app->keyboard_next_down[player] = next_down;
-        }
-        if (bark && !app->bark_down[player]) {
-            demo_bark(app, player, demo_bark_context(app, player), 0);
         }
         app->bark_down[player] = bark;
         if (!demo_match.alive[player] && fire && !app->fire_down[player]) {
@@ -5432,6 +6502,24 @@ static const char *demo_player_name(const demo_app *app, vox_u16 player)
     return app->player_names[player];
 }
 
+static const char *demo_award_name(vox_u16 award)
+{
+    switch (award) {
+    case VOX_DIGS_AWARD_PYROMANIAC:
+        return "PYROMANIAC";
+    case VOX_DIGS_AWARD_GRAVE_DIGGER:
+        return "GRAVE DIGGER";
+    case VOX_DIGS_AWARD_HEADHUNTER:
+        return "HEADHUNTER";
+    case VOX_DIGS_AWARD_CAVE_IN_ARTIST:
+        return "CAVE-IN ARTIST";
+    case VOX_DIGS_AWARD_EXTRACTIONIST:
+        return "EXTRACTIONIST";
+    default:
+        return "AWARD";
+    }
+}
+
 static void demo_add_killfeed(demo_app *app, const char *text_value)
 {
     int line;
@@ -5538,6 +6626,7 @@ static void demo_register_kill(demo_app *app,
 static void demo_process_events(demo_app *app)
 {
     vox_u16 ordinal;
+    char line[64];
     for (ordinal = 0U; ordinal < demo_match.event_count; ++ordinal) {
         const vox_digs_event *event = vox_digs_event_get(&demo_match, ordinal);
         vox_i16 pan;
@@ -5603,16 +6692,33 @@ static void demo_process_events(demo_app *app)
             if (event->source < demo_match.rules.player_count &&
                 event->source != event->target) {
                 app->victory_bark_ttl[event->source] = 180U;
-                if (vox_digs_player_is_bot(&demo_match, event->source) &&
-                    ((event->sequence + event->source) & 3U) == 0U) {
-                    demo_bark(app, (int)event->source, 5, 1);
-                }
             }
             if (event->target < DEMO_LOCAL_MAX) {
-                app->rope_latched[event->target] = 0;
                 app->rope_down[event->target] = 0;
             }
             demo_register_kill(app, event);
+        } else if (event->type == VOX_DIGS_EVENT_HEADSHOT) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_HIT_CONFIRM,
+                            event->variant, pan);
+            demo_haptic_world(app, event, DEMO_HAPTIC_KILL);
+            if (demo_event_is_local(app, event)) {
+                demo_set_banner(app, "HEADSHOT!", 1);
+                app->camera_trauma += 0.45;
+                app->flash_kind = 1;
+                app->flash_strength = app->options.flash_mode == 2 ? 0.72 :
+                                      (app->options.flash_mode == 1 ? 0.28 : 0.0);
+            }
+        } else if (event->type == VOX_DIGS_EVENT_AWARD) {
+            sprintf(line, "%s: %s", demo_player_name(app, event->source),
+                    demo_award_name(event->variant));
+            demo_set_banner(app, line, demo_event_is_local(app, event));
+            demo_audio_emit(app, VOX_AUDIO_PRESET_UI_ACCEPT,
+                            event->variant, pan);
+        } else if (event->type == VOX_DIGS_EVENT_REPLAY_SELECT) {
+            if (demo_event_is_local(app, event)) {
+                demo_set_banner(app, "BEST KILL SAVED", 0);
+                demo_haptic_world(app, event, DEMO_HAPTIC_KILL);
+            }
         } else if (event->type == VOX_DIGS_EVENT_SPAWN) {
             demo_audio_emit(app, VOX_AUDIO_PRESET_SPAWN,
                             event->variant, pan);
@@ -5627,15 +6733,60 @@ static void demo_process_events(demo_app *app)
                    event->type == VOX_DIGS_EVENT_ROPE_BREAK) {
             demo_audio_emit(app, VOX_AUDIO_PRESET_ROPE_BREAK,
                             event->variant, pan);
-            if (event->source < DEMO_LOCAL_MAX) {
-                app->rope_latched[event->source] = 0;
-            }
         } else if (event->type == VOX_DIGS_EVENT_ROPE_CAST ||
                    event->type == VOX_DIGS_EVENT_ROPE_HIT) {
             if (event->source < (vox_u16)app->local_players) {
                 demo_haptic_impulse(app, event->source, DEMO_HAPTIC_ROPE,
                                     event->magnitude, 32767U);
             }
+        } else if (event->type == VOX_DIGS_EVENT_SHIP_LAUNCH) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_SPAWN,
+                            event->variant, pan);
+            demo_haptic_world(app, event, DEMO_HAPTIC_ROPE);
+        } else if (event->type == VOX_DIGS_EVENT_SHIP_GRAPPLE) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_ROPE_ATTACH,
+                            event->variant, pan);
+            demo_haptic_world(app, event, DEMO_HAPTIC_ROPE);
+        } else if (event->type == VOX_DIGS_EVENT_SHIP_EXTRACT) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_SPAWN,
+                            event->variant, pan);
+            if (event->source < (vox_u16)app->local_players) {
+                demo_set_banner(app, "EXTRACTED", 1);
+            }
+            demo_haptic_world(app, event, DEMO_HAPTIC_ROPE);
+        } else if (event->type == VOX_DIGS_EVENT_SHIP_ALARM) {
+            demo_set_banner(app, "PILOT: LAVA RISING. EXTRACT NOW!", 1);
+            demo_audio_emit(app, VOX_AUDIO_PRESET_BARK_ALERT,
+                            event->variant, VOX_AUDIO_PAN_CENTER);
+            demo_haptic_world(app, event, DEMO_HAPTIC_CRUMBLE);
+        } else if (event->type == VOX_DIGS_EVENT_SHIP_COLLISION) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_EXPLOSION,
+                            event->variant, pan);
+            demo_haptic_world(app, event, DEMO_HAPTIC_EXPLOSION);
+            if (demo_event_is_local(app, event)) {
+                demo_set_banner(app, "SHIP IMPACT", 1);
+                app->camera_trauma += 0.85;
+            }
+        } else if (event->type == VOX_DIGS_EVENT_SHIP_SPLATTER) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_KILL,
+                            event->variant, pan);
+            demo_haptic_world(app, event, DEMO_HAPTIC_KILL);
+            if (demo_event_is_local(app, event)) {
+                demo_set_banner(app, "SHIP SPLATTER!", 1);
+                app->camera_trauma += 0.9;
+            }
+        } else if (event->type == VOX_DIGS_EVENT_CAVE_IN) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_EXPLOSION,
+                            event->variant, pan);
+            demo_haptic_world(app, event, DEMO_HAPTIC_CRUMBLE);
+            if (demo_event_is_local(app, event)) {
+                demo_set_banner(app, "CAVE-IN!", 1);
+                app->camera_trauma += 0.55;
+            }
+        } else if (event->type == VOX_DIGS_EVENT_DEBRIS_IMPACT) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_HIT,
+                            event->variant, pan);
+            demo_haptic_world(app, event, DEMO_HAPTIC_CRUMBLE);
         } else if (event->type == VOX_DIGS_EVENT_SHIELD_BLOCK) {
             demo_haptic_world(app, event, DEMO_HAPTIC_HIT);
         } else if (event->type == VOX_DIGS_EVENT_RAIL_CHARGE) {
@@ -5658,22 +6809,21 @@ static void demo_process_events(demo_app *app)
         } else if (event->type == VOX_DIGS_EVENT_CRUSH) {
             demo_haptic_world(app, event, DEMO_HAPTIC_CRUMBLE);
         } else if (event->type == VOX_DIGS_EVENT_AI_BARK) {
-            if (event->source < demo_match.rules.player_count &&
-                ((event->sequence + event->source * 7U) & 3U) == 0U) {
-                int context = event->magnitude < 4U ?
-                              (int)event->magnitude :
-                              demo_bark_context(app, (int)event->source);
-                demo_bark(app, (int)event->source, context, 1);
-            }
+            digs_chronicle_log(&demo_chronicle,
+                vox_digs_memory_identity(&demo_match, event->source),
+                vox_digs_memory_identity(&demo_match, event->target),
+                event->variant);
+            demo_speak_line(app, (int)event->source,
+                            event->target < demo_match.rules.player_count ?
+                            (int)event->target : -1, event->variant,
+                            vox_digs_player_is_bot(&demo_match,
+                                                   event->source));
         } else if (event->type == VOX_DIGS_EVENT_MATCH_END) {
+            demo_chronicle_commit();
             if (demo_match.result_draw) {
                 demo_set_banner(app, "DRAW!", 1);
-            } else if ((demo_match.rules.team_mode ==
-                        VOX_DIGS_MODE_MINERS_VS_MACHINES &&
-                        demo_match.winner_team == VOX_DIGS_TEAM_MINERS) ||
-                       (demo_match.rules.team_mode == VOX_DIGS_MODE_FFA &&
-                        demo_match.winner_player <
-                        (vox_u16)app->local_players)) {
+            } else if (demo_match.winner_player <
+                       (vox_u16)app->local_players) {
                 demo_set_banner(app, "SHIFT WON!", 1);
             } else {
                 demo_set_banner(app, "SHIFT LOST!", 1);
@@ -5800,8 +6950,39 @@ static void demo_tick_presentation(demo_app *app)
     demo_update_ambience(app);
 }
 
+static void demo_tick_results(demo_app *app)
+{
+    if (!app->replay_playing && demo_match.replay.active != 0U) {
+        app->replay_playing = 1U;
+    }
+    if (!app->replay_playing) return;
+    if (demo_match.replay.active != 0U) {
+        if (app->replay_frame_valid != 0U &&
+            app->replay_frame_hold_ticks > 0U) {
+            --app->replay_frame_hold_ticks;
+            return;
+        }
+        if (vox_digs_replay_step(&demo_match, &app->replay_frame) == VOX_OK) {
+            app->replay_frame_valid = 1U;
+            app->replay_frame_hold_ticks = DEMO_REPLAY_FRAME_HOLD_TICKS;
+            if (demo_match.replay.active == 0U) {
+                app->replay_hold_ticks = 30U;
+            }
+        }
+    } else if (app->replay_hold_ticks > 0U) {
+        --app->replay_hold_ticks;
+    } else {
+        app->replay_frame_valid = 0U;
+        app->replay_playing = 0U;
+    }
+}
+
 static void demo_tick(demo_app *app)
 {
+    if (app->screen == DEMO_RESULTS) {
+        demo_tick_results(app);
+        return;
+    }
     if (app->screen != DEMO_PLAY) {
         return;
     }
@@ -5921,10 +7102,10 @@ static void demo_update_cursor_visibility(demo_app *app)
 static void demo_handle_title_key(demo_app *app, SDL_Keycode key)
 {
     if (key == SDLK_UP) {
-        app->selection = (app->selection + 7) % 8;
+        app->selection = (app->selection + 6) % 7;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 8;
+        app->selection = (app->selection + 1) % 7;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
         demo_audio_play(app, DEMO_SOUND_SELECT);
@@ -5932,24 +7113,20 @@ static void demo_handle_title_key(demo_app *app, SDL_Keycode key)
             app->screen = DEMO_SETUP;
             app->selection = 0;
         } else if (app->selection == 1) {
-            (void)demo_start_match(app, 1);
+            app->screen = DEMO_INBOX;
+            app->selection = 0;
+            app->inbox_open = -1;
         } else if (app->selection == 2) {
-            app->screen = DEMO_HOW_TO;
+            app->screen = DEMO_LOG;
             app->selection = 0;
+            app->scroll = 0;
         } else if (app->selection == 3) {
-            app->screen = DEMO_INDEX;
-            app->selection = 0;
-            app->index_selection = 0U;
-            app->index_scroll = 0U;
-            app->index_visual_row = 0.0;
+            (void)demo_start_match(app, 1);
         } else if (app->selection == 4) {
             app->screen = DEMO_CONTROLS;
             app->selection = 0;
         } else if (app->selection == 5) {
             app->screen = DEMO_OPTIONS;
-            app->selection = 0;
-        } else if (app->selection == 6) {
-            app->screen = DEMO_FEEDBACK;
             app->selection = 0;
         } else {
             app->running = 0;
@@ -5964,10 +7141,10 @@ static void demo_handle_setup_key(demo_app *app, SDL_Keycode key)
         app->screen = DEMO_TITLE;
         app->selection = 0;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 9) % 10;
+        app->selection = (app->selection + 6) % 7;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 10;
+        app->selection = (app->selection + 1) % 7;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (direction != 0) {
         demo_audio_play(app, DEMO_SOUND_MOVE);
@@ -5979,31 +7156,27 @@ static void demo_handle_setup_key(demo_app *app, SDL_Keycode key)
             demo_refresh_controller_claims(app);
             demo_refresh_roster(app);
         } else if (app->selection == 1) {
-            app->bots = (app->bots + direction + 3) % 3;
+            /* Four slots, so zero through three bots. */
+            app->bots = (app->bots + direction + (int)VOX_DIGS_MAX_BOTS + 1) %
+                        ((int)VOX_DIGS_MAX_BOTS + 1);
+            if (app->local_players + app->bots > (int)VOX_DIGS_MAX_SLOTS) {
+                app->bots = (int)VOX_DIGS_MAX_SLOTS - app->local_players;
+            }
             demo_refresh_roster(app);
         } else if (app->selection == 2) {
-            app->game_mode = 1 - app->game_mode;
-        } else if (app->selection == 3) {
-            app->friendly_fire = !app->friendly_fire;
-        } else if (app->selection == 4) {
             app->map_style = (app->map_style + direction + 3) % 3;
-        } else if (app->selection == 5) {
-            app->seed += direction > 0 ? 1U : (vox_u32)-1;
-        } else if (app->selection == 6) {
+        } else if (app->selection == 3) {
             app->arsenal = (app->arsenal + direction +
                             DEMO_ARSENAL_COUNT) % DEMO_ARSENAL_COUNT;
         }
-    } else if (key == SDLK_r && app->selection == 5) {
-        app->seed = app->seed * 1664525U + 1013904223U;
-        demo_audio_play(app, DEMO_SOUND_SELECT);
     } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
         demo_audio_play(app, DEMO_SOUND_SELECT);
-        if (app->selection == 7) {
+        if (app->selection == 4) {
             app->screen = DEMO_CUSTOMIZE;
             app->selection = 0;
-        } else if (app->selection == 8) {
+        } else if (app->selection == 5) {
             (void)demo_start_match(app, 0);
-        } else if (app->selection == 9) {
+        } else if (app->selection == 6) {
             app->screen = DEMO_TITLE;
             app->selection = 0;
         }
@@ -6047,7 +7220,7 @@ static void demo_finish_name_editor(demo_app *app, int accept)
             "MINER 1", "MINER 2"
         };
         static const char *bot_fallbacks[VOX_DIGS_MAX_BOTS] = {
-            "RIVET", "CINDER"
+            "RIVET", "CINDER", "FLAMEY"
         };
         const char *fallback = "MINER";
         if (slot < app->local_players && slot < (int)DEMO_LOCAL_MAX) {
@@ -6090,22 +7263,25 @@ static void demo_handle_customize_key(demo_app *app, SDL_Keycode key)
     int direction = key == SDLK_LEFT ? -1 : (key == SDLK_RIGHT ? 1 : 0);
     if (key == SDLK_ESCAPE) {
         app->screen = DEMO_SETUP;
-        app->selection = 7;
+        app->selection = 6;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 9) % 10;
+        app->selection = (app->selection + 11) % 12;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 10;
+        app->selection = (app->selection + 1) % 12;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (direction != 0) {
         if (app->selection == 4) {
-            app->match_minutes = app->match_minutes == 2 ? 3 : 2;
+            app->time_limit_index =
+                (app->time_limit_index + direction + 6) % 6;
         } else if (app->selection == 5) {
+            app->lava_index = (app->lava_index + direction + 5) % 5;
+        } else if (app->selection == 6) {
             app->score_limit_index =
                 (app->score_limit_index + direction + 4) % 4;
-        } else if (app->selection == 6) {
-            app->respawn_mode = 1 - app->respawn_mode;
         } else if (app->selection == 7) {
+            app->respawn_mode = 1 - app->respawn_mode;
+        } else if (app->selection == 8) {
             app->respawn_delay_index =
                 (app->respawn_delay_index + direction + 5) % 5;
         }
@@ -6116,12 +7292,15 @@ static void demo_handle_customize_key(demo_app *app, SDL_Keycode key)
         if (app->selection >= 0 &&
             app->selection < app->local_players + app->bots) {
             demo_open_name_editor(app, app->selection);
-        } else if (app->selection == 8) {
+        } else if (app->selection == 9) {
+            app->screen = DEMO_MINER;
+            app->selection = 0;
+        } else if (app->selection == 10) {
             demo_match_settings_defaults(app);
             (void)demo_save_input_settings(app);
-        } else if (app->selection == 9) {
+        } else if (app->selection == 11) {
             app->screen = DEMO_SETUP;
-            app->selection = 7;
+            app->selection = 6;
         }
     }
 }
@@ -6176,10 +7355,12 @@ static void demo_handle_options_key(demo_app *app, SDL_Keycode key)
         app->screen = DEMO_TITLE;
         app->selection = 0;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 15) % 16;
+        app->selection = (app->selection + 16) % 17;
+        demo_chronicle_reset_armed = 0;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 16;
+        app->selection = (app->selection + 1) % 17;
+        demo_chronicle_reset_armed = 0;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (direction != 0 || key == SDLK_RETURN || key == SDLK_KP_ENTER) {
         demo_audio_play(app, direction == 0 ? DEMO_SOUND_SELECT :
@@ -6235,9 +7416,32 @@ static void demo_handle_options_key(demo_app *app, SDL_Keycode key)
         } else if (app->selection == 13) {
             app->options.dummy_mode = !app->options.dummy_mode;
         } else if (app->selection == 14 && direction == 0) {
+            /*
+             * Erase everything the miners remember.
+             *
+             * The lead's notes ask for no reset in the shipped game, so that
+             * the history is unrepeatable and each player's is their own.
+             * This is here because it was asked for directly afterwards; the
+             * two-step is the compromise, because the thing being destroyed
+             * cannot be recovered and a single mis-keyed RETURN is not
+             * enough intent for that.
+             */
+            if (!demo_chronicle_reset_armed) {
+                demo_chronicle_reset_armed = 1;
+            } else {
+                char path[1032];
+                demo_chronicle_reset_armed = 0;
+                digs_chronicle_reset(&demo_chronicle);
+                demo_chronicle_ready = 1;
+                if (demo_chronicle_path(path, (int)sizeof(path))) {
+                    (void)digs_chronicle_save(&demo_chronicle, path);
+                }
+                demo_set_banner(app, "THEY HAVE FORGOTTEN YOU", 0);
+            }
+        } else if (app->selection == 15 && direction == 0) {
             app->screen = DEMO_INPUT_OPTIONS;
             app->selection = 0;
-        } else if (app->selection == 15 && direction == 0) {
+        } else if (app->selection == 16 && direction == 0) {
             app->screen = DEMO_TITLE;
             app->selection = 0;
         }
@@ -6249,21 +7453,21 @@ static void demo_handle_input_options_key(demo_app *app, SDL_Keycode key)
 {
     int direction = key == SDLK_LEFT ? -1 : (key == SDLK_RIGHT ? 1 : 0);
     int change = direction == 0 ? 1 : direction;
-    int player = app->selection >= 5 && app->selection <= 9 ? 1 : 0;
-    int field = app->selection - player * 5;
+    int player = app->selection >= 4 && app->selection <= 7 ? 1 : 0;
+    int field = app->selection - player * 4;
     if (key == SDLK_ESCAPE) {
         app->screen = DEMO_OPTIONS;
         app->selection = 14;
     } else if (key == SDLK_UP) {
-        app->selection = (app->selection + 12) % 13;
+        app->selection = (app->selection + 10) % 11;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (key == SDLK_DOWN) {
-        app->selection = (app->selection + 1) % 13;
+        app->selection = (app->selection + 1) % 11;
         demo_audio_play(app, DEMO_SOUND_MOVE);
     } else if (direction != 0 || key == SDLK_RETURN || key == SDLK_KP_ENTER) {
         demo_audio_play(app, direction == 0 ? DEMO_SOUND_SELECT :
                         DEMO_SOUND_MOVE);
-        if (app->selection <= 9) {
+        if (app->selection <= 7) {
             demo_player_input *input = &app->player_input[player];
             if (field == 0) {
                 input->preference = (input->preference + change + 3) % 3;
@@ -6281,49 +7485,18 @@ static void demo_handle_input_options_key(demo_app *app, SDL_Keycode key)
             } else if (field == 3) {
                 input->aim_slowdown =
                     (input->aim_slowdown + change + 3) % 3;
-            } else if (field == 4) {
-                input->rope_mode =
-                    (input->rope_mode + change + 2) % 2;
-                app->rope_latched[player] = 0;
-                app->rope_down[player] = 0;
             }
             (void)demo_save_input_settings(app);
-        } else if (app->selection == 10 && direction == 0) {
+        } else if (app->selection == 8 && direction == 0) {
             demo_begin_controller_calibration(app);
-        } else if (app->selection == 11 && direction == 0) {
+        } else if (app->selection == 9 && direction == 0) {
             demo_input_defaults(app);
             demo_refresh_controller_claims(app);
             (void)demo_save_input_settings(app);
-        } else if (app->selection == 12 && direction == 0) {
+        } else if (app->selection == 10 && direction == 0) {
             app->screen = DEMO_OPTIONS;
             app->selection = 14;
         }
-    }
-}
-
-static void demo_handle_index_key(demo_app *app, SDL_Keycode key)
-{
-    const vox_script_catalog *catalog = app->scripts_ready ?
-        vox_script_catalog_get(&app->scripts) : 0;
-    vox_u16 count = catalog == 0 ? 0U : catalog->entry_count;
-    if (key == SDLK_ESCAPE) {
-        app->screen = DEMO_TITLE;
-        app->selection = 0;
-        demo_audio_play(app, DEMO_SOUND_PAUSE);
-    } else if (count > 0U && key == SDLK_UP) {
-        if (app->index_selection > 0U) --app->index_selection;
-        if (app->index_selection < app->index_scroll) {
-            app->index_scroll = app->index_selection;
-        }
-        demo_audio_play(app, DEMO_SOUND_MOVE);
-    } else if (count > 0U && key == SDLK_DOWN) {
-        if (app->index_selection + 1U < count) ++app->index_selection;
-        if (app->index_selection >= app->index_scroll +
-                                    VOX_SCRIPT_INDEX_VISIBLE_ROWS) {
-            app->index_scroll = (vox_u16)(app->index_selection -
-                                VOX_SCRIPT_INDEX_VISIBLE_ROWS + 1U);
-        }
-        demo_audio_play(app, DEMO_SOUND_MOVE);
     }
 }
 
@@ -6385,16 +7558,9 @@ static void demo_handle_key(demo_app *app, SDL_Keycode key,
     }
     if (key == SDLK_F1) {
         app->options.debug = !app->options.debug;
-    } else if (key == SDLK_F5) {
-        if (demo_scripts_reload(app) && app->screen == DEMO_SCRIPT_ERROR) {
-            app->screen = DEMO_TITLE;
-            app->selection = 0;
-        }
     } else if (key == SDLK_F11) {
         app->options.fullscreen = !app->options.fullscreen;
         demo_apply_fullscreen(app);
-    } else if (app->screen == DEMO_SCRIPT_ERROR) {
-        if (key == SDLK_ESCAPE) app->running = 0;
     } else if (app->screen == DEMO_TITLE) {
         demo_handle_title_key(app, key);
     } else if (app->screen == DEMO_SETUP) {
@@ -6407,17 +7573,14 @@ static void demo_handle_key(demo_app *app, SDL_Keycode key,
         demo_handle_options_key(app, key);
     } else if (app->screen == DEMO_INPUT_OPTIONS) {
         demo_handle_input_options_key(app, key);
-    } else if (app->screen == DEMO_INDEX) {
-        demo_handle_index_key(app, key);
     } else if (app->screen == DEMO_CONTROLS) {
         demo_handle_controls_key(app, key, scancode);
-    } else if ((app->screen == DEMO_HOW_TO ||
-                app->screen == DEMO_FEEDBACK) &&
-               (key == SDLK_RETURN || key == SDLK_KP_ENTER ||
-                key == SDLK_ESCAPE)) {
-        app->screen = DEMO_TITLE;
-        app->selection = 0;
-        demo_audio_play(app, DEMO_SOUND_SELECT);
+    } else if (app->screen == DEMO_MINER) {
+        demo_handle_miner_key(app, key);
+    } else if (app->screen == DEMO_INBOX) {
+        demo_handle_inbox_key(app, key);
+    } else if (app->screen == DEMO_LOG) {
+        demo_handle_log_key(app, key);
     } else if (app->screen == DEMO_PLAY && key == SDLK_ESCAPE) {
         app->screen = DEMO_PAUSE;
         app->selection = 0;
@@ -6443,6 +7606,7 @@ static void demo_handle_key(demo_app *app, SDL_Keycode key,
                 key == SDLK_ESCAPE)) {
         strcpy(app->bot_names[0], "RIVET");
         strcpy(app->bot_names[1], "CINDER");
+        strcpy(app->bot_names[2], "FLAMEY");
         demo_refresh_roster(app);
         app->screen = DEMO_TITLE;
         app->selection = 0;
@@ -6594,6 +7758,47 @@ static void demo_handle_event(demo_app *app, const SDL_Event *event)
             (void)demo_activate_source(app, 0, DEMO_SOURCE_KEYBOARD, 0);
             app->mouse_activity_x = app->mouse_x;
             app->mouse_activity_y = app->mouse_y;
+            app->keyboard_aim_active = 0;
+        } else if (app->screen != DEMO_PLAY &&
+                   (delta_x > 1 || delta_y > 1)) {
+            /*
+             * Hovering moves the selection, so the mouse and the keyboard
+             * are pointing at the same row rather than fighting over two.
+             * Deliberately outside demo_activate_source: this is menu
+             * navigation, not a claim on a player slot, and routing it
+             * through the arbitration would take the pad off a player who
+             * merely brushed the mouse.
+             */
+            const demo_menu_row *row = demo_row_at(app->mouse_x,
+                                                   app->mouse_y);
+            app->mouse_activity_x = app->mouse_x;
+            app->mouse_activity_y = app->mouse_y;
+            if (row != 0 && row->index != app->selection) {
+                app->selection = row->index;
+                demo_audio_play(app, DEMO_SOUND_MOVE);
+            }
+        }
+    } else if (event->type == SDL_MOUSEBUTTONDOWN &&
+               app->screen != DEMO_PLAY &&
+               (event->button.button == SDL_BUTTON_LEFT ||
+                event->button.button == SDL_BUTTON_RIGHT)) {
+        /*
+         * A click is the key press the row would have taken.  Routing it
+         * through the same handler means every screen gets a mouse for free
+         * and no screen can disagree with itself about what a row does.
+         */
+        const demo_menu_row *row;
+        (void)demo_sync_hardware_mouse(app);
+        row = demo_row_at(app->mouse_x, app->mouse_y);
+        if (row != 0) {
+            app->selection = row->index;
+            if (row->kind == DEMO_ROW_VALUE) {
+                demo_handle_key(app,
+                                event->button.button == SDL_BUTTON_RIGHT ?
+                                SDLK_LEFT : SDLK_RIGHT, SDL_SCANCODE_UNKNOWN);
+            } else {
+                demo_handle_key(app, SDLK_RETURN, SDL_SCANCODE_UNKNOWN);
+            }
         }
     } else if (event->type == SDL_MOUSEBUTTONDOWN &&
                event->button.button == SDL_BUTTON_LEFT &&
@@ -6601,6 +7806,7 @@ static void demo_handle_event(demo_app *app, const SDL_Event *event)
         if (demo_sync_hardware_mouse(app)) {
             int changed = demo_activate_source(app, 0,
                                                DEMO_SOURCE_KEYBOARD, 1);
+            app->keyboard_aim_active = 0;
             if (!changed && app->player_input[0].active_source ==
                             DEMO_SOURCE_KEYBOARD) {
                 demo_mouse_world(app, &app->aim_world_x[0],
@@ -6704,6 +7910,161 @@ static int demo_write_ppm(const char *path)
     }
     (void)fclose(file);
     return 1;
+}
+
+
+/*
+ * Frame capture for headless visual review.
+ *
+ * The renderer, the camera, and the PPM writer are all already headless --
+ * demo_smoke_test proves it by producing one frame with no window. This
+ * turns that into a filmstrip: run a scripted scenario and write a frame
+ * every few ticks, so terrain, effects, and physics can be inspected as
+ * images rather than inferred from counters. Deterministic and windowless,
+ * so it runs anywhere the tests do.
+ */
+static void demo_capture_setup_app(demo_app *app)
+{
+    memset(app, 0, sizeof(*app));
+    app->bots = 0;
+    app->local_players = 1;
+    app->arsenal = DEMO_ARSENAL_FULL;
+    app->options.gi_quality = VOX_GI_BALANCED;
+    app->options.gore_level = 2;
+    app->options.fx_profile = 1;
+    app->screen = DEMO_PLAY;
+    app->mouse_x = 160;
+    app->mouse_y = 100;
+    app->mouse_activity_x = 160;
+    app->mouse_activity_y = 100;
+    app->cursor_visible = -1;
+    app->camera_zoom = DEMO_CAMERA_ZOOM_DEFAULT;
+    app->camera_scale = (double)DEMO_CAMERA_ZOOM_DEFAULT;
+    app->frame_seconds = 1.0 / 60.0;
+    app->render_alpha = 1.0;
+    app->measured_fps = 60.0;
+}
+
+static void demo_capture_frame(demo_app *app, const char *directory,
+                               vox_u32 index)
+{
+    char path[512];
+    vox_u16 slot;
+    for (slot = 0U; slot < VOX_DIGS_MAX_SLOTS; ++slot) {
+        app->previous_player_x[slot] =
+            demo_match.players[slot].position_x.value_q16;
+        app->previous_player_y[slot] =
+            demo_match.players[slot].position_y.value_q16;
+    }
+    app->camera_world_x = (double)demo_match.players[0].
+                          position_x.value_q16 / 65536.0;
+    app->camera_world_y = (double)demo_match.players[0].
+                          position_y.value_q16 / 65536.0;
+    demo_update_player_camera(app);
+    demo_render(app);
+    sprintf(path, "%s/frame_%04lu.ppm", directory, (unsigned long)index);
+    (void)demo_write_ppm(path);
+}
+
+static int demo_capture(const char *scenario, const char *directory,
+                        vox_u32 frames, vox_u32 interval)
+{
+    demo_app app;
+    vox_digs_rules rules;
+    vox_u32 frame;
+    vox_u32 tick = 0U;
+    vox_i32 origin_x;
+    vox_i32 origin_y;
+    int wide = strcmp(scenario, "blast-wide") == 0;
+    int narrow = strcmp(scenario, "blast-narrow") == 0;
+    int smoke = strcmp(scenario, "smoke") == 0;
+    int overhang = strcmp(scenario, "overhang") == 0;
+    if (!wide && !narrow && !smoke && !overhang) {
+        fprintf(stderr,
+                "capture scenarios: blast-wide blast-narrow overhang smoke\n");
+        return 2;
+    }
+    demo_capture_setup_app(&app);
+    demo_prepare_targets();
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    rules.match_ticks = 20000U;
+    rules.lava_start_tick = 19000U;
+    rules.map_style = VOX_DIGS_MAP_COAL_RIDGE;
+    rules.weapon_mask = demo_arsenal_masks[DEMO_ARSENAL_FULL];
+    rules.seed = 0x564F5831U;
+    if (vox_digs_match_init(&demo_match, &rules) != VOX_OK) {
+        return 3;
+    }
+    demo_match.spawn_shield_ticks[0] = 0U;
+    origin_x = demo_match.players[0].position_x.value_q16 >> 16;
+    origin_y = demo_match.players[0].position_y.value_q16 >> 16;
+    /* Bury the miner's own column so the camera frames the test terrain. */
+    if (wide || narrow || overhang) {
+        vox_i32 half = wide ? 20L : (overhang ? 14L : 3L);
+        vox_i32 x;
+        vox_i32 y;
+        vox_i32 top = origin_y + 6L;
+        vox_i32 bottom = origin_y + 10L;
+        /* Solid overburden above, so there is something to bring down. */
+        for (y = origin_y - 24L; y <= bottom; ++y) {
+            for (x = origin_x - 34L; x <= origin_x + 34L; ++x) {
+                vox_u32 z;
+                if (x < 0L || y < 0L) continue;
+                for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                    (void)vox_world_set(&demo_match.world, (vox_u32)x,
+                                        (vox_u32)y, z, VOX_MAT_SOIL,
+                                        20L << 16);
+                }
+            }
+        }
+        for (y = origin_y - 40L; y < origin_y - 24L; ++y) {
+            for (x = origin_x - 34L; x <= origin_x + 34L; ++x) {
+                vox_u32 z;
+                if (x < 0L || y < 0L) continue;
+                for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                    (void)vox_world_set(&demo_match.world, (vox_u32)x,
+                                        (vox_u32)y, z, VOX_MAT_AIR,
+                                        20L << 16);
+                }
+            }
+        }
+        (void)vox_world_sleep_all(&demo_match.world);
+        demo_match.players[0].position_y.value_q16 =
+            (vox_i32)((origin_y + 8L) << 16);
+        demo_capture_frame(&app, directory, 0U);
+        /* Blast the void open the way a real weapon would. */
+        for (x = origin_x - half; x <= origin_x + half; x += 6L) {
+            if (x < 0L) continue;
+            (void)vox_world_blast(&demo_match.world, (vox_u32)x,
+                                  (vox_u32)top, 0U, 6U, 300L << 16);
+        }
+    } else {
+        demo_capture_frame(&app, directory, 0U);
+        (void)vox_digs_fire_weapon(&demo_match, 0U, VOX_DIGS_TOOL_SMOKER,
+                                   (vox_u32)(origin_x + 10L),
+                                   (vox_u32)origin_y);
+    }
+    for (frame = 1U; frame < frames; ++frame) {
+        vox_u32 step;
+        for (step = 0U; step < interval; ++step) {
+            if (vox_digs_match_step(&demo_match) != VOX_OK) {
+                return 4;
+            }
+            tick++;
+        }
+        demo_capture_frame(&app, directory, frame);
+    }
+    printf("capture scenario=%s frames=%lu interval=%lu ticks=%lu "
+           "awake=%lu occupied=%lu hash=%08lx dir=%s\n",
+           scenario, (unsigned long)frames, (unsigned long)interval,
+           (unsigned long)tick,
+           (unsigned long)demo_match.world.awake_cells,
+           (unsigned long)demo_match.world.occupied_cells,
+           (unsigned long)demo_match.state_hash, directory);
+    return 0;
 }
 
 static int demo_smoke_test(const char *path)
@@ -7100,6 +8461,14 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
         }
         return 4;
     }
+    if (vox_digs_dropship_begin(&demo_match) != VOX_OK) {
+        fprintf(stderr, "performance self-test: dropship begin failed\n");
+        if (qualify_named_bench) {
+            free(samples);
+            SDL_Quit();
+        }
+        return 4;
+    }
     for (tick = 0U; tick < ticks; ++tick) {
         vox_u16 player;
         if ((tick % 90U) == 0U) {
@@ -7236,10 +8605,15 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
             fprintf(stderr,
                     "load self-test: explosive/collapse load missing\n");
             status = 6;
+        /* The current increment adds authoritative fluid, rigid, structural, replay, and
+         * dropship state.  The workload explicitly begins the interactive
+         * dropship sequence.  Recaptured at -O0 and -O2 from the same
+         * 600-tick input stream; these activity counters are a determinism
+         * baseline, not a wall-clock performance claim. */
         } else if (ticks == 600U &&
-                   (fired != 20U || explosions != 16U || crushes != 0U ||
-                    max_effects != 1153U || max_awake != 6975U ||
-                    demo_match.state_hash != (vox_u32)0xC37E44B6UL)) {
+                   (fired != 23U || explosions != 16U || crushes != 0U ||
+                    max_effects != 978U || max_awake != 4616U ||
+                    demo_match.state_hash != (vox_u32)0xC53B59D9UL)) {
             fprintf(stderr,
                     "load self-test: canonical 600-tick activity/hash "
                     "mismatch\n");
@@ -7543,7 +8917,6 @@ static int demo_bark_self_test(void)
     demo_app app;
     vox_u8 tokens[VOX_AUDIO_SPEECH_TOKEN_CAPACITY];
     vox_u16 count = 0U;
-    vox_u32 sequence;
     int context;
     int phrase;
     memset(&app, 0, sizeof(app));
@@ -7560,12 +8933,14 @@ static int demo_bark_self_test(void)
     demo_match.selected_weapon[1] = VOX_DIGS_TOOL_NAIL_GUN;
     strcpy(app.player_names[0], "RIVET");
     strcpy(app.player_names[1], "CINDER");
-    for (context = 0; context < 6; ++context) {
-        for (phrase = 0; phrase < (int)DEMO_BARK_PHRASE_COUNT; ++phrase) {
-            if (demo_bark_phrases[context][phrase] == 0 ||
-                demo_bark_phrases[context][phrase][0] == '\0') {
+    for (context = 0; context < (int)DIGS_VOICE_COUNT; ++context) {
+        for (phrase = 1; phrase < (int)VOX_DIGS_STIMULUS_COUNT; ++phrase) {
+            digs_line_pool pool = digs_lines_pool((vox_u16)context,
+                (vox_u16)VOX_DIGS_TONE_NEUTRAL, (vox_u16)phrase);
+            if (pool.count == 0U ||
+                digs_lines_text(pool.first)[0] == '\0') {
                 fprintf(stderr,
-                    "bark self-test: missing curated phrase state=%d slot=%d\n",
+                    "bark self-test: no line for voice=%d stimulus=%d\n",
                     context, phrase);
                 return 1;
             }
@@ -7581,40 +8956,50 @@ static int demo_bark_self_test(void)
         fprintf(stderr, "bark self-test: spelling fallback failed\n");
         return 3;
     }
+    /*
+     * Cooldowns and repeat suppression moved into the simulation, where they
+     * are hashed and covered by the headless tests.  What is left for the
+     * port to prove is that it renders what it is handed: the name goes in,
+     * and nothing is assembled here any more.
+     */
     demo_match.tick = 10U;
-    demo_bark(&app, 0, 0, 0);
-    sequence = app.bark_sequence[0];
-    demo_match.tick = 11U;
-    demo_bark(&app, 0, 1, 0);
-    if (app.bark_sequence[0] != sequence) {
-        fprintf(stderr, "bark self-test: normal cooldown leaked\n");
-        return 4;
+    strcpy(app.player_names[1], "CINDER");
+    {
+        digs_line_pool pool = digs_lines_pool((vox_u16)DIGS_VOICE_RIVET,
+            (vox_u16)VOX_DIGS_TONE_NEUTRAL,
+            (vox_u16)VOX_DIGS_STIMULUS_FIRST_MEETING);
+        vox_u16 id;
+        int substituted = 0;
+        if (pool.count == 0U) {
+            fprintf(stderr, "bark self-test: no first-meeting lines\n");
+            return 4;
+        }
+        for (id = 0U; id < pool.count; ++id) {
+            const char *raw = digs_lines_text((vox_u16)(pool.first + id));
+            if (strstr(raw, "%T") == 0) {
+                continue;
+            }
+            app.bubbles[0].text[0] = '\0';
+            demo_speak_line(&app, 0, 1, (vox_u16)(pool.first + id), 1);
+            if (strstr(app.bubbles[0].text, "%T") != 0) {
+                fprintf(stderr, "bark self-test: %%T was not substituted\n");
+                return 5;
+            }
+            if (strstr(app.bubbles[0].text, "CINDER") == 0) {
+                fprintf(stderr, "bark self-test: name did not reach the "
+                                "bubble\n");
+                return 6;
+            }
+            substituted = 1;
+            break;
+        }
+        if (!substituted) {
+            fprintf(stderr, "bark self-test: no line carried a name slot\n");
+            return 7;
+        }
     }
-    app.options.dummy_mode = 1;
-    demo_match.tick = 100U;
-    demo_bark(&app, 0, 1, 0);
-    if (app.bark_sequence[0] != sequence) {
-        fprintf(stderr, "bark self-test: global spacing was bypassed\n");
-        return 5;
-    }
-    demo_match.tick = 131U;
-    demo_bark(&app, 0, 1, 0);
-    if (app.bark_sequence[0] != sequence + 1U) {
-        fprintf(stderr, "bark self-test: Dummy Mode local bypass failed\n");
-        return 6;
-    }
-    demo_match.tick = 260U;
-    demo_bark(&app, 1, 2, 1);
-    sequence = app.bark_sequence[1];
-    demo_match.tick = 400U;
-    demo_bark(&app, 1, 2, 1);
-    if (sequence == 0U || app.bark_sequence[1] != sequence) {
-        fprintf(stderr, "bark self-test: bot cooldown was bypassed\n");
-        return 7;
-    }
-    printf("DIGS bark self-test passed curated=%u g2p=%u\n",
-           6U * (unsigned int)DEMO_BARK_PHRASE_COUNT,
-           (unsigned int)count);
+    printf("DIGS bark self-test passed lines=%u g2p=%u\n",
+           (unsigned int)digs_lines_total(), (unsigned int)count);
     return 0;
 }
 
@@ -7641,6 +9026,23 @@ static int demo_settings_first_line_equals(const char *path,
     return matched;
 }
 
+static int demo_settings_contains(const char *path, const char *needle)
+{
+    char line[256];
+    FILE *file;
+    if (path == 0 || needle == 0) return 0;
+    file = fopen(path, "r");
+    if (file == 0) return 0;
+    while (fgets(line, (int)sizeof(line), file) != 0) {
+        if (strstr(line, needle) != 0) {
+            (void)fclose(file);
+            return 1;
+        }
+    }
+    (void)fclose(file);
+    return 0;
+}
+
 static void demo_settings_test_defaults(demo_app *app)
 {
     memset(app, 0, sizeof(*app));
@@ -7651,6 +9053,72 @@ static void demo_settings_test_defaults(demo_app *app)
     demo_match_settings_defaults(app);
     demo_input_defaults(app);
     demo_bindings_default(app);
+}
+
+/* Exercise the actual SDL match-start path rather than only the core helper:
+ * BEGIN must put a miner aboard the live ship before input, then FIRE must
+ * release that same authoritative body.  No video or audio device is needed
+ * for this small host/engine seam. */
+static int demo_dropship_start_self_test(void)
+{
+    demo_app app;
+    vox_digs_input input;
+    vox_i32 ship_x;
+    demo_settings_test_defaults(&app);
+    app.bots = 0;
+    app.local_players = 1;
+    app.map_style = VOX_DIGS_MAP_COAL_RIDGE;
+    app.arsenal = DEMO_ARSENAL_FULL;
+    app.seed = 0x44524F50U;
+    app.camera_zoom = DEMO_CAMERA_ZOOM_DEFAULT;
+    app.camera_scale = (double)DEMO_CAMERA_ZOOM_DEFAULT;
+    app.frame_seconds = 1.0 / 60.0;
+    demo_prepare_targets();
+    if (!demo_start_match(&app, 0)) {
+        fprintf(stderr, "dropship start self-test: BEGIN failed\n");
+        return 1;
+    }
+    ship_x = demo_match.dropship.position_x_q16;
+    if (demo_match.tick != 0U ||
+        (demo_match.dropship.launched_mask & 1U) != 0U ||
+        demo_match.players[0].position_x.value_q16 <
+        ship_x - VOX_DIGS_DROPSHIP_BOARD_RADIUS_Q16 ||
+        demo_match.players[0].position_x.value_q16 >
+        ship_x + VOX_DIGS_DROPSHIP_BOARD_RADIUS_Q16) {
+        fprintf(stderr, "dropship start self-test: miner not aboard\n");
+        return 2;
+    }
+    input.abi_version = VOX_ABI_VERSION;
+    input.struct_size = (vox_u32)sizeof(input);
+    input.player = 0U;
+    input.actions = VOX_DIGS_ACTION_FIRE;
+    input.aim_x = demo_match.aim_x[0];
+    input.aim_y = demo_match.aim_y[0];
+    input.move_x_q15 = 0;
+    input.move_y_q15 = 0;
+    input.selected_weapon = demo_match.selected_weapon[0];
+    input.reserved = 0U;
+    if (vox_digs_submit_input(&demo_match, &input) != VOX_OK ||
+        vox_digs_match_step(&demo_match) != VOX_OK ||
+        (demo_match.dropship.launched_mask & 1U) == 0U ||
+        demo_match.alive[0] == 0U ||
+        demo_match.players[0].position_y.value_q16 -
+        demo_match.players[0].half_height_q16 <=
+        demo_match.dropship.position_y_q16 +
+        VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16) {
+        fprintf(stderr, "dropship start self-test: FIRE did not launch\n");
+        return 3;
+    }
+    input.actions = 0U;
+    if (vox_digs_submit_input(&demo_match, &input) != VOX_OK ||
+        vox_digs_match_step(&demo_match) != VOX_OK ||
+        demo_match.alive[0] == 0U) {
+        fprintf(stderr, "dropship start self-test: launch hit the hull\n");
+        return 4;
+    }
+    printf("DIGS dropship start self-test passed ship=%ld launch=%lu\n",
+           (long)(ship_x >> 16), (unsigned long)demo_match.tick);
+    return 0;
 }
 
 static int demo_settings_self_test(const char *path)
@@ -7696,7 +9164,8 @@ static int demo_settings_self_test(const char *path)
         demo_load_input_settings(&app) != 1 ||
         app.bindings.keyboard_left[0] != SDL_SCANCODE_A ||
         app.options.master_volume != 8 || app.options.haptic_level != 2 ||
-        app.player_input[0].rope_mode != DEMO_ROPE_HOLD) {
+        demo_save_input_settings(&app) != 1 ||
+        demo_settings_contains(path, "P1_ROPE_MODE=")) {
         fprintf(stderr, "settings self-test invalid-value fallback failed\n");
         status = 4;
         goto done;
@@ -7713,9 +9182,47 @@ static int demo_settings_self_test(const char *path)
         status = 5;
         goto done;
     }
-    if (!demo_settings_first_line_equals(path, "DIGS_SETTINGS=4\n")) {
-        fprintf(stderr, "settings self-test did not persist schema four\n");
+    if (!demo_settings_first_line_equals(path, "DIGS_SETTINGS=6\n")) {
+        fprintf(stderr, "settings self-test did not persist schema six\n");
         status = 6;
+        goto done;
+    }
+
+    /*
+     * Schema four stored the time limit as a number of minutes, and only 2
+     * or 3 were reachable.  Five stores an index into a longer list, so an
+     * old file has to be read as minutes and mapped -- otherwise somebody
+     * who had picked 3:00 comes back to 2:00 with no explanation.
+     */
+    demo_settings_test_defaults(&app);
+    if (!demo_write_settings_fixture(path,
+            "DIGS_SETTINGS=4\nMATCH_MINUTES=3\n") ||
+        demo_load_input_settings(&app) != 1 ||
+        demo_time_limits[app.time_limit_index] != 3) {
+        fprintf(stderr, "settings self-test schema-four time migration "
+                        "failed\n");
+        status = 7;
+        goto done;
+    }
+    demo_settings_test_defaults(&app);
+    if (!demo_write_settings_fixture(path,
+            "DIGS_SETTINGS=4\nMATCH_MINUTES=2\n") ||
+        demo_load_input_settings(&app) != 1 ||
+        demo_time_limits[app.time_limit_index] != 2) {
+        fprintf(stderr, "settings self-test schema-four time migration "
+                        "failed\n");
+        status = 8;
+        goto done;
+    }
+    /* And an out-of-range index from a hand-edited file must not stick. */
+    demo_settings_test_defaults(&app);
+    if (!demo_write_settings_fixture(path,
+            "DIGS_SETTINGS=6\nTIME_LIMIT_INDEX=99\nLAVA_INDEX=99\n") ||
+        demo_load_input_settings(&app) != 1 ||
+        app.time_limit_index < 0 || app.time_limit_index > 5 ||
+        app.lava_index < 0 || app.lava_index > 4) {
+        fprintf(stderr, "settings self-test time clamp failed\n");
+        status = 9;
         goto done;
     }
 
@@ -7728,7 +9235,7 @@ static int demo_settings_self_test(const char *path)
         app.options.laptop_mode != 0 || app.options.dummy_mode != 0 ||
         app.options.haptic_level != 2 ||
         demo_save_input_settings(&app) != 1 ||
-        !demo_settings_first_line_equals(path, "DIGS_SETTINGS=4\n")) {
+        !demo_settings_first_line_equals(path, "DIGS_SETTINGS=6\n")) {
         fprintf(stderr, "settings self-test schema-two migration failed\n");
         status = 7;
         goto done;
@@ -7752,10 +9259,28 @@ static int demo_settings_self_test(const char *path)
         app.options.fx_profile != 2 || app.options.master_volume != 3 ||
         app.options.laptop_mode != 1 || app.options.dummy_mode != 1 ||
         app.options.haptic_level != 3 ||
-        app.player_input[0].rope_mode != DEMO_ROPE_TOGGLE ||
-        demo_save_input_settings(&app) != 1) {
+        demo_save_input_settings(&app) != 1 ||
+        demo_settings_contains(path, "P1_ROPE_MODE=")) {
         fprintf(stderr, "settings self-test schema-three round trip failed\n");
         status = 8;
+        goto done;
+    }
+
+    demo_settings_test_defaults(&app);
+    if (!demo_write_settings_fixture(path,
+            "DIGS_SETTINGS=6\nP1_OUTFIT=4\nP1_HELMET=2\n"
+            "P2_OUTFIT=5\nP2_HELMET=1\nP1_ROPE_MODE=0\n") ||
+        demo_load_input_settings(&app) != 1 ||
+        app.outfit_color[0] != 4 || app.helmet_color[0] != 2 ||
+        app.outfit_color[1] != 5 || app.helmet_color[1] != 1 ||
+        demo_save_input_settings(&app) != 1 ||
+        !demo_settings_contains(path, "P1_OUTFIT=4\n") ||
+        !demo_settings_contains(path, "P1_HELMET=2\n") ||
+        !demo_settings_contains(path, "P2_OUTFIT=5\n") ||
+        !demo_settings_contains(path, "P2_HELMET=1\n") ||
+        demo_settings_contains(path, "P1_ROPE_MODE=")) {
+        fprintf(stderr, "settings self-test cosmetics or rope migration failed\n");
+        status = 10;
         goto done;
     }
 
@@ -8039,6 +9564,7 @@ static int demo_camera_self_test(void)
         vox_world *world_snapshot;
         vox_u32 world_hash;
         vox_u32 match_hash;
+        vox_u32 rendered_frame_hash;
         vox_result render_status;
         int transitions = 0;
         int x;
@@ -8086,6 +9612,15 @@ static int demo_camera_self_test(void)
             return 12;
         }
         free(world_snapshot);
+        rendered_frame_hash = vox_software_hash(&demo_target);
+        demo_apply_atmosphere(&app, &view);
+        if (vox_digs_hash(&demo_match) != match_hash ||
+            vox_software_hash(&demo_target) == rendered_frame_hash) {
+            fprintf(stderr,
+                    "camera self-test: atmosphere missed air or changed "
+                    "canonical state\n");
+            return 14;
+        }
         for (x = 1; x < (int)DEMO_WIDTH; ++x) {
             vox_u8 before = demo_pixels[((int)DEMO_HEIGHT / 2 *
                 (int)DEMO_WIDTH + x - 1) * VOX_SOFTWARE_RGB_BYTES];
@@ -8103,6 +9638,171 @@ static int demo_camera_self_test(void)
            DEMO_CAMERA_ZOOM_MAX, player_screen_x, player_screen_y,
            lava_screen_x, lava_screen_y,
            (unsigned long)false_lava_pixels);
+    return 0;
+}
+
+/* Exercise the result-only replay controls without a display.  The ledger is
+ * intentionally outside vox_digs_hash, so pacing or reframing it must never
+ * change the match the replay is describing. */
+static int demo_replay_presentation_self_test(void)
+{
+    demo_app app;
+    vox_digs_rules rules;
+    vox_u32 hash_before;
+    vox_u32 hash_after;
+    vox_u16 tick;
+    memset(&app, 0, sizeof(app));
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&demo_match, &rules) != VOX_OK) return 1;
+    demo_match.phase = VOX_DIGS_RESULTS;
+    demo_match.replay.active = 1U;
+    demo_match.replay.frame_count = 2U;
+    demo_match.replay.play_cursor = 0U;
+    demo_match.replay.capture_cursor = 0U;
+    demo_match.replay.killer = 0U;
+    demo_match.replay.victim = 1U;
+    demo_match.replay.headshot = 1U;
+    demo_match.replay.multi_kill = 2U;
+    demo_match.replay.frames[0].tick = 120U;
+    demo_match.replay.frames[0].camera_x_q16 = 200L << 16;
+    demo_match.replay.frames[0].camera_y_q16 = 96L << 16;
+    demo_match.replay.frames[0].camera_zoom_q16 = 2L << 16;
+    demo_match.replay.frames[0].player_x_q16[0] = 200L << 16;
+    demo_match.replay.frames[0].player_y_q16[0] = 96L << 16;
+    demo_match.replay.frames[0].player_x_q16[1] = 220L << 16;
+    demo_match.replay.frames[0].player_y_q16[1] = 96L << 16;
+    demo_match.replay.frames[1] = demo_match.replay.frames[0];
+    demo_match.replay.frames[1].tick = 124U;
+    demo_match.replay.frames[1].player_x_q16[0] = 204L << 16;
+    demo_match.replay.frames[1].player_x_q16[1] = 216L << 16;
+    hash_before = vox_digs_hash(&demo_match);
+    demo_tick_results(&app);
+    if (app.replay_playing == 0U || app.replay_frame_valid == 0U ||
+        app.replay_frame_hold_ticks != DEMO_REPLAY_FRAME_HOLD_TICKS ||
+        demo_match.replay.play_cursor != 1U) return 2;
+    demo_update_replay_camera(&app);
+    if (app.camera_world_x < 180.0 || app.camera_world_x > 240.0 ||
+        app.camera_scale < 3.0) return 3;
+    for (tick = 0U; tick < DEMO_REPLAY_FRAME_HOLD_TICKS; ++tick) {
+        demo_tick_results(&app);
+        if (demo_match.replay.play_cursor != 1U) return 4;
+    }
+    demo_tick_results(&app);
+    if (demo_match.replay.play_cursor != 2U ||
+        demo_match.replay.active != 0U || app.replay_hold_ticks != 30U) {
+        return 5;
+    }
+    hash_after = vox_digs_hash(&demo_match);
+    if (hash_after != hash_before) return 6;
+    printf("DIGS replay presentation self-test passed hold=%u zoom=%.2f\n",
+           (unsigned int)DEMO_REPLAY_FRAME_HOLD_TICKS, app.camera_scale);
+    return 0;
+}
+
+static int demo_rigid_overlay_self_test(void)
+{
+    vox_digs_rules rules;
+    vox_u16 body_index;
+    vox_u32 world_hash;
+    vox_u32 match_hash;
+    const vox_cell *cell;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&demo_match, &rules) != VOX_OK) return 1;
+    if (vox_world_set(&demo_match.world, 160U, 100U,
+                      VOX_WORLD_DEPTH - 1U, VOX_MAT_AIR, 0L) != VOX_OK ||
+        vox_world_set(&demo_match.world, 159U, 100U,
+                      VOX_WORLD_DEPTH - 1U, VOX_MAT_AIR, 0L) != VOX_OK ||
+        vox_rigid_spawn(&demo_match.ragdolls, &body_index,
+                        160L << 16, 100L << 16,
+                        65536L, 32768L, 65536L,
+                        VOX_RIGID_BODY_CORPSE) != VOX_OK) {
+        return 2;
+    }
+    world_hash = vox_world_hash(&demo_match.world);
+    match_hash = vox_digs_hash(&demo_match);
+    demo_render_overlay_begin();
+    demo_voxelize_rigid_bodies();
+    cell = vox_world_cell(&demo_match.world, 160U, 100U,
+                          VOX_WORLD_DEPTH - 1U);
+    if (cell == 0 || cell->material != VOX_MAT_FLESH ||
+        vox_world_cell(&demo_match.world, 159U, 100U,
+                       VOX_WORLD_DEPTH - 1U)->material != VOX_MAT_AIR) {
+        demo_render_overlay_restore();
+        return 3;
+    }
+    demo_render_overlay_restore();
+    if (vox_world_hash(&demo_match.world) != world_hash ||
+        vox_digs_hash(&demo_match) != match_hash) {
+        return 4;
+    }
+    printf("DIGS rigid overlay self-test passed body=%u\n",
+           (unsigned int)body_index);
+    return 0;
+}
+
+static int demo_particle_overlay_self_test(void)
+{
+    demo_app app;
+    vox_digs_rules rules;
+    vox_software_view view;
+    vox_u32 world_hash;
+    vox_u32 match_hash;
+    vox_u32 frame_hash;
+    vox_result render_status;
+    memset(&app, 0, sizeof(app));
+    demo_prepare_targets();
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&demo_match, &rules) != VOX_OK) return 1;
+    app.local_players = 1;
+    app.options.gore_level = 2;
+    app.camera_zoom = DEMO_CAMERA_ZOOM_DEFAULT;
+    app.camera_scale = (double)DEMO_CAMERA_ZOOM_DEFAULT;
+    app.camera_world_x = (double)demo_match.players[0].position_x.value_q16 /
+                         65536.0;
+    app.camera_world_y = (double)demo_match.players[0].position_y.value_q16 /
+                         65536.0;
+    app.previous_player_x[0] = demo_match.players[0].position_x.value_q16;
+    app.previous_player_y[0] = demo_match.players[0].position_y.value_q16;
+    demo_match.effects[0].active = 1U;
+    demo_match.effects[0].material = VOX_MAT_BLOOD;
+    demo_match.effects[0].position_x_q16 =
+        demo_match.players[0].position_x.value_q16 + (2L << 16);
+    demo_match.effects[0].position_y_q16 =
+        demo_match.players[0].position_y.value_q16 - (2L << 16);
+    demo_match.effects[0].velocity_x_q16 = 16384L;
+    demo_match.effects[0].velocity_y_q16 = -8192L;
+    demo_match.effects[0].ttl_ticks = 30U;
+    demo_match.effect_count = 1U;
+    world_hash = vox_world_hash(&demo_match.world);
+    match_hash = vox_digs_hash(&demo_match);
+    demo_camera_view(&app, &view);
+    demo_render_overlay_begin();
+    demo_build_render_world(&app);
+    render_status = vox_software_render_view_ex(&demo_match.world,
+        &demo_target, &demo_render_config, &view);
+    demo_render_overlay_restore();
+    if (render_status != VOX_OK || vox_world_hash(&demo_match.world) !=
+        world_hash || vox_digs_hash(&demo_match) != match_hash) {
+        return 2;
+    }
+    demo_apply_atmosphere(&app, &view);
+    frame_hash = vox_software_hash(&demo_target);
+    demo_draw_effect_particles(&app, &view);
+    if (vox_digs_hash(&demo_match) != match_hash ||
+        vox_software_hash(&demo_target) == frame_hash) {
+        return 3;
+    }
+    printf("DIGS particle overlay self-test passed frame=%08lx\n",
+           (unsigned long)vox_software_hash(&demo_target));
     return 0;
 }
 
@@ -8143,6 +9843,616 @@ static void demo_wait_for_frame(Uint64 frequency, int frame_cap,
         SDL_Delay((Uint32)delay_ms);
         now = SDL_GetPerformanceCounter();
     }
+}
+
+/*
+ * One phase of the cross-session evidence: what a played match teaches the
+ * miners, the next launch starts with.
+ *
+ * Everything else about the save layer is provable inside one process, and
+ * --chronicle-self-test does that.  This is the part that is not: whether a
+ * match actually writes memory, whether the file carries it across a real
+ * process boundary, and whether the next match starts from it rather than
+ * from nothing.  The phases are separate commands precisely so the test
+ * harness can run them as separate processes -- one process pretending to
+ * relaunch itself would prove noticeably less.
+ *
+ * The clock is supplied rather than read.  digs_chronicle_open takes a stamp,
+ * and passing a fixed one keeps the whole test deterministic while still
+ * exercising the away-time path that decides whether anybody writes.
+ *
+ * Phases:
+ *   fresh   -- open a match with no history, report the opening regard
+ *   record  -- play a match from whatever is on disk, write back what it
+ *              taught them
+ *   verify  -- open a match from the file on disk, report the opening regard
+ *
+ * The harness asserts that `fresh` opens neutral, that `record` moves it, and
+ * that `verify` in a later process sees what `record` left.
+ */
+#define DEMO_SESSION_CLOCK 1700000000UL
+#define DEMO_SESSION_TICKS 900U
+
+static void demo_session_rules(vox_digs_rules *rules)
+{
+    vox_digs_rules_classic(rules);
+    rules->player_count = 4U;
+    rules->bot_mask = (vox_u16)((1U << 2) | (1U << 3));
+    rules->map_style = VOX_DIGS_MAP_DEEPWORKS;
+    rules->weapon_mask = 0x07FFU;
+    rules->fx_budget = VOX_DIGS_FX_CARNAGE;
+    rules->match_ticks = DEMO_SESSION_TICKS + 1200U;
+    rules->lava_start_tick = DEMO_SESSION_TICKS / 2U;
+    rules->score_limit = 0U;
+    rules->respawn_delay_ticks = 0U;
+    rules->seed = 0x5330304DU;
+}
+
+/*
+ * Report the account between the player and one named miner, plus a coarse
+ * total across every pair, so the harness can tell "nothing carried" from
+ * "something carried" without depending on which pair the fighting happened
+ * to land on.
+ */
+static void demo_session_report(const char *phase, const vox_digs_match *match,
+                                const digs_chronicle *chronicle)
+{
+    vox_u16 pair;
+    long carried = 0L;
+    vox_u16 met = 0U;
+    vox_u16 played = 0U;
+    vox_u16 identity;
+    const char *who;
+    for (pair = 0U; pair < VOX_DIGS_MAX_PAIRS; ++pair) {
+        long value = (long)chronicle->memory.regard[pair].valence;
+        carried += value < 0L ? -value : value;
+        met = (vox_u16)(met + chronicle->memory.regard[pair].matches_met);
+    }
+    for (identity = 0U; identity < VOX_DIGS_IDENTITY_COUNT; ++identity) {
+        played = (vox_u16)(played +
+                 chronicle->memory.identities[identity].matches_played);
+    }
+    /*
+     * Report which miner the opening account belongs to rather than assuming
+     * it.  Slot 2's archetype decides its identity, so naming one here would
+     * be a guess that reads as a fact in an evidence log.
+     */
+    pair = vox_digs_pair_index(0U, 2U);
+    identity = vox_digs_memory_identity(match, 2U);
+    /*
+     * Canonical names, not the player's renamed ones: this goes into an
+     * evidence log, where "RIVET" has to mean the archetype rather than
+     * whatever somebody typed into the customize screen.
+     */
+    {
+        static const char *const names[VOX_DIGS_IDENTITY_COUNT + 1U] = {
+            "RIVET", "CINDER", "FLAMEY", "PLAYER", "NOBODY"
+        };
+        who = names[identity <= VOX_DIGS_IDENTITY_COUNT ?
+                    identity : VOX_DIGS_IDENTITY_COUNT];
+    }
+    printf("DIGS session self-test phase=%s launches=%lu matches=%lu "
+           "regard_total=%ld pairs_met=%lu identity_matches=%lu "
+           "opening_with=%s opening_tone=%lu opening_valence=%ld "
+           "hash=%08lx\n",
+           phase,
+           (unsigned long)chronicle->memory.launch_counter,
+           (unsigned long)chronicle->matches_recorded,
+           carried,
+           (unsigned long)met,
+           (unsigned long)played,
+           who,
+           (unsigned long)(pair < VOX_DIGS_MAX_PAIRS ?
+                           match->contracts[pair].tone : 0U),
+           (long)(pair < VOX_DIGS_MAX_PAIRS ?
+                  match->contracts[pair].valence : 0),
+           (unsigned long)match->state_hash);
+}
+
+static int demo_session_self_test(const char *path, const char *phase)
+{
+    static digs_chronicle chronicle;
+    vox_digs_rules rules;
+    int recording = strcmp(phase, "record") == 0;
+    int verifying = strcmp(phase, "verify") == 0;
+    int starting_fresh = strcmp(phase, "fresh") == 0;
+
+    if (!recording && !verifying && !starting_fresh) {
+        fprintf(stderr, "session self-test: phase must be fresh, record or "
+                        "verify\n");
+        return 1;
+    }
+    demo_session_rules(&rules);
+
+    if (starting_fresh) {
+        digs_chronicle_reset(&chronicle);
+        if (vox_digs_match_init_ex(&demo_match, &rules, 0) != VOX_OK) {
+            fprintf(stderr, "session self-test: fresh match init failed\n");
+            return 2;
+        }
+        demo_session_report("fresh", &demo_match, &chronicle);
+        return 0;
+    }
+
+    /*
+     * A verify phase that silently accepted a missing file would pass for the
+     * wrong reason -- it would be reporting a first meeting, which is exactly
+     * what the harness is trying to distinguish from a carried one.
+     */
+    {
+        int loaded = digs_chronicle_load(&chronicle, path);
+        if (verifying && loaded != 1) {
+            fprintf(stderr, "session self-test: no chronicle to verify at %s\n",
+                    path);
+            return 3;
+        }
+        if (chronicle.tampered) {
+            fprintf(stderr, "session self-test: chronicle at %s is damaged\n",
+                    path);
+            return 4;
+        }
+    }
+    digs_chronicle_open(&chronicle, (vox_u32)DEMO_SESSION_CLOCK);
+
+    if (vox_digs_match_init_ex(&demo_match, &rules, &chronicle.memory) !=
+        VOX_OK) {
+        fprintf(stderr, "session self-test: match init failed\n");
+        return 5;
+    }
+
+    if (verifying) {
+        demo_session_report("verify", &demo_match, &chronicle);
+        return 0;
+    }
+
+    /*
+     * Play it.  The input stream is the deterministic one the load self-test
+     * uses: two locals fighting two bots with explosives, which reliably
+     * produces kills, deaths and the stimuli the accounts are built from.
+     */
+    {
+        vox_u32 tick;
+        for (tick = 0U; tick < DEMO_SESSION_TICKS; ++tick) {
+            vox_u16 player;
+            if ((tick % 90U) == 0U) {
+                vox_u32 blast_x = VOX_WORLD_WIDTH / 5U +
+                    (tick / 90U * 67U) % (VOX_WORLD_WIDTH * 3U / 5U);
+                vox_u32 blast_y = VOX_WORLD_HEIGHT * 3U / 5U;
+                (void)vox_world_blast(&demo_match.world, blast_x, blast_y, 0U,
+                                      7U, 700L << 16);
+            }
+            for (player = 0U; player < 2U; ++player) {
+                vox_digs_input input;
+                vox_u16 target = (vox_u16)(player + 2U);
+                long aim_x = demo_match.players[target].position_x.value_q16 /
+                             65536L;
+                long aim_y = demo_match.players[target].position_y.value_q16 /
+                             65536L;
+                memset(&input, 0, sizeof(input));
+                input.abi_version = VOX_ABI_VERSION;
+                input.struct_size = (vox_u32)sizeof(input);
+                input.player = player;
+                input.actions = VOX_DIGS_ACTION_FIRE;
+                if ((tick % 72U) >= 52U) {
+                    input.actions = 0U;
+                }
+                if (((tick / 75U) + player) & 1U) {
+                    input.actions = (vox_u16)(input.actions |
+                                              VOX_DIGS_ACTION_LEFT);
+                    input.move_x_q15 = -24576;
+                } else {
+                    input.actions = (vox_u16)(input.actions |
+                                              VOX_DIGS_ACTION_RIGHT);
+                    input.move_x_q15 = 24576;
+                }
+                /* Somebody has to speak, or the accounts never move. */
+                if ((tick % 150U) == (vox_u32)(player * 45U)) {
+                    input.actions = (vox_u16)(input.actions |
+                                              VOX_DIGS_ACTION_BARK);
+                }
+                if (aim_x < 0L) aim_x = 0L;
+                if (aim_y < 0L) aim_y = 0L;
+                if (aim_x >= (long)VOX_WORLD_WIDTH) {
+                    aim_x = (long)VOX_WORLD_WIDTH - 1L;
+                }
+                if (aim_y >= (long)VOX_WORLD_HEIGHT) {
+                    aim_y = (long)VOX_WORLD_HEIGHT - 1L;
+                }
+                input.aim_x = (vox_u16)aim_x;
+                input.aim_y = (vox_u16)aim_y;
+                input.selected_weapon = VOX_DIGS_TOOL_FIRECRACKER;
+                (void)vox_digs_submit_input(&demo_match, &input);
+            }
+            if (vox_digs_match_step(&demo_match) != VOX_OK) {
+                fprintf(stderr, "session self-test: step failed at %lu\n",
+                        (unsigned long)tick);
+                return 6;
+            }
+        }
+    }
+
+    if (vox_digs_match_export_memory(&demo_match, &chronicle.memory) !=
+        VOX_OK) {
+        fprintf(stderr, "session self-test: memory export failed\n");
+        return 7;
+    }
+    if (chronicle.matches_recorded < 65535U) {
+        chronicle.matches_recorded++;
+    }
+    if (!digs_chronicle_save(&chronicle, path)) {
+        fprintf(stderr, "session self-test: could not write %s\n", path);
+        return 8;
+    }
+    demo_session_report("record", &demo_match, &chronicle);
+    return 0;
+}
+
+/*
+ * Prove the chronicle survives a round trip, repairs a mangled file, and
+ * records that it was mangled.  This is the one part of the save layer that
+ * a player can break from outside the game, so it is the part that has to be
+ * demonstrably safe rather than merely careful.
+ */
+static int digs_chronicle_self_test(const char *path)
+{
+    static digs_chronicle written;
+    static digs_chronicle read;
+    char backup[1032];
+    FILE *file;
+    vox_u16 pair;
+
+    (void)remove(path);
+    if (strlen(path) + 5U >= sizeof(backup)) return 1;
+    sprintf(backup, "%s.bak", path);
+    (void)remove(backup);
+
+    digs_chronicle_reset(&written);
+    /* Nothing there yet: a first launch, and not a tampered one. */
+    if (digs_chronicle_load(&read, path) != 0) return 2;
+    if (read.tampered) return 3;
+
+    pair = vox_digs_regard_index(VOX_DIGS_IDENTITY_PLAYER,
+                                 VOX_DIGS_IDENTITY_RIVET);
+    if (pair >= VOX_DIGS_MAX_PAIRS) return 4;
+    written.memory.regard[pair].tone = (vox_u16)VOX_DIGS_TONE_FEUD;
+    written.memory.regard[pair].valence = -742;
+    written.memory.regard[pair].matches_met = 9U;
+    written.memory.regard[pair].betrayals = 2U;
+    written.memory.identities[VOX_DIGS_IDENTITY_RIVET].traits.aggression =
+        199U;
+    written.memory.identities[VOX_DIGS_IDENTITY_RIVET].matches_played = 12U;
+    written.memory.launch_counter = 37U;
+    written.matches_recorded = 12U;
+    digs_chronicle_log(&written, VOX_DIGS_IDENTITY_RIVET,
+                       VOX_DIGS_IDENTITY_PLAYER, 1234U);
+    digs_chronicle_log(&written, VOX_DIGS_IDENTITY_PLAYER,
+                       VOX_DIGS_IDENTITY_RIVET, 77U);
+    written.inbox[0].from = (vox_u16)VOX_DIGS_IDENTITY_RIVET;
+    written.inbox[0].unread = 1U;
+    written.inbox[0].launch = 36U;
+    written.inbox[0].lines[0] = 501U;
+    written.inbox[0].lines[1] = 502U;
+    written.inbox[0].line_count = 2U;
+    written.inbox_count = 1U;
+
+    if (!digs_chronicle_save(&written, path)) return 5;
+    if (digs_chronicle_load(&read, path) != 1) return 6;
+    if (read.tampered) return 7;
+    if (read.memory.regard[pair].tone != VOX_DIGS_TONE_FEUD) return 8;
+    if (read.memory.regard[pair].valence != -742) return 9;
+    if (read.memory.regard[pair].betrayals != 2U) return 10;
+    if (read.memory.identities[VOX_DIGS_IDENTITY_RIVET].traits.aggression !=
+        199U) {
+        return 11;
+    }
+    if (read.memory.launch_counter != 37U) return 12;
+    if (read.log_count != 2U) return 13;
+    if (digs_chronicle_log_at(&read, 0U)->line != 1234U) return 14;
+    if (digs_chronicle_log_at(&read, 1U)->line != 77U) return 15;
+    if (read.inbox_count != 1U || read.inbox[0].line_count != 2U) return 16;
+    if (read.inbox[0].lines[1] != 502U) return 17;
+    if (digs_chronicle_unread(&read) != 1U) return 18;
+
+    /*
+     * Keep a good copy, then edit the live file by hand the way a player
+     * would: change a value in place and leave the checksum alone.  Appending
+     * after SUM proves nothing -- the reader stops there, so appended junk is
+     * inert rather than tampering.
+     */
+    if (!digs_chronicle_save(&read, backup)) return 19;
+    {
+        static char blob[65536];
+        size_t got;
+        char *hit;
+        file = fopen(path, "rb");
+        if (file == 0) return 20;
+        got = fread(blob, 1U, sizeof(blob) - 1U, file);
+        (void)fclose(file);
+        blob[got] = '\0';
+        hit = strstr(blob, "-742");
+        if (hit == 0) return 27;
+        hit[1] = '1';           /* -742 becomes -142: same length, new value */
+        hit[2] = '4';
+        hit[3] = '2';
+        file = fopen(path, "wb");
+        if (file == 0) return 28;
+        (void)fwrite(blob, 1U, got, file);
+        (void)fclose(file);
+    }
+    if (digs_chronicle_load(&read, path) != 1) return 21;
+    if (!read.tampered) return 22;          /* it must notice */
+    if (read.memory.regard[pair].valence != -742) return 23;  /* and repair */
+
+    /* With no good copy to fall back on, it starts over and says so. */
+    (void)remove(backup);
+    if (digs_chronicle_load(&read, path) != 0) return 24;
+    if (!read.tampered) return 25;
+    if (read.memory.regard[pair].valence != 0) return 26;
+
+    /*
+     * Messages between visits.  Nobody writes to a stranger, so a chronicle
+     * with no history in it must stay empty however long the gap; once the
+     * miners have actually played the player, somebody should eventually
+     * write, and what they write has to be real authored lines.
+     */
+    {
+        static digs_chronicle box;
+        vox_u16 attempt;
+        vox_u16 wrote = 0U;
+        digs_chronicle_reset(&box);
+        for (attempt = 0U; attempt < 40U; ++attempt) {
+            digs_chronicle_open(&box, 1000000UL + attempt * 90000UL);
+        }
+        if (box.inbox_count != 0U) return 29;   /* strangers stay silent */
+        if (box.memory.launch_counter != 40U) return 30;
+
+        digs_chronicle_reset(&box);
+        for (pair = 0U; pair < VOX_DIGS_MAX_PAIRS; ++pair) {
+            box.memory.regard[pair].matches_met = 4U;
+        }
+        pair = vox_digs_regard_index(VOX_DIGS_IDENTITY_PLAYER,
+                                     VOX_DIGS_IDENTITY_FLAMEY);
+        box.memory.regard[pair].tone = (vox_u16)VOX_DIGS_TONE_FEUD;
+        box.memory.regard[pair].betrayals = 1U;
+        for (attempt = 0U; attempt < 12U && wrote == 0U; ++attempt) {
+            digs_chronicle_open(&box, 2000000UL + attempt * 90000UL);
+            wrote = box.inbox_count;
+        }
+        if (wrote == 0U) return 31;             /* somebody must write */
+        if (box.inbox[0].line_count == 0U) return 32;
+        if (box.inbox[0].from >= VOX_DIGS_IDENTITY_PLAYER) return 33;
+        for (attempt = 0U; attempt < box.inbox[0].line_count; ++attempt) {
+            if (digs_lines_text(box.inbox[0].lines[attempt])[0] == '\0') {
+                return 34;
+            }
+        }
+        if (digs_chronicle_unread(&box) == 0U) return 35;
+        if (!digs_chronicle_mark_read(&box, 0U)) return 36;
+        if (digs_chronicle_mark_read(&box, 0U)) return 37;  /* only once */
+
+        /* The ring must not overflow however long the player stays away. */
+        for (attempt = 0U; attempt < 200U; ++attempt) {
+            digs_chronicle_open(&box, 3000000UL + attempt * 90000UL);
+        }
+        if (box.inbox_count > DIGS_INBOX_CAPACITY) return 38;
+        if (box.inbox_count == 0U) return 39;
+    }
+
+    (void)remove(path);
+    printf("DIGS chronicle self-test passed inbox=%u log=%u\n",
+           (unsigned int)DIGS_INBOX_CAPACITY,
+           (unsigned int)DIGS_LOG_CAPACITY);
+    return 0;
+}
+
+/*
+ * Render one menu screen to a PPM without opening a window.
+ *
+ * Layout work on a 320x200 field is guesswork otherwise -- rows overlap, text
+ * runs past a panel edge, and none of it shows up in a test.  This is the
+ * cheapest way to actually look at what shipped.
+ */
+static int demo_screenshot(const char *screen_name, const char *path)
+{
+    static demo_app app;
+    int screen = -1;
+    memset(&app, 0, sizeof(app));
+    app.running = 1;
+    app.bots = 3;
+    app.local_players = 1;
+    app.map_style = VOX_DIGS_MAP_COAL_RIDGE;
+    app.arsenal = DEMO_ARSENAL_FULL;
+    app.seed = 0x564F5831U;
+    app.time_limit_index = 2;
+    app.lava_index = 0;
+    app.inbox_open = -1;
+    app.options.gi_quality = 1;
+    app.voice_pitch = 120;
+    app.voice_tone = 100;
+    app.voice_speed = 100;
+    strcpy(app.bot_names[0], "RIVET");
+    strcpy(app.bot_names[1], "CINDER");
+    strcpy(app.bot_names[2], "FLAMEY");
+    strcpy(app.player_names[0], "MINER");
+    demo_refresh_roster(&app);
+    if (strcmp(screen_name, "title") == 0) screen = DEMO_TITLE;
+    else if (strcmp(screen_name, "setup") == 0) screen = DEMO_SETUP;
+    else if (strcmp(screen_name, "options") == 0) screen = DEMO_OPTIONS;
+    else if (strcmp(screen_name, "options2") == 0) {
+        screen = DEMO_OPTIONS;
+        app.selection = 14;
+    } else if (strcmp(screen_name, "inbox") == 0) screen = DEMO_INBOX;
+    else if (strcmp(screen_name, "inbox-read") == 0) {
+        screen = DEMO_INBOX;
+        app.inbox_open = 0;
+    } else if (strcmp(screen_name, "log") == 0) screen = DEMO_LOG;
+    else if (strcmp(screen_name, "controls") == 0) screen = DEMO_CONTROLS;
+    else if (strcmp(screen_name, "customize") == 0) screen = DEMO_CUSTOMIZE;
+    else if (strcmp(screen_name, "customize2") == 0) {
+        screen = DEMO_CUSTOMIZE;
+        app.selection = 11;
+    }
+    else if (strcmp(screen_name, "miner") == 0) screen = DEMO_MINER;
+    else if (strcmp(screen_name, "input") == 0) screen = DEMO_INPUT_OPTIONS;
+    else if (strcmp(screen_name, "input2") == 0) {
+        screen = DEMO_INPUT_OPTIONS;
+        app.selection = 8;
+    }
+    else if (strcmp(screen_name, "bubble") == 0) screen = DEMO_PLAY;
+    if (screen < 0) {
+        fprintf(stderr, "unknown screen: %s\n", screen_name);
+        return 2;
+    }
+    /* Some plausible history, so the readers have something to show. */
+    if (screen == DEMO_INBOX || screen == DEMO_LOG ||
+        screen == DEMO_TITLE) {
+        vox_u16 pair;
+        digs_chronicle_reset(&demo_chronicle);
+        for (pair = 0U; pair < VOX_DIGS_MAX_PAIRS; ++pair) {
+            demo_chronicle.memory.regard[pair].matches_met = 5U;
+        }
+        pair = vox_digs_regard_index(VOX_DIGS_IDENTITY_PLAYER,
+                                     VOX_DIGS_IDENTITY_FLAMEY);
+        demo_chronicle.memory.regard[pair].tone = (vox_u16)VOX_DIGS_TONE_FEUD;
+        demo_chronicle.memory.regard[pair].betrayals = 2U;
+        pair = vox_digs_regard_index(VOX_DIGS_IDENTITY_PLAYER,
+                                     VOX_DIGS_IDENTITY_RIVET);
+        demo_chronicle.memory.regard[pair].tone =
+            (vox_u16)VOX_DIGS_TONE_BONDED;
+        digs_chronicle_open(&demo_chronicle, 1700000000UL);
+        digs_chronicle_open(&demo_chronicle, 1700200000UL);
+        for (pair = 0U; pair < 40U; ++pair) {
+            digs_line_pool pool = digs_lines_pool(
+                (vox_u16)(pair % DIGS_VOICE_COUNT),
+                (vox_u16)VOX_DIGS_TONE_NEUTRAL,
+                (vox_u16)(VOX_DIGS_STIMULUS_KILLED_THEM + (pair % 3U)));
+            digs_chronicle_log(&demo_chronicle,
+                               (vox_u16)(pair % VOX_DIGS_IDENTITY_COUNT),
+                               (vox_u16)((pair + 1U) %
+                                         VOX_DIGS_IDENTITY_COUNT),
+                               (vox_u16)(pool.first + (pair % pool.count)));
+        }
+        demo_chronicle_ready = 1;
+    }
+    if (screen == DEMO_PLAY) {
+        /*
+         * A real match with the longest lines in the corpus in the boxes, so
+         * the bubble geometry can be looked at rather than reasoned about.
+         */
+        vox_u16 slot;
+        if (!demo_start_match(&app, 0)) {
+            fprintf(stderr, "could not start a match for the shot\n");
+            return 3;
+        }
+        for (slot = 0U; slot < demo_match.rules.player_count; ++slot) {
+            demo_match.spawn_shield_ticks[slot] = 0U;
+        }
+        /*
+         * One bubble, because that is all the game ever shows -- the speech
+         * floor lets one miner hold the room and demo_speak_line clears the
+         * rest.  Forcing three here would be testing a layout that cannot
+         * happen.
+         */
+        strcpy(app.bubbles[1].text,
+               "ONE OF THESE TIMES I'M THE ONE STANDING.");
+        app.bubbles[1].ttl = DEMO_BUBBLE_TICKS_MAX;
+    }
+    app.screen = (demo_screen)screen;
+    demo_prepare_targets();
+    demo_build_title_world();
+    demo_render(&app);
+    /* The window reports the scroll it wants at the end of a frame, so a
+     * still needs a second pass to show where the selection actually is. */
+    demo_render(&app);
+    if (!demo_write_ppm(path)) {
+        fprintf(stderr, "could not write %s\n", path);
+        return 1;
+    }
+    printf("DIGS screenshot %s -> %s\n", screen_name, path);
+    return 0;
+}
+
+/*
+ * Every menu screen must draw something.  A screen that throws, or that
+ * renders a flat panel because a helper returned early, looks exactly like a
+ * screen that is fine until somebody opens it.
+ */
+static int demo_menu_self_test(void)
+{
+    static const char *screens[12] = {
+        "title", "setup", "options", "options2", "inbox", "inbox-read",
+        "log", "controls", "customize", "miner", "input", "input2"
+    };
+    /*
+     * Which screens are made of selectable rows.  The message reader and the
+     * log are prose and a scroll view -- they have nothing to click, and
+     * demanding rows of them would only teach the test to lie.
+     */
+    static const int rows_expected[12] = {
+        1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1
+    };
+    const char *path = "/tmp/digs-menu-self-test.ppm";
+    int i;
+    for (i = 0; i < 12; ++i) {
+        vox_u32 x;
+        vox_u32 distinct = 0U;
+        vox_u8 seen[8];
+        int result = demo_screenshot(screens[i], path);
+        if (result != 0) {
+            fprintf(stderr, "menu self-test: %s did not render\n",
+                    screens[i]);
+            return 1;
+        }
+        for (x = 0U; x < 8U; ++x) {
+            seen[x] = 0U;
+        }
+        /* A screen with fewer than three distinct colours drew nothing. */
+        for (x = 0U; x < sizeof(demo_pixels); x += 3U) {
+            vox_u8 bucket = (vox_u8)(demo_pixels[x] >> 5);
+            if (bucket < 8U && !seen[bucket]) {
+                seen[bucket] = 1U;
+                distinct++;
+            }
+        }
+        if (distinct < 3U) {
+            fprintf(stderr, "menu self-test: %s looks blank (%lu tones)\n",
+                    screens[i], (unsigned long)distinct);
+            return 2;
+        }
+        /*
+         * Every row a screen draws must be reachable with a pointer, and the
+         * row under the pointer must be the row the keyboard would select.
+         * A registry that drifts from the drawing is worse than no mouse at
+         * all -- it clicks the wrong thing confidently.
+         */
+        if (rows_expected[i] && demo_menu_row_count == 0) {
+            fprintf(stderr, "menu self-test: %s registered no rows\n",
+                    screens[i]);
+            return 3;
+        }
+        for (x = 0U; x < (vox_u32)demo_menu_row_count; ++x) {
+            const demo_menu_row *row = &demo_menu_rows[x];
+            const demo_menu_row *hit =
+                demo_row_at(row->x + row->width / 2,
+                            row->y + row->height / 2);
+            if (hit == 0 || hit->index != row->index) {
+                fprintf(stderr,
+                        "menu self-test: %s row %lu is not hit-testable\n",
+                        screens[i], (unsigned long)x);
+                return 4;
+            }
+            if (row->x < 0 || row->y < 0 ||
+                row->x + row->width > (int)DEMO_WIDTH ||
+                row->y + row->height > (int)DEMO_HEIGHT) {
+                fprintf(stderr, "menu self-test: %s row %lu is off screen\n",
+                        screens[i], (unsigned long)x);
+                return 5;
+            }
+        }
+    }
+    (void)remove(path);
+    printf("DIGS menu self-test passed screens=12\n");
+    return 0;
 }
 
 int main(int argc, char **argv)
@@ -8186,11 +10496,93 @@ int main(int argc, char **argv)
                            "/tmp/digs-settings-self-test.cfg";
         return demo_settings_self_test(path);
     }
+    if (argc >= 2 && strcmp(argv[1], "--dropship-start-self-test") == 0) {
+        return demo_dropship_start_self_test();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--chronicle-self-test") == 0) {
+        const char *path = argc >= 3 ? argv[2] :
+                           "/tmp/digs-chronicle-self-test.dat";
+        return digs_chronicle_self_test(path);
+    }
+    if (argc >= 4 && strcmp(argv[1], "--session-self-test") == 0) {
+        return demo_session_self_test(argv[2], argv[3]);
+    }
+#ifdef DIGS_CHRONICLE_DEBUG
+    /*
+     * Debug builds only.  A released game has no way to erase this history:
+     * it is meant to be the player's and unrepeatable, and a reset button
+     * would quietly turn it into a save file.
+     */
+    if (argc >= 2 && strcmp(argv[1], "--chronicle-reset") == 0) {
+        char path[1032];
+        if (!demo_chronicle_path(path, (int)sizeof(path))) return 1;
+        digs_chronicle_reset(&demo_chronicle);
+        return digs_chronicle_save(&demo_chronicle, path) ? 0 : 1;
+    }
+    if (argc >= 2 && strcmp(argv[1], "--chronicle-dump") == 0) {
+        char path[1032];
+        vox_u16 i;
+        if (!demo_chronicle_path(path, (int)sizeof(path))) return 1;
+        (void)digs_chronicle_load(&demo_chronicle, path);
+        printf("chronicle %s tampered=%u matches=%u unread=%u log=%u\n",
+               path, (unsigned int)demo_chronicle.tampered,
+               (unsigned int)demo_chronicle.matches_recorded,
+               (unsigned int)digs_chronicle_unread(&demo_chronicle),
+               (unsigned int)demo_chronicle.log_count);
+        for (i = 0U; i < VOX_DIGS_IDENTITY_COUNT; ++i) {
+            const vox_digs_identity_record *r =
+                &demo_chronicle.memory.identities[i];
+            printf("  identity %u  aggr=%3u pat=%3u caut=%3u grudge=%3u "
+                   "soc=%3u  played=%u w=%u k=%u d=%u\n",
+                   (unsigned int)i, (unsigned int)r->traits.aggression,
+                   (unsigned int)r->traits.patience,
+                   (unsigned int)r->traits.caution,
+                   (unsigned int)r->traits.grudge,
+                   (unsigned int)r->traits.sociability,
+                   (unsigned int)r->matches_played, (unsigned int)r->wins,
+                   (unsigned int)r->kills, (unsigned int)r->deaths);
+        }
+        for (i = 0U; i < VOX_DIGS_MAX_PAIRS; ++i) {
+            const vox_digs_regard *g = &demo_chronicle.memory.regard[i];
+            printf("  regard %u  tone=%-8s valence=%5d met=%u truces=%u "
+                   "betrayals=%u\n", (unsigned int)i,
+                   vox_digs_tone_name(g->tone), (int)g->valence,
+                   (unsigned int)g->matches_met, (unsigned int)g->truces,
+                   (unsigned int)g->betrayals);
+        }
+        return 0;
+    }
+#endif
     if (argc >= 2 && strcmp(argv[1], "--camera-self-test") == 0) {
         return demo_camera_self_test();
     }
+    if (argc >= 2 && strcmp(argv[1], "--replay-self-test") == 0) {
+        return demo_replay_presentation_self_test();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--rigid-overlay-self-test") == 0) {
+        return demo_rigid_overlay_self_test();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--particle-overlay-self-test") == 0) {
+        return demo_particle_overlay_self_test();
+    }
     if (argc >= 2 && strcmp(argv[1], "--fixed-step-self-test") == 0) {
         return demo_fixed_step_self_test();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--menu-self-test") == 0) {
+        demo_prepare_targets();
+        return demo_menu_self_test();
+    }
+    if (argc >= 4 && strcmp(argv[1], "--shot") == 0) {
+        demo_prepare_targets();
+        return demo_screenshot(argv[2], argv[3]);
+    }
+    if (argc >= 4 && strcmp(argv[1], "--capture") == 0) {
+        vox_u32 frames = argc >= 5 ? (vox_u32)strtoul(argv[4], 0, 10) : 24U;
+        vox_u32 interval = argc >= 6 ? (vox_u32)strtoul(argv[5], 0, 10) : 6U;
+        if (frames == 0U || frames > 600U) frames = 24U;
+        if (interval == 0U || interval > 600U) interval = 6U;
+        demo_prepare_targets();
+        return demo_capture(argv[2], argv[3], frames, interval);
     }
     if (argc >= 2 && strcmp(argv[1], "--smoke-test") == 0) {
         const char *path = argc >= 3 ? argv[2] : "/tmp/digs-demo-smoke.ppm";
@@ -8231,14 +10623,41 @@ int main(int argc, char **argv)
         }
         return demo_performance_self_test(ticks, qualify_named_bench);
     }
+    /*
+     * The licence notice used to sit on the title screen.  The menu is meant
+     * to be minimal now, but GPL-3.0 requires the notice be conveyed, so it
+     * moves rather than vanishes: here on every start, and in START-HERE.txt
+     * beside the binary.
+     */
+    printf("DIGS -- Copyright (C) Pinnacle Point Development\n");
+    printf("Free software under GPL-3.0-or-later, with ABSOLUTELY NO "
+           "WARRANTY.\n");
+    printf("See LICENSE and START-HERE.txt for the terms and the source.\n");
     memset(&app, 0, sizeof(app));
+    /*
+     * Open the chronicle before anything else touches it.  This is where the
+     * launch is counted, how long the player has been away is worked out,
+     * and each miner decides whether to have left a message about it.
+     *
+     * This is the one place a wall clock is read.  The values it produces
+     * travel in the memory snapshot but are excluded from memory_hash, so
+     * they never reach the match hash and cannot make two identical matches
+     * look like a desync -- which they did until it was measured.
+     */
+    {
+        char chronicle_path[1032];
+        if (demo_chronicle_path(chronicle_path, (int)sizeof(chronicle_path))) {
+            (void)digs_chronicle_load(&demo_chronicle, chronicle_path);
+            digs_chronicle_open(&demo_chronicle, (vox_u32)time(0));
+            (void)digs_chronicle_save(&demo_chronicle, chronicle_path);
+            demo_chronicle_ready = 1;
+        }
+    }
     app.running = 1;
     app.settings_writable = 1;
     app.screen = DEMO_TITLE;
     app.bots = 1;
     app.local_players = 1;
-    app.game_mode = VOX_DIGS_MODE_FFA;
-    app.friendly_fire = 0;
     app.map_style = VOX_DIGS_MAP_COAL_RIDGE;
     app.arsenal = DEMO_ARSENAL_FULL;
     app.seed = 0x564F5831U;
@@ -8276,7 +10695,7 @@ int main(int argc, char **argv)
     demo_load_controller_mappings();
     (void)SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
     (void)SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
-    app.window = SDL_CreateWindow("DIGS v0.0.3 Demo",
+    app.window = SDL_CreateWindow(VOX_VERSION_TITLE " Demo",
                                   SDL_WINDOWPOS_CENTERED,
                                   SDL_WINDOWPOS_CENTERED,
                                   DEMO_WINDOW_WIDTH, DEMO_WINDOW_HEIGHT,
@@ -8330,13 +10749,9 @@ int main(int argc, char **argv)
             (void)demo_open_controller(&app, controller_index);
         }
     }
-    if (!demo_scripts_open(&app)) {
-        app.screen = DEMO_SCRIPT_ERROR;
-    }
     frequency = SDL_GetPerformanceFrequency();
     if (frequency == 0U) {
         fprintf(stderr, "performance timer unavailable: %s\n", SDL_GetError());
-        demo_scripts_close(&app);
         demo_close_controllers(&app);
         demo_audio_close(&app);
         SDL_DestroyTexture(app.texture);
@@ -8408,7 +10823,6 @@ int main(int argc, char **argv)
     }
     (void)demo_save_input_settings(&app);
     (void)SDL_ShowCursor(SDL_ENABLE);
-    demo_scripts_close(&app);
     demo_close_controllers(&app);
     demo_audio_close(&app);
     SDL_DestroyTexture(app.texture);

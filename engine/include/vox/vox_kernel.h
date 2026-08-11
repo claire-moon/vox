@@ -105,6 +105,27 @@ typedef enum vox_world_collision_class {
 #define VOX_CHUNK_DIRTY 2U
 #define VOX_BLAST_MAX_RADIUS 16U
 
+/*
+ * Horizontal reach, in cells, over which intact ground holds up a ceiling.
+ *
+ * Without this, structural support is cohesionless: only the cell directly
+ * below and its two diagonals count, so any span wider than about two cells
+ * loses its middle the moment it is undermined, and ordinary tunnelling
+ * destroys its own tunnel.  With it, spans up to roughly
+ * 2 * VOX_STRUCTURE_COHESION_CELLS + 1 stay standing and wider excavations
+ * cave in.  This is the tuning knob for how brave a miner can be with a drill.
+ */
+#define VOX_STRUCTURE_COHESION_CELLS 4U
+
+/*
+ * Smoke lives for a bounded number of ticks and then clears, and cools toward
+ * ambient while it does.  Without a lifetime it rose to the nearest ceiling
+ * and accumulated there permanently.  Three hundred ticks is five seconds at
+ * 60 Hz -- long enough for a smoke pot to still hide a miner.
+ */
+#define VOX_SMOKE_LIFETIME_Q16 (300L << 16)
+#define VOX_SMOKE_COOLING_SHIFT 6U
+
 typedef struct vox_cell {
     vox_u16 material;
     vox_u16 flags;
@@ -146,9 +167,21 @@ extern "C" {
 #endif
 
 void vox_world_init(vox_world *world);
+/* Rebuild occupied/chunk hash indexes after deterministic bulk population. */
+vox_result vox_world_rebuild(vox_world *world);
 const vox_material_properties *vox_material_get(vox_u16 material);
 vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
                          vox_u16 material, vox_i32 temperature_q16);
+/* Set one complete x/z layer, retaining a material such as bedrock. */
+vox_result vox_world_set_layer_except(vox_world *world, vox_u32 y,
+                                      vox_u16 material,
+                                      vox_i32 temperature_q16,
+                                      vox_u16 skip_material);
+/* Bulk layer fill for persistent hazards; does not wake sleeping cells. */
+vox_result vox_world_set_layer_quiet_except(vox_world *world, vox_u32 y,
+                                            vox_u16 material,
+                                            vox_i32 temperature_q16,
+                                            vox_u16 skip_material);
 /* Setting loose is idempotent; AIR may only be cleared, never made loose. */
 vox_result vox_world_set_loose(vox_world *world, vox_u32 x, vox_u32 y,
                                vox_u32 z, vox_u16 loose);

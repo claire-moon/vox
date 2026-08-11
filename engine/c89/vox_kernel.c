@@ -344,29 +344,121 @@ static int vox_is_structural_material(vox_u16 material)
            material == VOX_MAT_METAL;
 }
 
+/*
+ * Wake everything whose footing depends on (x, y, z).
+ *
+ * vox_cell_has_support reads the row below across VOX_STRUCTURE_COHESION_CELLS
+ * either side, so removing one cell can unfoot anything in that whole span
+ * above it -- not just the cell directly overhead.  Waking only the one
+ * directly above left a collapse stalling one column wide: the fleck under a
+ * roof fell, the roof cell above it woke, but its neighbours four cells away
+ * had also just lost their footing and stayed asleep, so the cave-in never
+ * spread sideways.
+ *
+ * Bounded at 2N+1 cells and only ever called when a cell is actually removed,
+ * so the cost tracks demolition rather than world size.
+ */
+static void vox_wake_support_dependents(vox_world *world, vox_u32 x,
+                                        vox_u32 y, vox_u32 z)
+{
+    vox_u32 span;
+    if (y == 0U) {
+        return;
+    }
+    for (span = 0U; span <= 2U * VOX_STRUCTURE_COHESION_CELLS; ++span) {
+        vox_u32 index;
+        vox_cell *above;
+        long offset = (long)span - (long)VOX_STRUCTURE_COHESION_CELLS;
+        long neighbor = (long)x + offset;
+        if (neighbor < 0L || neighbor >= (long)VOX_WORLD_WIDTH) {
+            continue;
+        }
+        index = vox_index((vox_u32)neighbor, y - 1U, z);
+        above = &world->cells[index];
+        if (!vox_is_structural_material(above->material)) {
+            continue;
+        }
+        vox_wake_cell(world,
+                      &world->chunks[vox_chunk_index((vox_u32)neighbor,
+                                                     y - 1U)],
+                      index, above);
+    }
+}
+
+/*
+ * Can this cell hold anything up?
+ *
+ * VOX_CELL_UNSTABLE means the cell has already been found to have nothing
+ * under it, so it must not be offered as footing to its neighbours.  Without
+ * that clause support is not transitive: a blast leaves a speckled fracture
+ * shell, each surviving fleck is "supported" by another fleck beside it, and
+ * the whole roof hangs in mid-air holding itself up by mutual reference to
+ * debris that is itself falling.  That is why an explosion could hollow out a
+ * chamber and leave a flat ceiling over it.
+ *
+ * Excluding unstable cells makes collapse propagate instead: the lowest
+ * unsupported layer is flagged on one tick, the layer above loses its footing
+ * on the next, and the cave-in walks upward until it reaches ground that is
+ * genuinely anchored.  It costs nothing per cell and needs no connectivity
+ * search.
+ */
+static int vox_cell_bears_load(const vox_cell *cell)
+{
+    return cell->material != VOX_MAT_AIR &&
+           !(cell->flags & (VOX_CELL_PHASE_GAS | VOX_CELL_LOOSE |
+                            VOX_CELL_UNSTABLE));
+}
+
+/*
+ * Does anything hold this cell up?
+ *
+ * The direct test is the cell below and its two diagonals.  On its own that
+ * models cohesionless sand: with collapse working, every span wider than
+ * about two cells loses its middle, so a drill or hot rail would destroy the
+ * very tunnels they exist to dig.
+ *
+ * Real ground has cohesion, so a ceiling also counts as held when load-bearing
+ * material sits within VOX_STRUCTURE_COHESION_CELLS horizontally on the row
+ * below -- a nearby wall, pillar, or debris pile it can span across to.
+ * Tunnels up to about 2 * VOX_STRUCTURE_COHESION_CELLS + 1 wide stay open;
+ * wider excavations and deliberately undermined slabs come down.
+ *
+ * The cell's own row is deliberately NOT consulted.  A ceiling is a
+ * continuous layer, so letting it lean on its own neighbours would be
+ * circular -- every cell would be held up by the cell beside it and no span,
+ * however undermined, would ever fall.
+ *
+ * The scan is bounded by that constant and only ever runs for awake
+ * structural cells already in the active frontier, so cost tracks activity
+ * rather than world size.
+ */
 static int vox_cell_has_support(const vox_world *world, vox_u32 x,
                                 vox_u32 y, vox_u32 z)
 {
-    const vox_cell *below;
+    vox_u32 reach;
     if (y + 1U >= VOX_WORLD_HEIGHT) {
         return 1;
     }
-    below = &world->cells[vox_index(x, y + 1U, z)];
-    if (below->material != VOX_MAT_AIR &&
-        !(below->flags & (VOX_CELL_PHASE_GAS | VOX_CELL_LOOSE))) {
+    if (vox_cell_bears_load(&world->cells[vox_index(x, y + 1U, z)])) {
         return 1;
     }
-    if (x > 0U) {
-        below = &world->cells[vox_index(x - 1U, y + 1U, z)];
-        if (below->material != VOX_MAT_AIR &&
-            !(below->flags & (VOX_CELL_PHASE_GAS | VOX_CELL_LOOSE))) {
+    if (x > 0U &&
+        vox_cell_bears_load(&world->cells[vox_index(x - 1U, y + 1U, z)])) {
+        return 1;
+    }
+    if (x + 1U < VOX_WORLD_WIDTH &&
+        vox_cell_bears_load(&world->cells[vox_index(x + 1U, y + 1U, z)])) {
+        return 1;
+    }
+    for (reach = 2U; reach <= VOX_STRUCTURE_COHESION_CELLS; ++reach) {
+        if (x >= reach &&
+            vox_cell_bears_load(
+                &world->cells[vox_index(x - reach, y + 1U, z)])) {
             return 1;
         }
-    }
-    if (x + 1U < VOX_WORLD_WIDTH) {
-        below = &world->cells[vox_index(x + 1U, y + 1U, z)];
-        if (below->material != VOX_MAT_AIR &&
-            !(below->flags & (VOX_CELL_PHASE_GAS | VOX_CELL_LOOSE))) {
+        if (x + reach < VOX_WORLD_WIDTH &&
+            vox_cell_bears_load(
+                &world->cells[vox_index(x + reach, y + 1U, z)])) {
             return 1;
         }
     }
@@ -496,6 +588,8 @@ static int vox_try_move(vox_world *world, vox_u32 source_x, vox_u32 source_y,
             vox_wake_cell(world, above_chunk,
                           vox_index(source_x, source_y - 1U, source_z), above);
         }
+        /* Footing reaches sideways, so a cave-in has to spread that way too. */
+        vox_wake_support_dependents(world, source_x, source_y, source_z);
     }
     return 1;
 }
@@ -631,7 +725,42 @@ static void vox_step_materials(vox_world *world,
                         if (!(cell->flags & VOX_CELL_AWAKE)) {
                             continue;
                         }
-                        if (cell->flags & VOX_CELL_MOVED) {
+                        if (cell->material == VOX_MAT_SMOKE) {
+                            /*
+                             * Smoke thins out and goes away.
+                             *
+                             * It had no lifetime at all: gases rise, so every
+                             * puff an explosion made climbed to the nearest
+                             * ceiling and stayed there forever, building a
+                             * grey slab that could not be walked on but could
+                             * be blown up.
+                             *
+                             * Age is counted in damage_q16, which is unused
+                             * for gases and already hashed, so this needs no
+                             * new per-cell state.  Temperature is not the
+                             * clock -- smoke can legitimately be created at
+                             * ambient, and using warmth alone would delete
+                             * those puffs the instant they appeared.
+                             */
+                            vox_toggle_cell_signature(chunk,
+                                vox_index(x, y, depth), cell);
+                            cell->flags = (vox_u16)(cell->flags &
+                                                    (vox_u16)~VOX_CELL_MOVED);
+                            cell->damage_q16 += 1L << 16;
+                            if (cell->temperature_q16 > VOX_AMBIENT_Q16) {
+                                cell->temperature_q16 -=
+                                    (cell->temperature_q16 -
+                                     VOX_AMBIENT_Q16) >>
+                                    VOX_SMOKE_COOLING_SHIFT;
+                            }
+                            vox_toggle_cell_signature(chunk,
+                                vox_index(x, y, depth), cell);
+                            if (cell->damage_q16 >= VOX_SMOKE_LIFETIME_Q16) {
+                                vox_clear_cell(world, chunk,
+                                               vox_index(x, y, depth), cell);
+                            }
+                            vox_mark_dirty(chunk);
+                        } else if (cell->flags & VOX_CELL_MOVED) {
                             vox_toggle_cell_signature(chunk, vox_index(x, y, depth),
                                                       cell);
                             cell->flags = (vox_u16)(cell->flags &
@@ -656,6 +785,28 @@ static void vox_step_materials(vox_world *world,
                             vox_toggle_cell_signature(chunk, vox_index(x, y, depth),
                                                       cell);
                             vox_mark_dirty(chunk);
+                        } else if (vox_is_structural_material(cell->material) &&
+                                   !vox_cell_has_support(world, x, y, depth)) {
+                            /*
+                             * An unsupported cell is not settled, so it must
+                             * not be slept.
+                             *
+                             * This phase runs after vox_step_falling in the
+                             * same tick.  When a cell falls, vox_try_move
+                             * wakes the cell above the slot it vacated -- but
+                             * that cell has not moved yet, so this branch used
+                             * to put it straight back to sleep, before
+                             * vox_step_structures ever got the chance to mark
+                             * it UNSTABLE on the following tick.  A collapse
+                             * therefore advanced exactly one row and stopped,
+                             * which is why undermined terrain hung in mid-air.
+                             *
+                             * Keeping it awake is self-limiting: debris fills
+                             * the void until the pile supports what is left
+                             * above it, and then the normal sleep path below
+                             * retires the whole region.
+                             */
+                            (void)0;
                         } else {
                             vox_sleep_cell(world, chunk, vox_index(x, y, depth),
                                            cell);
@@ -691,6 +842,42 @@ void vox_world_init(vox_world *world)
     }
 }
 
+vox_result vox_world_rebuild(vox_world *world)
+{
+    vox_u32 i;
+    if (world == 0 || world->abi_version != VOX_ABI_VERSION ||
+        world->struct_size < (vox_u32)sizeof(*world)) {
+        return VOX_ERR_INVALID;
+    }
+    world->occupied_cells = 0U;
+    world->awake_cells = 0U;
+    for (i = 0U; i < VOX_WORLD_CHUNK_COUNT; ++i) {
+        world->chunks[i].occupied_cells = 0U;
+        world->chunks[i].awake_cells = 0U;
+        world->chunks[i].cell_hash = 0U;
+        world->chunks[i].flags = 0U;
+    }
+    for (i = 0U; i < VOX_WORLD_CELLS; ++i) {
+        vox_u32 x = i % VOX_WORLD_WIDTH;
+        vox_u32 y = (i / VOX_WORLD_WIDTH) % VOX_WORLD_HEIGHT;
+        vox_chunk *chunk = &world->chunks[vox_chunk_index(x, y)];
+        vox_cell *cell = &world->cells[i];
+        int occupied;
+        cell->flags = (vox_u16)(cell->flags &
+            (vox_u16)~(VOX_CELL_OCCUPIED | VOX_CELL_AWAKE |
+                       VOX_CELL_MOVED | VOX_CELL_LOOSE |
+                       VOX_CELL_UNSTABLE | VOX_CELL_PHASE_GAS));
+        occupied = cell->material != VOX_MAT_AIR;
+        if (occupied) {
+            cell->flags = (vox_u16)(cell->flags | VOX_CELL_OCCUPIED);
+            world->occupied_cells++;
+            chunk->occupied_cells++;
+        }
+        chunk->cell_hash ^= vox_cell_signature(i, cell);
+    }
+    return VOX_OK;
+}
+
 const vox_material_properties *vox_material_get(vox_u16 material)
 {
     if (material >= VOX_MAT_COUNT) {
@@ -698,6 +885,13 @@ const vox_material_properties *vox_material_get(vox_u16 material)
     }
     return &vox_materials[material];
 }
+
+/*
+ * Wake the cells whose support depends on (x, y, z): the one directly above
+ * and its two upper diagonals, mirroring vox_cell_has_support.  Only
+ * structural materials can be left hanging, so the rest are skipped to keep
+ * the frontier small.
+ */
 
 vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
                          vox_u16 material, vox_i32 temperature_q16)
@@ -714,6 +908,21 @@ vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
     chunk = &world->chunks[vox_chunk_index(x, y)];
     if (material == VOX_MAT_AIR) {
         vox_clear_cell(world, chunk, vox_index(x, y, z), cell);
+        /*
+         * Removing a cell is the only thing that can rob its neighbours of
+         * support, and vox_cell_has_support looks exactly one row down at
+         * (x, y+1) and the two diagonals.  So the cells whose footing just
+         * vanished are the three directly above.
+         *
+         * Waking them is what makes tunnelling collapse anything.  Without
+         * it a dug-out cell simply went to sleep and told nobody, the
+         * structural pass only ever visits awake cells, and a slab with
+         * every one of its pillars mined out floated indefinitely with the
+         * world reporting zero awake cells.  Each falling cell wakes the
+         * next as it moves, so seeding these three is enough to carry a
+         * cave-in upward through the whole overburden.
+         */
+        vox_wake_support_dependents(world, x, y, z);
         return VOX_OK;
     }
     vox_toggle_cell_signature(chunk, vox_index(x, y, z), cell);
@@ -728,6 +937,87 @@ vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
     vox_wake_cell(world, chunk, vox_index(x, y, z), cell);
     vox_mark_dirty(chunk);
     return VOX_OK;
+}
+
+static vox_result vox_world_set_layer_except_internal(
+    vox_world *world, vox_u32 y, vox_u16 material, vox_i32 temperature_q16,
+    vox_u16 skip_material, int wake)
+{
+    vox_u32 x;
+    vox_u32 z;
+    if (world == 0 || world->abi_version != VOX_ABI_VERSION ||
+        world->struct_size < (vox_u32)sizeof(*world) ||
+        y >= VOX_WORLD_HEIGHT || material >= VOX_MAT_COUNT ||
+        skip_material >= VOX_MAT_COUNT) {
+        return VOX_ERR_INVALID;
+    }
+    for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
+        for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+            vox_u32 cell_index;
+            vox_cell *cell;
+            vox_chunk *chunk;
+            vox_u32 old_signature;
+            vox_u32 new_signature;
+            int was_occupied;
+            int was_awake;
+            int occupied;
+            cell_index = vox_index(x, y, z);
+            cell = &world->cells[cell_index];
+            if (cell->material == skip_material) continue;
+            chunk = &world->chunks[vox_chunk_index(x, y)];
+            old_signature = vox_cell_signature(cell_index, cell);
+            was_occupied = (cell->flags & VOX_CELL_OCCUPIED) != 0U;
+            was_awake = (cell->flags & VOX_CELL_AWAKE) != 0U;
+            cell->material = material;
+            cell->flags = (vox_u16)(cell->flags &
+                (vox_u16)~(VOX_CELL_OCCUPIED | VOX_CELL_PHASE_GAS |
+                           VOX_CELL_MOVED | VOX_CELL_LOOSE |
+                           VOX_CELL_UNSTABLE));
+            cell->temperature_q16 = temperature_q16;
+            occupied = material != VOX_MAT_AIR;
+            if (occupied) {
+                cell->flags = (vox_u16)(cell->flags | VOX_CELL_OCCUPIED);
+            }
+            if (!was_occupied && occupied) {
+                world->occupied_cells++;
+                chunk->occupied_cells++;
+            } else if (was_occupied && !occupied) {
+                world->occupied_cells--;
+                chunk->occupied_cells--;
+            }
+            if (wake && !was_awake) {
+                cell->flags = (vox_u16)(cell->flags | VOX_CELL_AWAKE);
+                world->awake_cells++;
+                chunk->awake_cells++;
+                chunk->flags = (vox_u16)(chunk->flags |
+                                         VOX_CHUNK_ACTIVE);
+            }
+            new_signature = vox_cell_signature(cell_index, cell);
+            chunk->cell_hash ^= old_signature ^ new_signature;
+            vox_mark_dirty(chunk);
+        }
+    }
+    return VOX_OK;
+}
+
+vox_result vox_world_set_layer_except(vox_world *world, vox_u32 y,
+                                      vox_u16 material,
+                                      vox_i32 temperature_q16,
+                                      vox_u16 skip_material)
+{
+    return vox_world_set_layer_except_internal(world, y, material,
+                                               temperature_q16,
+                                               skip_material, 1);
+}
+
+vox_result vox_world_set_layer_quiet_except(vox_world *world, vox_u32 y,
+                                            vox_u16 material,
+                                            vox_i32 temperature_q16,
+                                            vox_u16 skip_material)
+{
+    return vox_world_set_layer_except_internal(world, y, material,
+                                               temperature_q16,
+                                               skip_material, 0);
 }
 
 vox_result vox_world_set_loose(vox_world *world, vox_u32 x, vox_u32 y,
@@ -780,25 +1070,52 @@ vox_result vox_world_wake(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z)
 
 vox_result vox_world_sleep_all(vox_world *world)
 {
-    vox_u32 i;
+    vox_u32 chunk_y;
+    vox_u32 chunk_x;
+    vox_u32 depth;
+    vox_u32 local_y;
+    vox_u32 local_x;
     if (world == 0) {
         return VOX_ERR_INVALID;
     }
-    for (i = 0U; i < VOX_WORLD_CELLS; ++i) {
-        vox_u32 x = i % VOX_WORLD_WIDTH;
-        vox_u32 y = (i / VOX_WORLD_WIDTH) % VOX_WORLD_HEIGHT;
-        vox_chunk *chunk = &world->chunks[vox_chunk_index(x, y)];
-        vox_toggle_cell_signature(chunk, i, &world->cells[i]);
-        world->cells[i].flags = (vox_u16)(world->cells[i].flags &
-                                          (vox_u16)~(VOX_CELL_AWAKE |
-                                                    VOX_CELL_MOVED));
-        vox_toggle_cell_signature(chunk, i, &world->cells[i]);
+    for (chunk_y = 0U; chunk_y < VOX_WORLD_CHUNKS_Y; ++chunk_y) {
+        for (chunk_x = 0U; chunk_x < VOX_WORLD_CHUNKS_X; ++chunk_x) {
+            vox_u32 chunk_index = chunk_y * VOX_WORLD_CHUNKS_X + chunk_x;
+            vox_chunk *chunk = &world->chunks[chunk_index];
+            if ((chunk->flags & VOX_CHUNK_ACTIVE) == 0U) continue;
+            for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+                for (local_y = 0U; local_y < VOX_CHUNK_HEIGHT; ++local_y) {
+                    for (local_x = 0U; local_x < VOX_CHUNK_WIDTH;
+                         ++local_x) {
+                        vox_u32 x = chunk_x * VOX_CHUNK_WIDTH + local_x;
+                        vox_u32 y = chunk_y * VOX_CHUNK_HEIGHT + local_y;
+                        vox_u32 index = (depth * VOX_WORLD_HEIGHT *
+                                         VOX_WORLD_WIDTH) +
+                                        (y * VOX_WORLD_WIDTH) + x;
+                        vox_cell *cell = &world->cells[index];
+                        if ((cell->flags & (VOX_CELL_AWAKE |
+                                            VOX_CELL_MOVED)) == 0U) {
+                            continue;
+                        }
+                        vox_toggle_cell_signature(chunk, index, cell);
+                        cell->flags = (vox_u16)(cell->flags &
+                                                (vox_u16)~(VOX_CELL_AWAKE |
+                                                          VOX_CELL_MOVED));
+                        vox_toggle_cell_signature(chunk, index, cell);
+                    }
+                }
+            }
+        }
     }
     world->awake_cells = 0U;
-    for (i = 0U; i < VOX_WORLD_CHUNK_COUNT; ++i) {
-        world->chunks[i].awake_cells = 0U;
-        world->chunks[i].flags = (vox_u16)(world->chunks[i].flags &
-                                           (vox_u16)~VOX_CHUNK_ACTIVE);
+    for (chunk_y = 0U; chunk_y < VOX_WORLD_CHUNKS_Y; ++chunk_y) {
+        for (chunk_x = 0U; chunk_x < VOX_WORLD_CHUNKS_X; ++chunk_x) {
+            vox_chunk *chunk = &world->chunks[
+                chunk_y * VOX_WORLD_CHUNKS_X + chunk_x];
+            chunk->awake_cells = 0U;
+            chunk->flags = (vox_u16)(chunk->flags &
+                                     (vox_u16)~VOX_CHUNK_ACTIVE);
+        }
     }
     return VOX_OK;
 }
@@ -878,9 +1195,39 @@ vox_result vox_world_blast(vox_world *world, vox_u32 x, vox_u32 y,
                     vox_clear_cell(world, chunk, vox_index((vox_u32)sample_x,
                                                            (vox_u32)sample_y,
                                                            depth), cell);
+                    /*
+                     * Blasting removes support exactly as digging does, so
+                     * it has to tell the cells above for the same reason.
+                     *
+                     * The perimeter wake below only reaches one cell outside
+                     * the crater's bounding box, which never touches the
+                     * ceiling standing over cells cleared in the interior.
+                     * Those cells stayed asleep, vox_step_structures only
+                     * ever visits awake cells, and so an explosion could
+                     * hollow out a chamber forty cells wide and leave its
+                     * roof hanging in mid-air.  Most real digging is blasts,
+                     * so this was the common case, not the corner one.
+                     */
+                    vox_wake_support_dependents(world, (vox_u32)sample_x,
+                                                (vox_u32)sample_y, depth);
                 }
             }
         }
+    }
+    /*
+     * Wake a band above the crater, not just a one-cell perimeter.
+     *
+     * Support reaches VOX_STRUCTURE_COHESION_CELLS sideways, so the roof over
+     * a fresh crater has to be re-examined that far up before the question
+     * "is anything still holding this?" can even be asked.  A one-cell ring
+     * left the ceiling asleep, and vox_step_structures only visits awake
+     * cells, so a blast could hollow out a wide chamber and leave its roof
+     * hanging.  Each cell that does fall wakes the one above it, so this band
+     * only has to start the cascade, not carry it.
+     */
+    {
+        long ceiling_reach = (long)VOX_STRUCTURE_COHESION_CELLS + 2L;
+        min_y = min_y > ceiling_reach ? min_y - ceiling_reach : 0L;
     }
     for (sample_y = min_y > 0L ? min_y - 1L : 0L;
          sample_y <= max_y + 1L && sample_y < (long)VOX_WORLD_HEIGHT;

@@ -17,6 +17,9 @@ int main(void)
     if (vox_digs_match_init(&match, &rules) != VOX_OK) {
         return 2;
     }
+    if (vox_digs_dropship_begin(&match) != VOX_OK) {
+        return 2;
+    }
     memset(&input, 0, sizeof(input));
     input.abi_version = VOX_ABI_VERSION;
     input.struct_size = (vox_u32)sizeof(input);

@@ -1,4 +1,4 @@
-DIGS v0.0.3 DEMO - Linux x86_64
+DIGS v0.0.4 DEMO - Linux x86_64
 ================================
 
 1. Extract the complete archive.
@@ -19,10 +19,6 @@ Useful tester commands
                                   add strict timing only on the named laptop bench
   ./benchmark.sh 240              CPU Lightfield benchmark (three quality tiers)
   ./qa-cockpit.sh                 combine the included workbook and test evidence
-  ./bin/digs_script --validate share/digs/scripts/manifest.txt
-                                  validate the packaged Lua catalog
-  ./bin/digs_script --hash share/digs/scripts/manifest.txt
-                                  print packaged source and catalog hashes
   ./bin/vox_headless              minimal voxel-kernel scenario
   ./bin/digs_headless             deterministic DIGS match scenario
   ./bin/vox_render_demo out.ppm   software-renderer image test
@@ -36,10 +32,10 @@ The cockpit requires the free xleak command-line spreadsheet reader to inspect
 
 Keep bin/, bin/share, share/, and libexec/ in their extracted layout. The
 bin/share link makes executable-relative data resolve under share/digs/. This
-includes the Lua catalog, the pinned controller mapping database, and the
+includes the optional controller mapping database under extras/ and the
 canonical miner icon. CG-README.TXT documents AUTO/keyboard/controller modes,
 Logitech F310 X/D-mode checks, radial aim, two-player ownership, rope use, map
-identity, the Miner's Index, accessibility options, script reload, and the
+identity, accessibility options, and the
 88-point acceptance pass. The short guide is defect-discovery evidence;
 it does not replace the complete pass or promote untested hardware/platforms.
 

@@ -779,6 +779,14 @@ vox_result vox_audio_init_ex(vox_audio_engine *engine,
         return VOX_ERR_INVALID;
     }
     (void)memset(engine, 0, sizeof(*engine));
+    /*
+     * memset leaves the custom voice at zero, and a zero pitch renders
+     * silence.  Seed it from the table entry so an engine nobody has tuned
+     * still speaks.
+     */
+    engine->custom_rate_pct = 100U;
+    engine->custom_pitch_hz = 120U;
+    engine->custom_formant_pct = 100U;
     engine->sample_rate = config->sample_rate;
     engine->seed = config->seed == 0U ? 0x564f5801U : config->seed;
     engine->master_gain_q15 = config->master_gain_q15;
@@ -1282,6 +1290,58 @@ static vox_i32 vox_audio_scale_signed(vox_i32 sample, vox_u16 gain_q15)
     return sample < 0L ? -(vox_i32)scaled : (vox_i32)scaled;
 }
 
+/*
+ * Three scalars are all that separate one miner's voice from another's: how
+ * long each allophone is held, the glottal pitch, and how far the formants
+ * are shifted.  DEEP and HIGH carry exactly the numbers the two-way branch
+ * used before, so nothing that already sounded right has moved.
+ *
+ * RIVET is clipped and low, and says less per breath.  CINDER is slower,
+ * deeper and takes up room.  FLAMEY is fast and high enough to be annoying,
+ * which is the point.
+ */
+typedef struct vox_audio_speech_voice {
+    vox_u16 rate_pct;
+    vox_u16 pitch_hz;
+    vox_u16 formant_pct;
+} vox_audio_speech_voice;
+
+static const vox_audio_speech_voice
+vox_audio_speech_voices[VOX_AUDIO_SPEECH_PROFILE_COUNT] = {
+    {115U,  92U,  90U},   /* DEEP   */
+    { 88U, 210U, 118U},   /* HIGH   */
+    { 94U, 108U,  95U},   /* RIVET  */
+    {126U,  76U,  85U},   /* CINDER */
+    { 76U, 236U, 127U},   /* FLAMEY */
+    {100U, 120U, 100U}    /* CUSTOM -- the default before anyone tunes it */
+};
+
+static vox_u16 vox_audio_clamp_u16(vox_u16 value, vox_u16 low, vox_u16 high)
+{
+    if (value < low) {
+        return low;
+    }
+    if (value > high) {
+        return high;
+    }
+    return value;
+}
+
+vox_result vox_audio_set_voice(vox_audio_engine *engine, vox_u16 rate_pct,
+                               vox_u16 pitch_hz, vox_u16 formant_pct)
+{
+    if (engine == 0) {
+        return VOX_ERR_INVALID;
+    }
+    engine->custom_rate_pct = vox_audio_clamp_u16(rate_pct,
+        VOX_AUDIO_VOICE_RATE_MIN, VOX_AUDIO_VOICE_RATE_MAX);
+    engine->custom_pitch_hz = vox_audio_clamp_u16(pitch_hz,
+        VOX_AUDIO_VOICE_PITCH_MIN, VOX_AUDIO_VOICE_PITCH_MAX);
+    engine->custom_formant_pct = vox_audio_clamp_u16(formant_pct,
+        VOX_AUDIO_VOICE_FORMANT_MIN, VOX_AUDIO_VOICE_FORMANT_MAX);
+    return VOX_OK;
+}
+
 static int vox_audio_prepare_speech_token(vox_audio_engine *engine)
 {
     vox_audio_phrase_slot *phrase;
@@ -1290,6 +1350,8 @@ static int vox_audio_prepare_speech_token(vox_audio_engine *engine)
     vox_u32 pitch_hz;
     vox_u32 formant_scale;
     vox_u32 formant;
+    const vox_audio_speech_voice *speech_voice;
+    vox_audio_speech_voice tuned;
 
     vox_audio_select_phrase(engine);
     while (engine->active_phrase != VOX_AUDIO_NO_PHRASE) {
@@ -1313,20 +1375,26 @@ static int vox_audio_prepare_speech_token(vox_audio_engine *engine)
     phrase = &engine->phrases[engine->active_phrase];
     definition = &vox_audio_allophones[
         phrase->allophones[engine->speech_token_index]];
-    duration = definition->duration_ms;
-    if (phrase->profile == VOX_AUDIO_SPEECH_DEEP) {
-        duration = (duration * 115U) / 100U;
-    } else {
-        duration = (duration * 88U) / 100U;
+    speech_voice = &vox_audio_speech_voices[
+        phrase->profile < VOX_AUDIO_SPEECH_PROFILE_COUNT ?
+        phrase->profile : (vox_u8)VOX_AUDIO_SPEECH_HIGH];
+    if (phrase->profile == VOX_AUDIO_SPEECH_CUSTOM &&
+        engine->custom_pitch_hz != 0U) {
+        /* The one voice whose numbers come from the player, not the table. */
+        tuned.rate_pct = engine->custom_rate_pct;
+        tuned.pitch_hz = engine->custom_pitch_hz;
+        tuned.formant_pct = engine->custom_formant_pct;
+        speech_voice = &tuned;
     }
+    duration = (definition->duration_ms * speech_voice->rate_pct) / 100U;
     if (duration == 0U) {
         duration = 1U;
     }
     engine->speech_token_samples = vox_audio_milliseconds(
         engine->sample_rate, duration);
     engine->speech_token_sample = 0U;
-    pitch_hz = phrase->profile == VOX_AUDIO_SPEECH_DEEP ? 92U : 210U;
-    formant_scale = phrase->profile == VOX_AUDIO_SPEECH_DEEP ? 90U : 118U;
+    pitch_hz = speech_voice->pitch_hz;
+    formant_scale = speech_voice->formant_pct;
     engine->speech_pitch_step = vox_audio_frequency_step(
         engine->sample_rate, pitch_hz);
     for (formant = 0U; formant < 3U; ++formant) {
@@ -1679,6 +1747,9 @@ vox_u32 vox_audio_state_hash(const vox_audio_engine *engine)
     hash = vox_audio_hash_mix(hash, engine->speech_token_sample);
     hash = vox_audio_hash_mix(hash, engine->speech_token_samples);
     hash = vox_audio_hash_mix(hash, engine->speech_pitch_phase);
+    hash = vox_audio_hash_mix(hash, (vox_u32)engine->custom_rate_pct);
+    hash = vox_audio_hash_mix(hash, (vox_u32)engine->custom_pitch_hz);
+    hash = vox_audio_hash_mix(hash, (vox_u32)engine->custom_formant_pct);
     hash = vox_audio_hash_mix(hash, engine->speech_pitch_step);
     hash = vox_audio_hash_mix(hash, engine->speech_lfsr);
     hash = vox_audio_hash_mix(hash, engine->active_phrase);

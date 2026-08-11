@@ -23,6 +23,23 @@ from openpyxl.worksheet.datavalidation import DataValidation
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SOURCE = ROOT / "qa" / "VOX_QA_CHECKPOINTS.csv"
 DEFAULT_OUTPUT = ROOT / "qa" / "VOX_QA_FEEDBACK.xlsx"
+
+
+def tree_version() -> str:
+    """The version this tree builds, from the one file that holds it.
+
+    The workbook tells a tester which build to expect, so a stale number here
+    sends them looking for the wrong bundle.  Reading VERSION keeps this in
+    step with CMake, the packagers and the generated vox/vox_version.h;
+    tools/vox-version-check.sh fails the build if any of them disagree.
+    """
+    raw = (ROOT / "VERSION").read_text().strip()
+    if not re.fullmatch(r"\d+\.\d+\.\d+", raw):
+        raise SystemExit(f"VERSION must hold a bare MAJOR.MINOR.PATCH, got {raw!r}")
+    return raw
+
+
+VERSION = tree_version()
 FIXED_TIME = datetime(2026, 1, 1, 0, 0, 0)
 ZIP_TIME = (2026, 1, 1, 0, 0, 0)
 CORE_TIMESTAMP = b"2026-01-01T00:00:00Z"
@@ -218,7 +235,7 @@ def add_environment_sheet(workbook: Workbook) -> None:
     fields = [
         ("Tester alias", "Manual", "Use a public alias; do not enter an email address."),
         ("Build ID", "Bundle or release", "Record the exact bundle or release identifier."),
-        ("VOX version", "Bundle or release", "Expected demo version is v0.0.3."),
+        ("VOX version", "Bundle or release", f"Expected demo version is v{VERSION}."),
         ("Git commit", "Bundle manifest", "Use the public commit hash when supplied."),
         ("Binary SHA-256", "Cockpit or checksum file", "Identifies the exact tested executable."),
         ("Operating system", "System settings", "Name and release only."),
@@ -289,7 +306,7 @@ def build_workbook(source: Path, output: Path) -> None:
     workbook = Workbook()
     workbook.properties.creator = "VOX contributors"
     workbook.properties.lastModifiedBy = "VOX deterministic workbook generator"
-    workbook.properties.title = "VOX + DIGS v0.0.3 QA Feedback"
+    workbook.properties.title = f"VOX + DIGS v{VERSION} QA Feedback"
     workbook.properties.subject = "Portable demo acceptance and issue evidence"
     workbook.properties.description = "Generated from qa/VOX_QA_CHECKPOINTS.csv"
     workbook.properties.created = FIXED_TIME

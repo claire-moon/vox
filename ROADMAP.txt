@@ -40,6 +40,29 @@ v0.0.3 STABILITY AND SYSTEMS CANDIDATE:
   controller/audio pass, performance soak, QA workbook, and source evidence
   are complete.
 
+v0.0.4 THE BOTS REMEMBER:
+  Preserve the complete v0.0.3 match while adding, and removing:
+  - bot memory, pairwise contracts, and an inbox that survive closing the game,
+    held in a versioned save layer that never enters the canonical hash;
+  - a written line corpus replacing the runtime bark generator, with audience,
+    exchange heat, and replies priced against the line they answer;
+  - one contextual bark button as the player's whole voice, and one speech
+    bubble on screen at a time;
+  - miners that breach walls with a cutting tool instead of grinding against
+    them;
+  - a standard window widget with scrolling and wrapping used by every screen;
+  - removal of the Rust boundary, the C++98 translation unit, and the Lua
+    catalog sandbox: v0.0.4 is ISO C90 only, under a 1440 KiB payload ceiling.
+
+  ABI 10, settings schema 5, and chronicle format 1 are intentional
+  compatibility boundaries; see docs/rfcs/0003. The portable-core CI matrix is
+  now the whole of the ISO C portability claim, since the Rust and C++ lanes
+  that previously corroborated it no longer exist.
+
+  This row remains a candidate until the v0.0.4 checklist, Linux bundle,
+  manual controller/audio pass, performance soak, the across-session memory
+  checkpoints, QA workbook, and source evidence are complete.
+
 Modern future targets:
   Windows 10/11 x86-64
   macOS 11+ Intel/Apple Silicon
@@ -60,7 +83,7 @@ No platform becomes VERIFIED from a compile alone. Record the exact OS,
 CPU, GPU/API, compiler, build, boot, input, render, match-completion, and
 performance evidence before advertising support.
 
-Engine milestones after the v0.0.3 acceptance gate:
+Engine milestones after the v0.0.4 acceptance gate:
   - replay/input-log format and deterministic network research;
   - broader rigid-body/joint/constraint physics behind the stable C ABI;
   - renderer-neutral snapshots plus measured OpenGL/D3D/Metal adapters;

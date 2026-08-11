@@ -7,7 +7,7 @@ umask 022
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 DIST_DIR=${VOX_PACKAGE_DIST_DIR:-"$ROOT/dist"}
-VERSION=${VOX_PACKAGE_VERSION:-v0.0.3}
+VERSION=${VOX_PACKAGE_VERSION:-$("$ROOT/tools/vox-version.sh" --tag)}
 ARCHIVE_STEM="vox-digs-$VERSION-linux-x86_64"
 SOURCE_STEM="vox-digs-$VERSION-source"
 BINARY_ARCHIVE="$DIST_DIR/$ARCHIVE_STEM.tar.gz"
@@ -19,6 +19,11 @@ BENCHMARK_FRAMES=${VOX_PACKAGE_BENCHMARK_FRAMES:-120}
 BUILD_JOBS=${VOX_BUILD_JOBS:-}
 NAMED_BENCH_QUALIFY=${VOX_NAMED_BENCH_QUALIFY:-0}
 GLIBC_MAX=${VOX_PACKAGE_GLIBC_MAX:-2.35}
+# Playable payload budget: the binary plus the runtime data it needs to boot.
+# 1474560 is a 1440 KiB floppy; the target and warning lines are advisory.
+PACKAGE_SIZE_CEILING=${VOX_PACKAGE_SIZE_CEILING:-1474560}
+PACKAGE_SIZE_WARN=${VOX_PACKAGE_SIZE_WARN:-1100000}
+PACKAGE_SIZE_TARGET=${VOX_PACKAGE_SIZE_TARGET:-740000}
 CONTROLLER_DB="$ROOT/third_party/SDL_GameControllerDB/gamecontrollerdb.txt"
 CONTROLLER_DB_SHA256=dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0
 WORK_DIR=
@@ -115,7 +120,6 @@ capture_evidence()
 need_command git
 need_command cmake
 need_command ctest
-need_command cargo
 need_command tar
 need_command gzip
 need_command sha256sum
@@ -166,6 +170,10 @@ if [[ -n "$DIRTY_STATE" ]]; then
         'package-linux-demo: WARNING: building an explicitly allowed dirty-tree package.' >&2
 fi
 
+# A bundle whose START-HERE, README and archive name disagree about which
+# release it is wastes the tester's time before they even run it.
+"$ROOT/tools/vox-version-check.sh"
+
 if [[ -z ${SOURCE_DATE_EPOCH:-} ]]; then
     SOURCE_DATE_EPOCH=$(git -C "$ROOT" show -s --format=%ct HEAD)
 fi
@@ -192,7 +200,6 @@ esac
 mkdir -p -- "$DIST_DIR"
 WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/vox-linux-package.XXXXXXXX")
 BUILD_DIR="$WORK_DIR/build"
-CARGO_TARGET_DIR="$WORK_DIR/cargo-target"
 STAGE_DIR="$WORK_DIR/$ARCHIVE_STEM"
 SOURCE_STAGE="$WORK_DIR/$SOURCE_STEM"
 EVIDENCE_DIR="$STAGE_DIR/evidence"
@@ -220,34 +227,10 @@ fi
 mkdir -p -- "$EVIDENCE_DIR"
 capture_evidence ctest "$BUILD_DIR" \
     ctest -C Release --output-on-failure
-capture_evidence cargo-test "$ROOT" \
-    env CARGO_TARGET_DIR="$CARGO_TARGET_DIR" cargo test \
-        --manifest-path "$ROOT/Cargo.toml" --workspace --locked
 capture_evidence qa-workbook-current "$ROOT" \
     python3 "$ROOT/tools/build-qa-workbook.py" --check
 capture_evidence vox-headless "$EVIDENCE_DIR" "$BUILD_DIR/vox_headless"
 capture_evidence digs-headless "$EVIDENCE_DIR" "$BUILD_DIR/digs_headless"
-[[ -f "$BUILD_DIR/share/digs/scripts/manifest.txt" ]] || \
-    die 'the build did not stage the DIGS Lua manifest'
-[[ -f "$BUILD_DIR/share/digs/controllers/gamecontrollerdb.txt" ]] || \
-    die 'the build did not stage the SDL GameControllerDB data'
-[[ -f "$BUILD_DIR/share/digs/icons/digs-miner.xpm" ]] || \
-    die 'the build did not stage the canonical DIGS miner icon'
-(cd "$BUILD_DIR/share/digs/icons" && sha256sum -c SHA256SUMS) || \
-    die 'the staged canonical DIGS miner icon checksum failed'
-BUILD_CONTROLLER_DB_SHA256=$(sha256sum \
-    "$BUILD_DIR/share/digs/controllers/gamecontrollerdb.txt" | awk '{print $1}')
-[[ "$BUILD_CONTROLLER_DB_SHA256" == "$CONTROLLER_DB_SHA256" ]] || \
-    die 'the staged SDL GameControllerDB data does not match the reviewed pin'
-capture_evidence digs-script-validate "$EVIDENCE_DIR" \
-    "$BUILD_DIR/digs_script" --validate \
-        "$BUILD_DIR/share/digs/scripts/manifest.txt"
-capture_evidence digs-script-hash "$EVIDENCE_DIR" \
-    "$BUILD_DIR/digs_script" --hash \
-        "$BUILD_DIR/share/digs/scripts/manifest.txt"
-capture_evidence digs-script-headless "$EVIDENCE_DIR" \
-    "$BUILD_DIR/digs_script" --headless \
-        "$BUILD_DIR/share/digs/scripts/manifest.txt"
 capture_evidence digs-input-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --input-self-test
 capture_evidence digs-cap-self-test "$EVIDENCE_DIR" \
@@ -272,12 +255,20 @@ capture_evidence digs-camera-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --camera-self-test
 capture_evidence digs-fixed-step-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --fixed-step-self-test
+# v0.0.4 adds a save layer and a window widget every screen draws through.
+# Both can fail in ways the simulation tests cannot see, so both are shipped
+# as package evidence alongside the determinism logs.
+capture_evidence digs-chronicle-self-test "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --chronicle-self-test \
+        "$EVIDENCE_DIR/digs-chronicle-self-test.dat"
+capture_evidence digs-menu-self-test "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --menu-self-test
+capture_evidence digs-session-evidence "$EVIDENCE_DIR" \
+    env VOX_SESSION_DEMO="$BUILD_DIR/digs_demo" \
+        "$ROOT/tools/vox-session-evidence.sh"
 capture_evidence digs-miner-icon "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --render-miner-icon-xpm \
         digs-miner-generated.xpm
-cmp "$EVIDENCE_DIR/digs-miner-generated.xpm" \
-    "$BUILD_DIR/share/digs/icons/digs-miner.xpm" || \
-    die 'the generated miner icon differs from the reviewed canonical asset'
 capture_evidence digs-demo-smoke "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --smoke-test digs-demo-smoke.ppm
 [[ -s "$EVIDENCE_DIR/digs-demo-smoke.ppm" ]] || \
@@ -290,33 +281,43 @@ capture_evidence vox-render-demo "$EVIDENCE_DIR" \
     die 'vox_render_demo produced no image'
 
 mkdir -p -- "$STAGE_DIR/bin" "$STAGE_DIR/libexec" "$STAGE_DIR/tools"
-for binary in digs_demo digs_script vox_headless digs_headless vox_render_demo; do
+for binary in digs_demo vox_headless digs_headless vox_render_demo; do
     install -m 0755 -- "$BUILD_DIR/$binary" "$STAGE_DIR/bin/$binary"
+    # Symbols are build artefacts, not runtime behaviour: stripping changes
+    # no code generation and therefore no hash, and it is measured by the
+    # size gate below.
+    if command -v strip >/dev/null 2>&1; then
+        strip --strip-unneeded -- "$STAGE_DIR/bin/$binary"
+    fi
 done
 copy_tree "$BUILD_DIR/share" "$STAGE_DIR/share"
 # SDL_GetBasePath() resolves from bin/, while tester-facing tools and package
 # layout expose data under the conventional archive-root share/. Keep one
 # canonical copy and make the executable-relative path resolve to it.
 ln -s ../share "$STAGE_DIR/bin/share"
-[[ -r "$STAGE_DIR/bin/share/digs/scripts/manifest.txt" ]] || \
-    die 'the executable-relative DIGS Lua manifest path is broken'
-[[ -r "$STAGE_DIR/bin/share/digs/controllers/gamecontrollerdb.txt" ]] || \
-    die 'the executable-relative controller database path is broken'
-[[ -r "$STAGE_DIR/bin/share/digs/icons/digs-miner.xpm" ]] || \
-    die 'the executable-relative canonical miner icon path is broken'
+# The controller database is an opt-in extra, not part of the playable
+# payload: SDL2's built-in mappings already cover mainstream pads, and this
+# file is larger than the game itself.  Ship it beside the docs so a tester
+# with unusual hardware can drop it in, and keep it out of the size budget.
+install -D -m 0644 -- "$CONTROLLER_DB" \
+    "$STAGE_DIR/extras/gamecontrollerdb.txt"
+[[ -r "$STAGE_DIR/extras/gamecontrollerdb.txt" ]] || \
+    die 'the optional controller database was not packaged'
 install -m 0755 -- "$ROOT/packaging/linux/run-digs.sh" \
     "$STAGE_DIR/run-digs.sh"
 install -m 0755 -- "$ROOT/packaging/linux/smoke-test.sh" \
     "$STAGE_DIR/smoke-test.sh"
 install -m 0755 -- "$ROOT/packaging/linux/benchmark.sh" \
     "$STAGE_DIR/benchmark.sh"
+install -m 0755 -- "$ROOT/tools/vox-session-evidence.sh" \
+    "$STAGE_DIR/session-evidence.sh"
 install -m 0755 -- "$ROOT/packaging/linux/qa-cockpit.sh" \
     "$STAGE_DIR/qa-cockpit.sh"
 install -m 0644 -- "$ROOT/packaging/linux/libexec/vox-runtime.sh" \
     "$STAGE_DIR/libexec/vox-runtime.sh"
 copy_file "$ROOT/packaging/linux/START-HERE.txt" "$STAGE_DIR/START-HERE.txt"
 copy_file "$ROOT/CG-README.TXT" "$STAGE_DIR/CG-README.TXT"
-copy_file "$ROOT/qa/V0.0.3-QUICK-FEEDBACK.txt" \
+copy_file "$ROOT/qa/V0.0.4-QUICK-FEEDBACK.txt" \
     "$STAGE_DIR/QUICK-FEEDBACK.txt"
 
 copy_file "$ROOT/LICENSE" "$STAGE_DIR/LICENSE"
@@ -334,6 +335,22 @@ copy_tree "$ROOT/docs" "$STAGE_DIR/docs"
 if [[ -d "$ROOT/qa" ]]; then
     copy_tree "$ROOT/qa" "$STAGE_DIR/qa"
     rm -rf -- "$STAGE_DIR/qa/out"
+    # Previous releases' feedback forms stay in the repository as the record
+    # of those releases, but shipping them here just gives a tester two
+    # documents and no way to tell which one this bundle wants.  Matched by
+    # shape rather than by name so this does not need editing next release.
+    # Derived from the VERSION file, not from $VERSION: the latter carries
+    # suffixes like -ci and -dev, which name no form and would fail the
+    # check below on every CI package run.
+    CURRENT_FEEDBACK_FORM="V$("$ROOT/tools/vox-version.sh")-QUICK-FEEDBACK.txt"
+    for form in "$STAGE_DIR"/qa/V*-QUICK-FEEDBACK.txt; do
+        [[ -e "$form" ]] || continue
+        if [[ "$(basename -- "$form")" != "$CURRENT_FEEDBACK_FORM" ]]; then
+            rm -f -- "$form"
+        fi
+    done
+    [[ -r "$STAGE_DIR/qa/$CURRENT_FEEDBACK_FORM" ]] || \
+        die "the packaged qa/ tree is missing $CURRENT_FEEDBACK_FORM"
 fi
 [[ -r "$STAGE_DIR/QUICK-FEEDBACK.txt" ]] || \
     die 'the guided quick-feedback artifact was not packaged'
@@ -378,6 +395,21 @@ fi
 if [[ $(printf '%s\n%s\n' "$GLIBC_REQUIRED" "$GLIBC_MAX" |
         sort -V | tail -n 1) != "$GLIBC_MAX" ]]; then
     die "digs_demo requires GLIBC_$GLIBC_REQUIRED; release baseline is GLIBC_$GLIBC_MAX"
+fi
+
+# v0.0.4 budgets the playable payload -- the binary plus the runtime data it
+# needs to boot -- at a 1440 KiB floppy.  Documentation, licences, QA material
+# and the evidence bundle are tester material and stay outside the budget.
+# Fail here, before the archive can reach a release page, in the same spirit
+# as the glibc baseline gate above.
+if ! VOX_SIZE_BINARY="$STAGE_DIR/bin/digs_demo" \
+     VOX_SIZE_SHARE="$STAGE_DIR/share" \
+     VOX_SIZE_REPORT="$EVIDENCE_DIR/size-report.txt" \
+     VOX_SIZE_CEILING="$PACKAGE_SIZE_CEILING" \
+     VOX_SIZE_WARN="$PACKAGE_SIZE_WARN" \
+     VOX_SIZE_TARGET="$PACKAGE_SIZE_TARGET" \
+     "$ROOT/tools/vox-size-report.sh" "$STAGE_DIR"; then
+    die "packaged payload exceeds the ${PACKAGE_SIZE_CEILING}-byte size budget"
 fi
 
 {
@@ -466,8 +498,17 @@ tar -xzf "$BINARY_ARCHIVE" -C "$PACKAGED_CHECK_DIR"
 PACKAGED_ROOT="$PACKAGED_CHECK_DIR/$ARCHIVE_STEM"
 [[ -x "$PACKAGED_ROOT/run-digs.sh" ]] || \
     die 'the packaged Linux launcher is missing or not executable'
-[[ -r "$PACKAGED_ROOT/bin/share/digs/scripts/manifest.txt" ]] || \
+# Assert the property, not one payload file.  This check named the Lua
+# catalog manifest, which v0.0.4 removed, so it failed on a package that was
+# perfectly good.  Comparing the two trees keeps it testing what it is for --
+# that bin/share resolves to the one canonical copy -- however the payload
+# changes later.
+[[ -d "$PACKAGED_ROOT/bin/share/digs" ]] || \
     die 'the packaged Linux executable-relative data path is broken'
+PACKAGED_SHARE_TREE=$(cd -- "$PACKAGED_ROOT/share" && find . | sort)
+PACKAGED_BIN_SHARE_TREE=$(cd -- "$PACKAGED_ROOT/bin/share" && find . | sort)
+[[ "$PACKAGED_SHARE_TREE" == "$PACKAGED_BIN_SHARE_TREE" ]] || \
+    die 'bin/share does not resolve to the packaged share tree'
 capture_evidence packaged-digs-input-self-test "$EVIDENCE_DIR" \
     "$PACKAGED_ROOT/run-digs.sh" --input-self-test
 capture_evidence packaged-digs-load-self-test "$EVIDENCE_DIR" \

@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # VOX + DIGS testing cockpit
 
-`VOX_QA_FEEDBACK.xlsx` is the portable feedback workbook for the `v0.0.3`
+`VOX_QA_FEEDBACK.xlsx` is the portable feedback workbook for the `v0.0.4`
 demo. It can be filled in with Excel, LibreOffice, OnlyOffice, or another
 application that preserves `.xlsx` files. The repository builds it
 deterministically from `VOX_QA_CHECKPOINTS.csv` with
@@ -19,7 +19,7 @@ The workbook has three sheets:
   email addresses, user names, host names, network addresses, hardware serial
   numbers, or private file paths.
 
-For a fast candidate check, follow `V0.0.3-QUICK-FEEDBACK.txt`. Its base
+For a fast candidate check, follow `V0.0.4-QUICK-FEEDBACK.txt`. Its base
 keyboard/mouse lane takes about 20 minutes and references the exact workbook
 checkpoint IDs to fill. Controller USB/Bluetooth passes are separate add-ons;
 the quick lane is defect discovery and does not replace the full 88-checkpoint

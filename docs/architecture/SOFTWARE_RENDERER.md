@@ -34,16 +34,31 @@ All tiers share surface visibility, emission injection, integer arithmetic,
 and RGB output rules. The headless renderer test checks repeatable frame hashes
 and verifies that the tiers produce distinct results.
 
-The SDL2 host temporarily overlays living miners, active projectiles,
-transient effects, rope, rail afterimages, and steampack exhaust on canonical
-terrain, renders the Q16.16 shared-camera rectangle directly, then restores
-every touched cell before simulation can resume.
-That lets every visible world element participate in the Lightfield while the
-canonical material array and match hash remain untouched. Custom menu/HUD text
-is composited afterward as a separate RGB layer.
+The SDL2 host temporarily overlays living miners, compact live rigid corpse/
+debris/scrap marks, active projectiles, transient effects, rope, rail
+afterimages, and steampack exhaust on canonical terrain, renders the Q16.16
+shared-camera rectangle directly, then restores every touched cell before
+simulation can resume.
+That lets solid world elements participate in the Lightfield while the
+canonical material array and match hash remain untouched. Transient effects
+are instead blended as compact screen-space marks after Lightfield, so a blood
+drop or smoke mote cannot overwrite a terrain cell as an opaque block. Custom
+menu/HUD text is composited afterward as a separate RGB layer.
+
+After the Lightfield pass, an air-only SDL2 backdrop applies a restrained fog
+bias and a seed-derived white moon. It leaves the renderer's background
+gradient intact instead of drawing competing parallax silhouettes or
+per-cell cloud dither: those layers were visually noisier than the v0.0.4
+material read at 320x200 and are deferred pending a cohesive palette/art pass.
+The same port derives compact miner walk, jump, steam, pain, and fire poses
+plus paced best-kill replay framing from existing match snapshots. These are
+presentation-only transformations: camera/replay state stays outside the
+canonical digest, and camera/rigid-overlay self-tests prove the temporary paths
+restore the match exactly. This is not the exact imported DOOM palette or a
+full raymarched/skeletal renderer; those remain provenance and scope work.
 
 The renderer owns two fixed world-sized light fields plus solid and surface
-caches, so this v0.0.3 scalar implementation is allocation-free but not
+caches, so this v0.0.4 scalar implementation is allocation-free but not
 reentrant. A host must serialize calls. A future worker implementation may use
 caller-owned scratch arenas and chunk-dirty recomputation after proving
 byte-stable results against this path.

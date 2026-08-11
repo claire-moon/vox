@@ -1,0 +1,32 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+#ifndef VOX_VERSION_H
+#define VOX_VERSION_H
+
+/*
+ * Generated from engine/include/vox/vox_version.h.in by CMake.  Do not edit
+ * the generated copy, and do not write the version number anywhere else.
+ *
+ * The single source is the VERSION file at the root of the tree.  CMake reads
+ * it before project(), so the number reaches the build system, this header,
+ * and -- through `tools/vox-version.sh` -- the packaging and CI scripts, which
+ * cannot include a C header.  `tools/vox-version-check.sh` fails the build if
+ * any product surface disagrees with it.
+ *
+ * This exists because the previous release shipped its number written out by
+ * hand in over twenty files.  Bumping it meant finding all of them.
+ */
+
+#define VOX_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define VOX_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define VOX_VERSION_PATCH @PROJECT_VERSION_PATCH@
+
+/* "0.0.4" */
+#define VOX_VERSION_STRING "@PROJECT_VERSION@"
+
+/* "v0.0.4" -- the tag, and how the game names itself on screen. */
+#define VOX_VERSION_TAG "v@PROJECT_VERSION@"
+
+/* "DIGS v0.0.4" -- window titles and banners. */
+#define VOX_VERSION_TITLE "DIGS v@PROJECT_VERSION@"
+
+#endif

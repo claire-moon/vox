@@ -1,31 +1,39 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# v0.0.3 foundation
+# v0.0.4 foundation
 
 The first demo proves a complete bounded path from input to authoritative
 materials and bodies to a lit graphical frame. It does not establish the final
 world scale, renderer backend, or platform matrix.
 
 ```text
-SDL2 input / deterministic bots
-              |
-              v
-      DIGS C89 match rules
-       |               |
-       v               v
-C89 material world   C++98 fixed-point bodies
-       |               |
-       +-------+-------+
-               v
-    render-only voxel snapshot
-               |
-               v
- C89 RGB Lightfield software renderer
-               |
-               v
- SDL2 texture / custom UI / VOX Audio v2
+        saved memory snapshot          SDL2 input / deterministic bots
+        (port-owned, versioned)                     |
+                     |                              |
+                     +--------------+---------------+
+                                    v
+                          DIGS C89 match rules
+                           |               |
+                           v               v
+                C89 material world   C89 fixed-point bodies
+                           |               |
+                           +-------+-------+
+                                   v
+                        render-only voxel snapshot
+                                   |
+                                   v
+                 C89 RGB Lightfield software renderer
+                                   |
+                                   v
+              SDL2 texture / custom UI / VOX Audio v2
 ```
 
-The active v0.0.3 profile is `512 x 320 x 10`, split into 640
+The memory snapshot enters at init and is read back at the end of the match.
+It is an opening condition, exactly like a seed: the simulation never reads
+the file, never reads a clock, and the port owns both. See
+`docs/rfcs/0003-digs-bot-memory-and-conversation.md` for the boundary and for
+the one time it was breached.
+
+The active v0.0.4 profile is `512 x 320 x 10`, split into 640
 `16 x 16 x 10` chunks. Its 1,638,400 cells are exactly forty times the
 original demo volume and four times the v0.0.1 dense profile. That expanded
 space supports seed-selected archipelagos, continents, twin hills, broad sky,

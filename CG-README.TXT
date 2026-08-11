@@ -1,7 +1,7 @@
-DIGS v0.0.3 - CG QUICK-START AND TEST GUIDE
+DIGS v0.0.4 - CG QUICK-START AND TEST GUIDE
 ===========================================
 
-This is the Linux x86-64 CPU-rendered v0.0.3 demo candidate. DIGS uses the
+This is the Linux x86-64 CPU-rendered v0.0.4 demo candidate. DIGS uses the
 VOX simulation engine, but the game title is simply DIGS. The game does not
 use the GTX 1660 Ti yet; this build is deliberately testing the portable CPU
 software path.
@@ -15,7 +15,7 @@ Extract the complete binary archive. From the extracted directory, run:
   ./run-digs.sh
 
 Keep bin/, share/, libexec/, and the launcher together. The game needs the
-Lua manifest and catalog under share/digs/; copying only bin/digs_demo will
+controller database under share/digs/; copying only bin/digs_demo will
 produce a safe script-error screen instead of a working title menu.
 
 If Linux reports "Permission denied", run this once and try again:
@@ -38,7 +38,6 @@ The title screen contains:
   START MATCH       Configure a deathmatch.
   FOUNDRY LAB       Open the systemic-material sandbox.
   HOW TO PLAY       Read the one-page field manual.
-  MINER'S INDEX     Browse every documented game/simulation entity.
   CONTROLS          Inspect or rebind keyboard/controller actions.
   OPTIONS           Set frame cap, effects, accessibility, and display.
   QA FEEDBACK       Open the tester-workbook reminder.
@@ -131,9 +130,18 @@ Player 1 keyboard and mouse:
   A / D             Move left/right.
   Space             Jump.
   Left Shift        Steam pack.
-  Right mouse       Operate rope in the selected Hold/Toggle mode.
+  Middle mouse      Operate rope in the selected Hold/Toggle mode.
+  Right mouse       Steam pack thrust.
   E or left mouse   Fire/use selected tool.
   Mouse             Aim exactly through the current camera transform.
+  Arrow keys        Aim without a mouse, in single-player only. Moving the
+                    mouse takes the cursor back. With two local players the
+                    arrows stay Player 2's movement and are not used here.
+  R-Ctrl / Enter    Fire, single-player only. With the arrows above this
+                    gives a complete no-mouse scheme: left hand moves and
+                    jumps, right hand aims, fires, thrusts, and ropes.
+  R-Shift           Steam pack, single-player only.
+  / or R-Alt        Rope, single-player only.
   W / S             Reel an attached rope shorter/longer.
   1 through 0       Direct-select the ten tools.
   -                 Direct-select the charged Mining Rail.
@@ -177,7 +185,6 @@ Global match keys:
   Escape            Pause.
   R                 Restart the current map and seed.
   F1                Toggle the debug overlay.
-  F5                Transactionally reload the DIGS Lua data.
   F11               Toggle fullscreen.
 
 
@@ -260,30 +267,7 @@ exposes one audio setting only: persistent MASTER VOLUME from 0 through 100
 percent.
 
 
-7. MINER'S INDEX AND LUA DATA
------------------------------
-
-MINER'S INDEX is a read-only field manual generated from the shipped Lua
-catalog. Up/Down browses six visible entries at a time; Escape/B returns. The
-right pane shows the selected material, weapon, entity, anatomy part, reaction,
-mode, AI state, effects/audio system, or rule without another selection step.
-
-The runtime is a bounded Lua 5.1 sandbox. It has no file, operating-system,
-package, debug, random, or dynamic-code APIs. F5 validates a replacement data
-set before swapping it in; a rejected reload leaves the last good catalog
-active. If initial data cannot load, F5 retries and Escape exits safely.
-
-Validate the exact packaged data from a terminal:
-
-  ./bin/digs_script --validate share/digs/scripts/manifest.txt
-  ./bin/digs_script --hash share/digs/scripts/manifest.txt
-  ./bin/digs_script --headless share/digs/scripts/manifest.txt
-
-The first two commands should report the same source/catalog hashes and 86
-catalog entries. --headless also prints the complete entry list.
-
-
-8. QUICK AUTOMATED TESTS
+7. QUICK AUTOMATED TESTS
 ------------------------
 
 Run these from the extracted demo directory:
@@ -299,6 +283,8 @@ Run these from the extracted demo directory:
   ./bin/digs_demo --performance-self-test 600
   ./bin/digs_demo --settings-self-test qa/out/digs-settings-test.cfg
   ./bin/digs_demo --camera-self-test
+  ./bin/digs_demo --chronicle-self-test
+  ./bin/digs_demo --menu-self-test
   ./bin/digs_demo --render-miner-icon-xpm qa/out/digs-miner-test.xpm
   ./bin/vox_headless
   ./bin/digs_headless
@@ -310,10 +296,15 @@ cap test validates deterministic cap qualification, the cadence test proves
 audio sample timing is independent of rendered frames, the bark test checks
 all curated slots and unknown-word phonetics, the haptic test checks mixer
 levels and isolation without requiring a pad, the performance test enforces
-the v0.0.3 four-miner simulation budget only on the named laptop bench, and
-the settings test checks schema migration without changing real user settings.
+the v0.0.4 four-miner simulation budget only on the named laptop bench, and
+the settings test checks schema migration without changing real user settings,
+the chronicle test writes a save file and reads it back and refuses a damaged
+one, and the menu test walks every screen and fails on anything drawn outside
+its frame.
 The load test is the portable gate: at 600 ticks it validates exact activity
-and state hash c37e44b6 without applying machine timing limits. Run the strict
+and state hash 1acec253 without applying machine timing limits. That hash
+and the activity counters moved from v0.0.3 because bots now breach walls;
+a v0.0.3 expectation applied here reads as a failure and is not one. Run the strict
 performance test only on the i7-10750H laptop qualification bench. The camera
 self-test checks every zoom and world edge for black exposure, verifies
 true close zoom plus full-world player/lava framing and the offscreen lava
@@ -323,14 +314,14 @@ share/digs/icons/digs-miner.xpm. The benchmark reports Compatibility, Balanced,
 and Showcase CPU Lightfield results. Hashes must repeat for the same frozen
 build; use this archive's evidence logs rather than old v0.0.1 values.
 
-The package-time versions of these checks, CTest, Cargo tests, script
-validation, and raw exit statuses are under evidence/.
+The package-time versions of these checks, CTest, and raw exit statuses are
+under evidence/.
 
 
-9. MANUAL v0.0.3 PLAYTEST
+8. MANUAL v0.0.4 PLAYTEST
 -------------------------
 
-For a shorter first report, use qa/V0.0.3-QUICK-FEEDBACK.txt (or the packaged
+For a shorter first report, use qa/V0.0.4-QUICK-FEEDBACK.txt (or the packaged
 QUICK-FEEDBACK.txt). It is a guided 20-minute keyboard/mouse lane with separate
 F310 and Switch Pro USB/Bluetooth additions and exact workbook checkpoint IDs.
 It finds regressions quickly but does not replace the complete list below.
@@ -378,13 +369,11 @@ Please check at least these paths:
   [ ] C, M, and controller R3 barks match their visible speech bubbles.
   [ ] Dummy Mode removes only local bark cooldown; bots remain sparse.
   [ ] Laptop Mode and each qualified cap preserve match results and 60 Hz time.
-  [ ] MINER'S INDEX has 87 readable entries, six rows, arrows, and back only.
-  [ ] F5 reloads valid Lua data and rejects invalid data without corruption.
   [ ] Rising lava, water cooling, fire, firedamp, liquids, and collapse work.
   [ ] Pause/results/restart/fullscreen/quit paths remain stable.
 
 
-10. RECORD AND SHARE QA FEEDBACK
+9. RECORD AND SHARE QA FEEDBACK
 --------------------------------
 
 The included 88-checkpoint workbook is:
@@ -420,7 +409,7 @@ Submit reviewed feedback here:
   https://github.com/claire-moon/vox/issues/new?template=demo-feedback.yml
 
 
-11. BUILD AND TEST FROM SOURCE
+10. BUILD AND TEST FROM SOURCE
 ------------------------------
 
 From the VOX repository root:
@@ -430,9 +419,6 @@ From the VOX repository root:
     -DVOX_BUILD_SDL2_DEMO=ON
   cmake --build build-demo --parallel
   ctest --test-dir build-demo --output-on-failure
-  cargo test --workspace
-  ./build-demo/digs_script --validate \
-    ./build-demo/share/digs/scripts/manifest.txt
   ./build-demo/digs_demo
 
 Run the complete strict-language verification gate with:
@@ -455,11 +441,11 @@ On Debian-family systems the package name is python3-openpyxl.
 For an explicitly non-release package from a dirty development tree only:
 
   VOX_PACKAGE_ALLOW_DIRTY=1 \
-  VOX_PACKAGE_VERSION=v0.0.3-dev \
+  VOX_PACKAGE_VERSION=v0.0.4-dev \
   tools/package-linux-demo.sh
 
 
-12. VERIFY THE DOWNLOAD AND KNOW THE LIMITS
+11. VERIFY THE DOWNLOAD AND KNOW THE LIMITS
 --------------------------------------------
 
 From the parent dist directory:
@@ -467,10 +453,10 @@ From the parent dist directory:
   sha256sum -c SHA256SUMS
 
 Both archives must report OK. The binary bundle contains SBOM.spdx.json, raw
-package-time evidence, GPL notices, the Lua catalog, and launch/test scripts.
+package-time evidence, GPL notices, and launch/test scripts.
 The matching Corresponding Source archive is distributed beside it.
 
-v0.0.3 publishes easy-run Linux and Windows x86-64 bundles. The exposed game
+v0.0.4 publishes easy-run Linux and Windows x86-64 bundles. The exposed game
 renderer remains the CPU-software vertical slice. macOS, historical operating
 systems, a GPU renderer, network multiplayer, a complete rigid-body solver,
 device-specific remapping wizards for every unknown pad, and final competitive

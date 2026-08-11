@@ -19,7 +19,14 @@ typedef struct vox_ui_surface {
  */
 #define VOX_UI_DOS_GLYPH_WIDTH 5
 #define VOX_UI_DOS_GLYPH_HEIGHT 7
-#define VOX_UI_DOS_ADVANCE 5
+/*
+ * One pixel of air between glyphs.  The face is five wide, and advancing by
+ * five put every letter against its neighbour -- legible, but it read as one
+ * continuous smear at this resolution.  Six is the whole change, and it
+ * widens every string in the game, so layouts that were already at the edge
+ * of their panel are now over it.
+ */
+#define VOX_UI_DOS_ADVANCE 6
 #define VOX_UI_DOS_LINE_HEIGHT 8
 
 void vox_ui_fill(vox_ui_surface *surface, vox_u8 red, vox_u8 green,
@@ -40,8 +47,20 @@ void vox_ui_text_center_shadow(vox_ui_surface *surface, int center_x, int y,
                                int scale, const char *text, vox_u8 red,
                                vox_u8 green, vox_u8 blue);
 int vox_ui_text_width(const char *text, int scale);
+/*
+ * Draws wrapped text and returns the number of LINES used -- not pixels.
+ * Multiply by VOX_UI_DOS_LINE_HEIGHT * scale for a height.
+ *
+ * A null surface measures without drawing, which is the only supported way
+ * to ask how tall something will be: a separate measuring routine would
+ * eventually disagree with this one about where a word breaks.
+ */
 int vox_ui_text_wrap(vox_ui_surface *surface, int x, int y, int width,
                      int max_lines, int scale, const char *text,
                      vox_u8 red, vox_u8 green, vox_u8 blue);
+
+/* Lines this text would take. Same code path as drawing it. */
+int vox_ui_text_wrap_lines(int width, int max_lines, int scale,
+                           const char *text);
 
 #endif

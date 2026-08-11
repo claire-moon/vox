@@ -1,0 +1,125 @@
+# Surfaces allowed to name a version other than the one in VERSION.
+# Read by tools/vox-version-check.sh.
+#
+# Two forms:
+#
+#   path                  every line in the file is exempt
+#   path :: substring     only lines containing the substring are exempt
+#
+# Every rule needs a reason.  A rule that matches nothing fails the check --
+# a stale exemption is a hole waiting for the next mistake to fall into, so
+# the list cannot quietly rot.
+#
+# The bar for adding one: the text is describing project history or a planned
+# future release, not this build.  "What changed since v0.0.3" has to be able
+# to say v0.0.3, and the plan for the next release has to be able to name it.
+# If the text tells a player what to download or what they are running, it is
+# not an exception; it is a bug.
+
+# ---------------------------------------------------------------------------
+# Whole files: records of previous releases, and documents organised by version
+# ---------------------------------------------------------------------------
+
+# A version-by-version roadmap.  Naming old releases is the entire point.
+ROADMAP.txt
+
+# ---------------------------------------------------------------------------
+# Individual historical statements inside otherwise-live documents
+# ---------------------------------------------------------------------------
+
+# Tells the tester not to compare against a two-release-old evidence log.
+CG-README.TXT :: rather than old v0.0.1 values
+
+# Lua was dropped for v0.0.4; the note explains what it was there for and
+# when it left, which requires naming the release it left after.
+THIRD_PARTY.md :: was vendored through `v0.0.3`
+
+# The comment explains a behaviour that was deliberately removed, and which
+# release removed it.  Losing the version loses the point of the comment.
+games/digs/digs_game.c :: That was the v0.0.2 behaviour
+games/digs/digs_game.c :: v0.0.3 removed on purpose
+
+# Architecture notes comparing today's profile against the original ones.
+docs/architecture/ACCELERATION.md :: `v0.0.1` includes one deliberately small
+docs/architecture/CHUNKED_WORLD.md :: four times the v0.0.1 dense slab
+docs/architecture/FOUNDATION.md :: four times the v0.0.1 dense profile
+docs/architecture/TERRAIN_TOOLS.md :: were fixed in `v0.0.1` and have never been renumbered
+# The physics core stopped being C++98 in v0.0.4; the sentence dates that.
+docs/architecture/PHYSICS.md :: Through v0.0.3 this was
+
+# ---------------------------------------------------------------------------
+# docs/compatibility/MATRIX.md
+#
+# Structured as one evidence section per release.  Older sections are frozen
+# records of what was actually observed at the time and must not be edited to
+# say v0.0.4 -- that would be claiming evidence that was never collected.
+#
+# Exempted per line rather than whole-file on purpose: a wrong version inside
+# the *current* release's section is exactly the mistake this gate exists to
+# catch, and a whole-file rule would hide it.
+# ---------------------------------------------------------------------------
+# Anchored to the actual sentences rather than to a bare "v0.0.1" / "v0.0.2".
+# A blanket rule made those two versions invisible on every line of the file,
+# including the v0.0.4 rows -- a mistake caught by injecting one.
+docs/compatibility/MATRIX.md :: ## v0.0.2 development-candidate evidence
+docs/compatibility/MATRIX.md :: but v0.0.2 still uploads a CPU-rendered SDL texture
+docs/compatibility/MATRIX.md :: ## v0.0.1 evidence
+docs/compatibility/MATRIX.md :: No GPU backend exists in v0.0.1
+docs/compatibility/MATRIX.md :: [v0.0.1 Linux x86-64 acceptance evidence]
+docs/compatibility/MATRIX.md :: V0.0.1_LINUX_EVIDENCE.md
+docs/compatibility/MATRIX.md :: Required shape | v0.0.1 status
+docs/compatibility/MATRIX.md :: Neither emulator is a v0.0.1 build/runtime dependency
+docs/compatibility/MATRIX.md :: ## v0.0.3 development-candidate evidence
+# Matched on text unique to the v0.0.3 rows. The row LABELS appear in the
+# v0.0.4 section too, so exempting by label would have quietly covered a wrong
+# version in the current release's evidence -- the precise hole this file is
+# per-line rather than per-file to avoid.
+docs/compatibility/MATRIX.md :: before the v0.0.3 tag
+docs/compatibility/MATRIX.md :: V0.0.3_RELEASE_CHECKLIST.md
+docs/compatibility/MATRIX.md :: v0.0.3 remains a CPU renderer
+docs/compatibility/MATRIX.md :: boundaries. The v0.0.3 release
+docs/compatibility/MATRIX.md :: ## v0.0.3 test lanes
+
+# Added with the v0.0.4 section. The first states what the portable-core
+# matrix replaced; the second is the v0.0.3 lane's own requirement, and
+# pointing it at the v0.0.4 form would misrecord what that lane asked for.
+docs/compatibility/MATRIX.md :: Through v0.0.3 a Rust boundary
+docs/compatibility/MATRIX.md :: qa/V0.0.3-QUICK-FEEDBACK.txt
+
+# Names the workflow this one replaced, and the release whose assets that
+# workflow could have clobbered. The guard itself is version-agnostic --
+# it protects any published release -- so this is context, not behaviour.
+.github/workflows/publish-release.yml :: This replaces the v0.0.3-era release.yml
+
+# Warns the tester that the previous release's canonical hash no longer
+# applies. Naming it is the entire content of the warning.
+CG-README.TXT :: the activity counters moved from v0.0.3
+CG-README.TXT :: a v0.0.3 expectation applied here reads as a failure
+
+# The v0.0.4 load row states that v0.0.3's counters no longer apply, which is
+# the one thing a tester most needs told. Its own rule, matched on v0.0.4 text.
+docs/compatibility/MATRIX.md :: These counters differ from v0.0.3 principally
+docs/compatibility/MATRIX.md :: a v0.0.3 expectation applied here reads as a failure
+
+# ---------------------------------------------------------------------------
+# Forward references to the next release
+#
+# The gate was written to catch stale numbers and so treats every 0.0.x that
+# is not the current one as suspect.  A plan for the release after this one is
+# the legitimate opposite case.
+# ---------------------------------------------------------------------------
+
+# The plan document itself is not scanned -- planning documents are out of
+# scope by path, like the RFCs and the release checklists -- so it needs no
+# rule.  The README is in scope, and its index links to the plan by filename.
+README.md :: docs/ROADMAP_V0.0.5.md
+
+# Dates when bark stopped being a cosmetic keypress. A port carrying the old
+# assumption will desync, so the sentence has to say which release changed it.
+docs/architecture/PLAYER_CONTROLS.md :: It was through v0.0.3
+
+# The current checkout contains an untagged v0.0.5 implementation increment;
+# these lines describe that in-tree physics work while VERSION remains the
+# releasable v0.0.4 product identity.
+ports/sdl2/digs_sdl2.c :: v0.0.5 always uses toggle grapple behavior.
+docs/architecture/PHYSICS.md :: v0.0.5

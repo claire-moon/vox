@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "vox/vox_game.h"
+#include "digs_lines.h"
 
 #define DIGS_DENSITY_SCALE 2U
 #define DIGS_SCALE(value) ((value) * DIGS_DENSITY_SCALE)
@@ -13,6 +14,55 @@
 #define DIGS_JUMP_HOLD_TICKS 8U
 #define DIGS_COYOTE_TICKS 6U
 #define DIGS_JUMP_BUFFER_TICKS 6U
+/*
+ * Burial budget.
+ *
+ * Collapsing terrain that engulfs a miner used to kill instantly and
+ * silently on the tick that overlap recovery failed, which made ordinary
+ * tunnelling feel arbitrarily lethal: dig, the roof settles, die, with no
+ * signal and sometimes with the kill credited to whoever last hit you.
+ *
+ * Burial is now a survivable emergency.  The miner keeps their controls and
+ * their tools while entombed, so digging free is real agency, and the crush
+ * pressure is what kills.  Two health per tick gives a miner at full health
+ * fifty ticks -- five sixths of a second -- to react, and less when already
+ * wounded.  The lethal cap bounds the state so a miner cannot be pinned
+ * indefinitely by a pocket that never resolves.
+ *
+ * Deliberately unchanged: overlap recovery still searches only two cells, so
+ * a miner is never teleported out of trouble.  That was the v0.0.2 behaviour
+ * v0.0.3 removed on purpose.
+ */
+#define DIGS_BURIED_DAMAGE_PER_TICK 2U
+#define DIGS_BURIED_LETHAL_TICKS 180U
+#define DIGS_RIGID_IMPACT_COOLDOWN_TICKS 12U
+#define DIGS_RIGID_IMPACT_MIN_SPEED_Q16 16384L
+#define DIGS_RIGID_IMPACT_MAX_DAMAGE 60U
+/* A detached cluster can hold 128 cells, but reintroducing all of them in
+ * one tick would turn one sleeping rigid body into an unbounded terrain edit.
+ * The first sixteen available slots become loose material in stable local
+ * order; the remainder is accounted as an explicit expiration. */
+#define DIGS_RIGID_SETTLE_MAX_CELLS 16U
+#define DIGS_RIGID_SETTLE_RADIUS 3U
+#define DIGS_REPLAY_CONTEXT_TICKS 180U
+#define DIGS_REPLAY_BLAST_TICKS 45U
+#define DIGS_REPLAY_BLAST_MAX_DISTANCE_CELLS 64U
+#define DIGS_REPLAY_NO_BLAST_DISTANCE 65535U
+#define DIGS_REPLAY_AWARD_VALUE_CAP 2047U
+#define DIGS_REPLAY_HEADSHOT_VALUE 4096U
+#define DIGS_REPLAY_KILL_STREAK_VALUE 32U
+#define DIGS_REPLAY_MULTI_KILL_VALUE 64U
+#define DIGS_REPLAY_CAVE_IN_VALUE 4U
+#define DIGS_REPLAY_BLAST_PROXIMITY_VALUE 8U
+#define DIGS_DROPSHIP_ROUTE_SPEED_Q16 \
+    ((VOX_DIGS_DROPSHIP_LAUNCH_END_X_Q16 - \
+      VOX_DIGS_DROPSHIP_LAUNCH_START_X_Q16) / \
+     (vox_i32)VOX_DIGS_DROP_SHIP_ROUTE_TICKS)
+/* Riders stand on the deck above the hull.  A launch uses the open hold below
+ * it, leaving a full cell of deterministic clearance before gravity takes
+ * over.  Without this, a positive launch velocity carried a newly launched
+ * miner through the ship's own lethal collision volume on the next tick. */
+#define DIGS_DROPSHIP_EJECT_CLEARANCE_Q16 (1L << 16)
 #define DIGS_STEAM_ACCEL_Q16 11264L
 #define DIGS_STEAM_MAX_RISE_Q16 (-98304L)
 #define DIGS_STEAM_LATERAL_Q16 3072L
@@ -45,17 +95,298 @@
 #define DIGS_BOLT_STREAK_LIMIT 4U
 #define DIGS_FIRECRACKER_CHARGE_TICKS 60U
 #define DIGS_SMOKER_TRAIL_TICKS 4U
+/*
+ * A direct canister strike hurts hard but is never lethal from full health:
+ * 40 sits below the head's 45, the smallest vital part, so no single hit can
+ * zero a vital part, and whole-body health lands at 60.  Limbs can still be
+ * taken off, which is the intended "that hurt" moment.
+ */
+#define DIGS_SMOKER_DIRECT_DAMAGE 40U
+/* Gentle downward nudge so a spent canister drops clear and rolls. */
+#define DIGS_SMOKER_SETTLE_FALL_Q16 4096L
+/* Charge window for the held throw, matching the firecracker's feel. */
+#define DIGS_SMOKER_CHARGE_TICKS 45U
 #define DIGS_HOT_RAIL_RANGE_CELLS 14U
 #define DIGS_HYDROSHOT_RANGE_CELLS 18U
 #define DIGS_REACTION_SAMPLES 128U
 #define DIGS_AI_MEMORY_TICKS 180U
 #define DIGS_AI_HEARING_TICKS 120U
-#define DIGS_AI_DECISION_TICKS 8U
-#define DIGS_AI_RETREAT_HEALTH 28U
+/*
+ * Gunfire carries 52 cells.  An explosion carries across the arena -- it is
+ * the loudest thing in the mine and the surest sign of where the fight is.
+ * Bots use it to choose where to roam, which is the difference between three
+ * bots wandering separate pockets and three bots converging on trouble.
+ */
+#define DIGS_AI_COMMOTION_CELLS 220U
+/* How long a roam destination stands before it is reconsidered. */
+#define DIGS_AI_ROAM_GOAL_TICKS 300U
+#define DIGS_AI_ROAM_ARRIVE_CELLS 6U
+/*
+ * Boring through an obstacle.
+ *
+ * A bore may be at most 2 * VOX_STRUCTURE_COHESION_CELLS + 1 cells thick.
+ * That is exactly the span the structural rule will hold up, so a tunnel this
+ * wide stays open; anything thicker caves in on the miner digging it, which
+ * is precisely the crush death the burial work made survivable but did not
+ * make pleasant.
+ */
+/*
+ * Widest wall a miner will bore through, in cells.
+ *
+ * This is not a taste knob -- it is bounded by the structural rule.  A cell
+ * is held up when solid material is within VOX_STRUCTURE_COHESION_CELLS
+ * horizontally, so the middle of a hole of width W needs (W + 1) / 2 <= 4,
+ * i.e. W <= 7.  Set to 9 the bots dug tunnels right at the collapse edge and
+ * stood in them: crushes went from 9 to 24 over a 10800-tick soak and hazard
+ * damage nearly doubled.  Six keeps a cell of margin.
+ */
+#define DIGS_AI_BREACH_MAX_CELLS 6U
+#define DIGS_AI_BREACH_PROBE_ROWS 3U
+#define DIGS_AI_BREACH_GIVEUP_TICKS 120U
+/*
+ * Quiet period after a bore before this miner may start another.
+ *
+ * Digging is the one thing a bot does that rearranges the world it is
+ * standing in, and cohesion only holds a span of about nine cells, so a miner
+ * that bores continuously eventually brings a roof down on itself.  Left
+ * unbounded that cost the soak 14 extra crushes and nearly doubled hazard
+ * damage -- the very "bots killing themselves randomly" this release set out
+ * to fix.  Five seconds between bores keeps digging a deliberate act.
+ */
+#define DIGS_AI_BREACH_LOCK_TICKS 300U
+/* How readily an archetype reaches for a tool rather than walking around. */
+/*
+ * How long a miner must be pinned against terrain before reaching for a tool.
+ *
+ * These were a quarter of a second, which is nothing -- a walking bot is
+ * BLOCKED_X against some lip or boulder constantly, so bots bored their way
+ * through the match and brought roofs down on themselves.  Digging has to be
+ * the last resort *after* the jump reflex has had time to fail, so the floor
+ * is a second and a half and the least eager archetype waits nearly three.
+ */
+#define DIGS_AI_STUCK_MIN_TICKS 90U
+#define DIGS_AI_STUCK_SPAN_TICKS 96U
+/*
+ * How often a bot deliberates.
+ *
+ * The stored counter is one less than the period: the throttle decrements and
+ * returns before it resets, so storing N yields N+1 ticks between
+ * deliberations.  The old fixed value of 8 therefore ran at a true period of
+ * 9, and every cadence figure derived from it was off by one.
+ *
+ * Period is personality-driven.  An impatient miner re-decides often and looks
+ * twitchy; a patient one commits to a choice and looks deliberate.  This is
+ * what makes CINDER frantic and RIVET measured, and it is the first use of the
+ * patience trait, which was dead weight until now.
+ *
+ *   period = MIN + patience * SPAN / 255      CINDER 5, FLAMEY 9, RIVET 13
+ */
+#define DIGS_AI_PERIOD_MIN_TICKS 4U
+#define DIGS_AI_PERIOD_SPAN_TICKS 12U
+/*
+ * Separate from the period: these are the widths of the duty-cycle windows the
+ * fire and bark gates test against.  They happen to have been the same number
+ * as the old period, which made the coupling look intentional when it was not.
+ */
+#define DIGS_AI_FIRE_WINDOW_TICKS 8U
+#define DIGS_AI_BARK_WINDOW_TICKS 8U
+/*
+ * Retreat entry is aggression-scaled: a berserker fights until almost dead, an
+ * engineer withdraws while it still has options.  RIVET 35, FLAMEY 26,
+ * CINDER 13.
+ */
+#define DIGS_AI_RETREAT_HEALTH_MIN 12U
+#define DIGS_AI_RETREAT_HEALTH_SPAN 36U
+/*
+ * A retreat is time-boxed, not health-boxed.  Nothing in the simulation heals
+ * a living miner -- health is only ever raised at match init and respawn -- so
+ * an exit condition phrased as "health recovered" is unreachable and a bot
+ * that once dropped below its threshold would retreat forever.  It withdraws
+ * for at most MAX ticks, then must fight for LOCK ticks before it may
+ * withdraw again.
+ */
+#define DIGS_AI_RETREAT_MAX_TICKS 120U
+#define DIGS_AI_RETREAT_LOCK_TICKS 180U
+/*
+ * Minimum ticks in a mode before a downgrade is allowed.  Escalations --
+ * anything urgent -- bypass this, so a bot never ignores an enemy that just
+ * appeared or a wound that just landed.  Without it modes flipped on every
+ * deliberation, which read as twitching rather than deciding.
+ */
+#define DIGS_AI_DWELL_ROAMING 24U
+#define DIGS_AI_DWELL_SEARCHING 20U
+#define DIGS_AI_DWELL_ATTACKING 16U
+#define DIGS_AI_DWELL_RETREATING 45U
+/*
+ * How far a bot looks for lava, in cells, before and after caution scaling.
+ * A cautious miner starts backing away roughly twice as early as a reckless
+ * one, which is most of what separates RIVET from CINDER in a hot cavern.
+ */
+/* Hazard level at which survival pre-empts the decision cadence entirely. */
+#define DIGS_AI_HAZARD_CRITICAL 2U
+/* Keep a little steam in reserve rather than arriving out of thrust. */
+#define DIGS_AI_HAZARD_STEAM_RESERVE 4096U
+#define DIGS_AI_HAZARD_BASE_MARGIN 4U
+#define DIGS_AI_HAZARD_CAUTION_SPAN 8U
 #define DIGS_SPAWN_HEADROOM_CELLS DIGS_SCALE(2U)
 #define DIGS_SPAWN_SUPPORT_CELLS DIGS_SCALE(2U)
 #define DIGS_LAVA_BASIN_TOP (VOX_WORLD_HEIGHT - DIGS_SCALE(12U))
 #define DIGS_RESPAWN_RETRY_TICKS 30U
+/*
+ * Health returned to a miner for a kill.
+ *
+ * This is the first and only path in the simulation that raises the health of
+ * a living miner -- every other write decrements or zeroes it -- so it is
+ * deliberately modest and capped at full.  It also means any AI rule that
+ * waits for health to recover is now merely rare rather than unreachable.
+ */
+#define DIGS_KILL_HEAL 50U
+
+/*
+ * Contracts: the running account between each pair of miners.
+ *
+ * Valence is the raw balance and tone is the band it falls in.  Two things
+ * keep the tone from chattering the way AI modes used to flip every eight
+ * ticks: a minimum dwell before any change, and a margin that makes leaving
+ * a tone harder than entering it.  Without the margin a pair sitting exactly
+ * on a boundary would oscillate every time a stray pebble hit somebody.
+ *
+ * Valence also creeps back toward zero while nothing is happening, so a
+ * grudge earned in the first minute does not lock the rest of the match --
+ * this is the mechanism by which peace is reachable at all.
+ */
+#define DIGS_CONTRACT_VALENCE_MAX 1000
+#define DIGS_CONTRACT_BONDED_AT 600
+#define DIGS_CONTRACT_TRUCE_AT 300
+#define DIGS_CONTRACT_WARM_AT 100
+#define DIGS_CONTRACT_NEEDLE_AT (-100)
+#define DIGS_CONTRACT_HOSTILE_AT (-300)
+#define DIGS_CONTRACT_FEUD_AT (-600)
+#define DIGS_CONTRACT_TONE_MARGIN 40
+#define DIGS_CONTRACT_TONE_DWELL_TICKS 180U
+#define DIGS_CONTRACT_DECAY_TICKS 300U
+#define DIGS_CONTRACT_DECAY_STEP 4
+
+/*
+ * Speech.  A miner does not answer instantly -- the pause before a reply is
+ * one of the more legible things about a personality, so it comes from
+ * patience, and how often they bother to speak at all comes from sociability.
+ */
+#define DIGS_SPEECH_DELAY_MIN 6U
+#define DIGS_SPEECH_DELAY_SPAN 60U
+#define DIGS_SPEECH_COOLDOWN_MIN 45U
+#define DIGS_SPEECH_COOLDOWN_SPAN 150U
+#define DIGS_SPEECH_REPLY_WINDOW 240U
+/* Silence between any two lines, from anyone.  One voice at a time. */
+/*
+ * Two floors, because a conversation is not evenly spaced.
+ *
+ * A single 150-tick floor spread every line the same distance apart, which
+ * reads as four people taking turns at a metronome rather than talking.
+ * Inside an exchange the gap is short so an answer lands while the first
+ * line is still hanging in the air; once an exchange dies out, the long
+ * floor buys the silence that makes the next one feel like it started.
+ */
+#define DIGS_SPEECH_FLOOR_IN_EXCHANGE 42U
+#define DIGS_SPEECH_FLOOR_BETWEEN 600U
+/* How long a conversation stays live after the last thing said in it. */
+/*
+ * How long an exchange stays live after a line, on top of how long that line
+ * took to say.
+ *
+ * This was a flat 200 ticks, which is shorter than a long line takes to
+ * deliver at all -- so a patient miner, whose whole character is waiting for
+ * you to finish, had its reply queued for longer than the exchange existed.
+ * The window tore down underneath it, the between-exchange floor of 480 then
+ * held the queued line, and RIVET answered seven to eleven seconds late into
+ * a conversation whose heat and line count had already been zeroed.  Measured
+ * before this: RIVET's replies averaged 452 ticks and peaked at 680, with two
+ * of five landing inside the window; CINDER, who interrupts, was always
+ * inside it.  The patient archetype was structurally excluded from the one
+ * feature this release is built around.
+ */
+#define DIGS_SPEECH_ANSWER_SLACK 200U
+/*
+ * Lines in one exchange before it is closed off.
+ *
+ * Without a cap the replies fed each other: four miners all answering each
+ * other's answers ran a single conversation to sixty lines and put the match
+ * back where the playtest complained about.  A remark, an answer, and
+ * somebody chiming in is a conversation; ten of them is a committee.
+ */
+#define DIGS_SPEECH_EXCHANGE_MAX 4U
+/*
+ * How long a line takes to say, per character.  A forty-character remark is
+ * about two seconds, which is roughly how long its bubble is up -- so a
+ * reply priced against it either lets the speaker finish or deliberately
+ * does not.
+ */
+#define DIGS_SPEECH_TICKS_PER_CHAR 3U
+#define DIGS_SPEECH_READ_MARGIN 66U
+#define DIGS_SPEECH_DURATION_MIN 96U
+#define DIGS_SPEECH_DURATION_MAX 264U
+/*
+ * How much of a line a miner sits through before answering, over 255.
+ * Patience is added to this, so RIVET waits past the end of what you said
+ * and CINDER is in at forty per cent.
+ */
+#define DIGS_SPEECH_PATIENCE_FLOOR 60U
+/*
+ * How hot an exchange has to get before it escalates, and how cool before it
+ * starts winding down.  Heat moves by one per line, in the direction of what
+ * that line was worth, so it takes a couple of exchanges' worth of agreement
+ * or provocation to swing -- which is what stops a single stray remark
+ * turning a truce into a shouting match.
+ */
+#define DIGS_SPEECH_HEAT_ANGRY (-2)
+#define DIGS_SPEECH_HEAT_CALM 2
+/* How near the crosshair a miner has to be to be the one you are addressing. */
+#define DIGS_SPEECH_AIM_CELLS 14U
+/* How long your own last line stays available as context for your next. */
+#define DIGS_SPEECH_SELF_WINDOW 420U
+/* Recent authored actions remain bark context briefly, but never become a
+ * second persistent conversation or a wall-clock-dependent state channel. */
+#define DIGS_BARK_CONTEXT_WINDOW 180U
+#define DIGS_BARK_NEAR_DEATH_HEALTH 25U
+#define DIGS_BARK_LAVA_MARGIN_CELLS 8L
+
+/*
+ * Pacing.
+ *
+ * Measured before this: 72 lines over a 10800-tick match, 26 of them
+ * repeating something said in the previous twelve.  A line every two and a
+ * half seconds is not a conversation, it is a commentary.  The target is
+ * 10-15, weighted toward things that actually happened.
+ *
+ * The urge interval is long and jittered; the roll that follows it is scaled
+ * by sociability, so RIVET speaks up about eight times in a hundred
+ * opportunities and FLAMEY nearer thirty.  Neither number is a schedule.
+ */
+#define DIGS_SPEECH_URGE_MIN 300U
+#define DIGS_SPEECH_URGE_SPAN 420U
+#define DIGS_SPEECH_URGE_SCALE 22U
+/* After the player speaks, everyone is briefly much likelier to answer. */
+#define DIGS_SPEECH_ANSWER_WINDOW 240U
+#define DIGS_SPEECH_ANSWER_BONUS 450U
+#define DIGS_SPEECH_ANSWER_MIN 30U
+#define DIGS_SPEECH_ANSWER_SPAN 60U
+/* Answering someone who just spoke to you is easier than starting. */
+#define DIGS_SPEECH_REPLY_BONUS 200U
+/* Speaking up about something aimed at somebody you have feelings about. */
+#define DIGS_SPEECH_CHIME_BONUS 60U
+/* How far a remark carries, and how far a mutter carries. */
+#define DIGS_SPEECH_EARSHOT_CELLS 70U
+#define DIGS_SPEECH_MUTTER_CELLS 14U
+/* What overhearing an attack on somebody is worth.  A fraction of a hit. */
+#define DIGS_SPEECH_OVERHEARD_VALENCE 4L
+/* Silence this long makes the next roll a certainty, so a quiet match still
+ * has voices in it without the ordinary roll having to be generous. */
+#define DIGS_SPEECH_DRY_TICKS 1500U
+/* At or above this urgency a thing is said whatever the dice say. */
+#define DIGS_SPEECH_ALWAYS_URGENCY 200U
+#define DIGS_SPEECH_EVENT_SCALE 1U
+/* Re-rolls allowed before taking whatever came up. */
+#define DIGS_SPEECH_PICK_TRIES 8U
 #define DIGS_MUZZLE_CLEARANCE_Q16 16384L
 
 static const vox_digs_weapon_properties digs_weapons[VOX_DIGS_TOOL_COUNT] = {
@@ -66,9 +397,9 @@ static const vox_digs_weapon_properties digs_weapons[VOX_DIGS_TOOL_COUNT] = {
      DIGS_PULASKI_CHARGE_TICKS, 0U},
     {"POPPER", 6U, 18U, 2U, 0U, 0U,
      VOX_DIGS_WEAPON_HITSCAN | VOX_DIGS_WEAPON_EXPLOSIVE, 0U, 0U},
-    {"SMOKER", 32U, 1U, 5U, 768U, 90U,
+    {"SMOKER", 60U, DIGS_SMOKER_DIRECT_DAMAGE, 5U, 768U, 90U,
      VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_DEPOSIT |
-     VOX_DIGS_WEAPON_GRAVITY, 0U, 0U},
+     VOX_DIGS_WEAPON_GRAVITY, DIGS_SMOKER_CHARGE_TICKS, 0U},
     {"HOT RAIL", 5U, 10U, 2U, 0U, 0U,
      VOX_DIGS_WEAPON_HITSCAN | VOX_DIGS_WEAPON_DEPOSIT, 0U, 0U},
     {"HYDROSHOT", 7U, 0U, 0U, 1664U, 14U,
@@ -83,18 +414,287 @@ static const vox_digs_weapon_properties digs_weapons[VOX_DIGS_TOOL_COUNT] = {
     {"FIRECRACKER", 48U, 42U, 8U, 768U, 50U,
      VOX_DIGS_WEAPON_PROJECTILE | VOX_DIGS_WEAPON_EXPLOSIVE |
      VOX_DIGS_WEAPON_GRAVITY, DIGS_FIRECRACKER_CHARGE_TICKS, 0U},
-    {"BORE DRILL", 10U, 100U, 3U, 0U, 0U,
+    {"BORING DRILL", 10U, 100U, 3U, 0U, 0U,
      VOX_DIGS_WEAPON_MELEE | VOX_DIGS_WEAPON_PENETRATING, 0U, 0U},
-    {"MINING RAIL", DIGS_RAIL_COOLDOWN_TICKS, DIGS_RAIL_MAX_DAMAGE, 0U,
+    {"RAILSHOT", DIGS_RAIL_COOLDOWN_TICKS, DIGS_RAIL_MAX_DAMAGE, 0U,
      0U, 0U, VOX_DIGS_WEAPON_HITSCAN | VOX_DIGS_WEAPON_PENETRATING,
      DIGS_RAIL_MAX_CHARGE_TICKS, DIGS_RAIL_START_ENERGY}
 };
 
 static void digs_step_projectiles(vox_digs_match *match);
 static void digs_step_effects(vox_digs_match *match);
+static void digs_step_contracts(vox_digs_match *match);
+static vox_u32 digs_abs_i32(vox_i32 value);
+static void digs_contract_adjust(vox_digs_match *match, vox_u16 a, vox_u16 b,
+                                 vox_i32 delta);
+static void digs_contract_note(vox_digs_match *match, vox_u16 actor,
+                               vox_u16 subject, vox_u16 stimulus);
+static void digs_speech_prompt(vox_digs_match *match, vox_u16 speaker,
+                               vox_u16 subject, vox_u16 stimulus);
+static void digs_speech_set(vox_digs_match *match, vox_u16 speaker,
+                            vox_u16 subject, vox_u16 stimulus);
+static vox_u32 digs_speech_chattiness(const vox_digs_match *match,
+                                      vox_u16 player);
+static int digs_speech_roll(const vox_digs_match *match, vox_u16 player,
+                            vox_u32 chance, vox_u16 salt);
+static vox_u16 digs_stimulus_mirror(vox_u16 stimulus);
+static vox_u16 digs_speech_chime_in(vox_u16 heard, int defends);
+static vox_u16 digs_speech_self_next(vox_u16 previous);
+static vox_u16 digs_speech_player_action_context(const vox_digs_match *match,
+                                                  vox_u16 player);
+
+/*
+ * Pick a player-only bark topic from authoritative state already present in
+ * the match.  No extra timer, random draw, or presentation callback is
+ * stored: events, held input, health, rope state, and the lava surface are
+ * all hashed already.  That keeps a bark reproducible from the same input
+ * stream while leaving chronicle format 1 and relationship storage alone.
+ */
+static vox_u16 digs_speech_player_action_context(const vox_digs_match *match,
+                                                  vox_u16 player)
+{
+    vox_u16 actions;
+    vox_u16 event_index;
+    vox_u32 latest_fire = 0xFFFFFFFFUL;
+    vox_u32 latest_hit = 0xFFFFFFFFUL;
+    vox_u32 latest_kill = 0xFFFFFFFFUL;
+    vox_u32 latest_headshot = 0xFFFFFFFFUL;
+    vox_u32 latest_cave_in = 0xFFFFFFFFUL;
+    vox_u32 latest_grapple = 0xFFFFFFFFUL;
+    vox_i32 feet;
+    const vox_digs_event *event;
+    vox_u32 age;
+    if (match == 0 || player >= match->rules.player_count) {
+        return (vox_u16)VOX_DIGS_STIMULUS_NONE;
+    }
+    actions = match->player_actions[player];
+    if (match->health[player] <= DIGS_BARK_NEAR_DEATH_HEALTH) {
+        return (vox_u16)VOX_DIGS_STIMULUS_NEAR_DEATH;
+    }
+    if (match->buried_ticks[player] != 0U) {
+        return (vox_u16)VOX_DIGS_STIMULUS_CAVE_IN;
+    }
+    if (match->ropes[player].state != VOX_DIGS_ROPE_IDLE ||
+        (actions & VOX_DIGS_ACTION_ROPE) != 0U) {
+        return (vox_u16)VOX_DIGS_STIMULUS_GRAPPLE;
+    }
+    for (event_index = 0U; event_index < match->event_count; ++event_index) {
+        event = &match->events[(match->event_head + match->event_count -
+                                1U - event_index) % VOX_DIGS_MAX_EVENTS];
+        if (event->tick > match->tick) {
+            continue;
+        }
+        age = match->tick - event->tick;
+        if (age > DIGS_BARK_CONTEXT_WINDOW) {
+            continue;
+        }
+        if (event->source == player) {
+            switch (event->type) {
+            case VOX_DIGS_EVENT_HEADSHOT:
+                if (age < latest_headshot) latest_headshot = age;
+                break;
+            case VOX_DIGS_EVENT_KILL:
+                if (age < latest_kill) latest_kill = age;
+                break;
+            case VOX_DIGS_EVENT_CAVE_IN:
+                if (age < latest_cave_in) latest_cave_in = age;
+                break;
+            case VOX_DIGS_EVENT_ROPE_ATTACH:
+            case VOX_DIGS_EVENT_ROPE_CAST:
+            case VOX_DIGS_EVENT_SHIP_GRAPPLE:
+                if (age < latest_grapple) latest_grapple = age;
+                break;
+            case VOX_DIGS_EVENT_DAMAGE:
+            case VOX_DIGS_EVENT_DEBRIS_IMPACT:
+                if (age < latest_hit) latest_hit = age;
+                break;
+            case VOX_DIGS_EVENT_WEAPON_FIRE:
+                if (age < latest_fire) latest_fire = age;
+                break;
+            default:
+                break;
+            }
+        }
+        if (event->target == player &&
+            (event->type == VOX_DIGS_EVENT_CRUSH ||
+             event->type == VOX_DIGS_EVENT_CAVE_IN)) {
+            if (age < latest_cave_in) latest_cave_in = age;
+        }
+    }
+    if (latest_headshot != 0xFFFFFFFFUL) {
+        return (vox_u16)VOX_DIGS_STIMULUS_HUMILIATION;
+    }
+    if (latest_kill != 0xFFFFFFFFUL) {
+        return (vox_u16)VOX_DIGS_STIMULUS_KILL;
+    }
+    if (latest_cave_in != 0xFFFFFFFFUL) {
+        return (vox_u16)VOX_DIGS_STIMULUS_CAVE_IN;
+    }
+    if (latest_grapple != 0xFFFFFFFFUL) {
+        return (vox_u16)VOX_DIGS_STIMULUS_GRAPPLE;
+    }
+    if (latest_hit != 0xFFFFFFFFUL &&
+        (latest_fire == 0xFFFFFFFFUL || latest_hit <= latest_fire)) {
+        return (vox_u16)VOX_DIGS_STIMULUS_HIT;
+    }
+    if (latest_fire != 0xFFFFFFFFUL &&
+        (actions & VOX_DIGS_ACTION_FIRE) == 0U) {
+        return (vox_u16)VOX_DIGS_STIMULUS_MISS;
+    }
+    feet = (match->players[player].position_y.value_q16 +
+            match->players[player].half_height_q16) >> 16;
+    if ((feet + DIGS_BARK_LAVA_MARGIN_CELLS >=
+         (vox_i32)match->lava_surface_y ||
+         match->tick >= match->rules.lava_start_tick) &&
+        (actions & (VOX_DIGS_ACTION_LEFT | VOX_DIGS_ACTION_RIGHT |
+                    VOX_DIGS_ACTION_JUMP | VOX_DIGS_ACTION_STEAM |
+                    VOX_DIGS_ACTION_DASH)) != 0U) {
+        return (vox_u16)VOX_DIGS_STIMULUS_ESCAPE;
+    }
+    if ((actions & VOX_DIGS_ACTION_FIRE) != 0U) {
+        return (vox_u16)VOX_DIGS_STIMULUS_WEAPON;
+    }
+    if ((actions & (VOX_DIGS_ACTION_LEFT | VOX_DIGS_ACTION_RIGHT |
+                    VOX_DIGS_ACTION_JUMP | VOX_DIGS_ACTION_STEAM |
+                    VOX_DIGS_ACTION_DASH)) != 0U) {
+        return (vox_u16)VOX_DIGS_STIMULUS_MOVE;
+    }
+    return (vox_u16)VOX_DIGS_STIMULUS_NONE;
+}
+
+/*
+ * What the miner you are driving would say if you pressed bark right now.
+ *
+ * Whoever last had dealings with you, if it was recent enough to still be on
+ * anyone's mind; otherwise whoever is closest; otherwise the rock.  The point
+ * is that the button is always in context without ever speaking for you.
+ */
+static void digs_speech_player_context(vox_digs_match *match, vox_u16 player)
+{
+    vox_u16 other;
+    vox_u16 best = VOX_DIGS_NO_PLAYER;
+    vox_u32 freshest = 0U;
+    vox_u32 nearest = 0xFFFFFFFFUL;
+    vox_u16 stimulus = (vox_u16)VOX_DIGS_STIMULUS_IDLE;
+    vox_u16 action_context = digs_speech_player_action_context(match, player);
+    if (action_context != VOX_DIGS_STIMULUS_NONE) {
+        match->speech_stimulus[player] = action_context;
+        match->speech_subject[player] = VOX_DIGS_NO_PLAYER;
+        match->speech_delay[player] = 0U;
+        return;
+    }
+    for (other = 0U; other < match->rules.player_count; ++other) {
+        const vox_digs_contract *contract;
+        vox_i32 gap;
+        if (other == player || !vox_digs_player_is_active(match, other)) {
+            continue;
+        }
+        contract = vox_digs_contract_get(match, player, other);
+        if (contract != 0 &&
+            contract->last_stimulus != VOX_DIGS_STIMULUS_NONE &&
+            contract->last_stimulus_tick + DIGS_SPEECH_REPLY_WINDOW >=
+            match->tick &&
+            contract->last_stimulus_tick >= freshest) {
+            freshest = contract->last_stimulus_tick;
+            best = other;
+            /* Answer what was done to you, not what you did. */
+            stimulus = contract->last_actor == player ?
+                       contract->last_stimulus :
+                       digs_stimulus_mirror(contract->last_stimulus);
+            if (stimulus == VOX_DIGS_STIMULUS_NONE) {
+                stimulus = (vox_u16)VOX_DIGS_STIMULUS_TAUNTED;
+            }
+        }
+        if (freshest == 0U && match->alive[other]) {
+            gap = digs_abs_i32(
+                (match->players[other].position_x.value_q16 >> 16) -
+                (match->players[player].position_x.value_q16 >> 16));
+            /*
+             * Only somebody actually within earshot.  Without the limit the
+             * nearest miner was picked however far away they were, so a
+             * player alone at one end of the map was addressing a bot at the
+             * other -- which is why talking to yourself never happened and
+             * the lines came out naming somebody who was not there.
+             */
+            if ((vox_u32)gap < nearest &&
+                (vox_u32)gap <= DIGS_SPEECH_EARSHOT_CELLS) {
+                nearest = (vox_u32)gap;
+                best = other;
+                stimulus = (vox_u16)VOX_DIGS_STIMULUS_SPOTTED;
+            }
+        }
+    }
+    /*
+     * The crosshair wins.  If you are pointing at somebody, you are talking
+     * to them -- still one button, but you get to pick who you needle rather
+     * than having the game decide from whatever happened last.
+     */
+    {
+        vox_u16 aimed = VOX_DIGS_NO_PLAYER;
+        vox_u32 closest = DIGS_SPEECH_AIM_CELLS + 1U;
+        for (other = 0U; other < match->rules.player_count; ++other) {
+            vox_u32 gap;
+            if (other == player || !match->alive[other] ||
+                !vox_digs_player_is_active(match, other)) {
+                continue;
+            }
+            gap = digs_abs_i32(
+                (match->players[other].position_x.value_q16 >> 16) -
+                (vox_i32)match->aim_x[player]) +
+                digs_abs_i32(
+                (match->players[other].position_y.value_q16 >> 16) -
+                (vox_i32)match->aim_y[player]);
+            if (gap < closest) {
+                closest = gap;
+                aimed = other;
+            }
+        }
+        if (aimed != VOX_DIGS_NO_PLAYER) {
+            const vox_digs_contract *aimed_at =
+                vox_digs_contract_get(match, player, aimed);
+            best = aimed;
+            if (aimed_at != 0 &&
+                aimed_at->last_stimulus != VOX_DIGS_STIMULUS_NONE &&
+                aimed_at->last_stimulus_tick + DIGS_SPEECH_REPLY_WINDOW >=
+                match->tick) {
+                stimulus = aimed_at->last_actor == player ?
+                           aimed_at->last_stimulus :
+                           digs_stimulus_mirror(aimed_at->last_stimulus);
+                if (stimulus == VOX_DIGS_STIMULUS_NONE) {
+                    stimulus = (vox_u16)VOX_DIGS_STIMULUS_TAUNTED;
+                }
+            } else {
+                stimulus = (vox_u16)VOX_DIGS_STIMULUS_SPOTTED;
+            }
+        }
+    }
+    /*
+     * Nothing and nobody to talk about, but you said something recently --
+     * so carry on from it.  You hear yourself the same way the others hear
+     * you, and without this a miner alone in the mine just fires unrelated
+     * remarks at the rock.
+     */
+    if (best == VOX_DIGS_NO_PLAYER &&
+        match->speech_self_stimulus[player] != VOX_DIGS_STIMULUS_NONE &&
+        match->speech_self_tick[player] + DIGS_SPEECH_SELF_WINDOW >=
+        match->tick) {
+        vox_u16 carried =
+            digs_speech_self_next(match->speech_self_stimulus[player]);
+        if (carried != VOX_DIGS_STIMULUS_NONE) {
+            stimulus = carried;
+        }
+    }
+    match->speech_stimulus[player] = stimulus;
+    match->speech_subject[player] = best;
+    match->speech_delay[player] = 0U;
+}
+
+
+static void digs_step_speech(vox_digs_match *match);
 static void digs_step_reactions(vox_digs_match *match);
 static void digs_update_lava(vox_digs_match *match);
 static void digs_apply_lava_hazards(vox_digs_match *match);
+static void digs_apply_fluid_hazards(vox_digs_match *match);
 static void digs_environment_defeat(vox_digs_match *match, vox_u16 victim);
 static void digs_spawn_effect(vox_digs_match *match, vox_u16 material,
                               vox_i32 x_q16, vox_i32 y_q16,
@@ -114,8 +714,35 @@ static void digs_emit_event(vox_digs_match *match, vox_u16 type,
 static void digs_init_anatomy(vox_digs_match *match, vox_u16 player);
 static void digs_step_bleeding(vox_digs_match *match);
 static void digs_step_rope(vox_digs_match *match, vox_u16 player);
+static void digs_replay_frame_init(vox_digs_replay_frame *frame);
+static void digs_replay_capture(vox_digs_match *match);
+static void digs_spawn_corpse_assembly(vox_digs_match *match,
+                                       vox_u16 victim, vox_u16 killer);
+static void digs_spawn_blast_debris(vox_digs_match *match, vox_u32 x,
+                                    vox_u32 y, vox_u16 radius,
+                                    vox_u16 scrap, vox_u16 source,
+                                    vox_u16 weapon);
+static void digs_step_structural_cascades(vox_digs_match *match);
+static void digs_step_rigid_impacts(vox_digs_match *match);
+static vox_result digs_blast(vox_digs_match *match, vox_u32 x, vox_u32 y,
+                             vox_u32 z, vox_u16 radius, vox_i32 heat_q16,
+                             vox_u16 source, vox_u16 weapon);
+static void digs_recycle_sleeping_rigids(vox_digs_match *match);
 static void digs_detach_rope(vox_digs_match *match, vox_u16 player,
                              vox_u16 event_type);
+static int digs_player_extracted(const vox_digs_match *match,
+                                 vox_u16 player);
+static int digs_dropship_contains_point(const vox_digs_match *match,
+                                        vox_i32 x_q16, vox_i32 y_q16,
+                                        vox_i32 margin_q16);
+static void digs_dropship_stage_player(vox_digs_match *match,
+                                       vox_u16 player);
+static int digs_dropship_player_near(const vox_digs_match *match,
+                                     vox_u16 player, vox_i32 radius_q16);
+static int digs_dropship_player_on_deck(const vox_digs_match *match,
+                                        vox_u16 player);
+static void digs_dropship_follow_player(vox_digs_match *match,
+                                        vox_u16 player);
 static vox_u32 digs_abs_i32(vox_i32 value);
 static vox_i32 digs_div_trunc_positive(vox_i32 value, vox_u32 divisor);
 static vox_i32 digs_q16_to_cell(vox_i32 value);
@@ -176,6 +803,12 @@ int vox_digs_player_is_bot(const vox_digs_match *match, vox_u16 player)
 {
     return vox_digs_player_is_active(match, player) &&
            (match->rules.bot_mask & (vox_u16)(1U << player)) != 0U;
+}
+
+static int digs_player_extracted(const vox_digs_match *match, vox_u16 player)
+{
+    return vox_digs_player_is_active(match, player) &&
+           (match->dropship.extracted_mask & (vox_u16)(1U << player)) != 0U;
 }
 
 static vox_u16 digs_count_bits(vox_u16 value)
@@ -301,7 +934,7 @@ static int digs_point_hits_player(const vox_digs_match *match,
     vox_u16 part;
     vox_i32 center_x = match->players[player].position_x.value_q16;
     vox_i32 center_y = match->players[player].position_y.value_q16;
-    if (!match->alive[player]) {
+    if (!match->alive[player] || digs_player_extracted(match, player)) {
         return 0;
     }
     for (part = 0U; part < VOX_DIGS_ANATOMY_PART_COUNT; ++part) {
@@ -341,6 +974,7 @@ static void digs_init_anatomy(vox_digs_match *match, vox_u16 player)
     }
     match->bleed_accumulator_q8[player] = 0U;
     match->clot_ticks[player] = 0U;
+    match->buried_ticks[player] = 0U;
 }
 
 static vox_u32 digs_abs_difference(vox_u32 left, vox_u32 right)
@@ -740,6 +1374,21 @@ static vox_result digs_set_column(vox_world *world, vox_u32 x, vox_u32 y,
     return VOX_OK;
 }
 
+static void digs_write_map_column(vox_world *world, vox_u32 x, vox_u32 y,
+                                  vox_u16 material)
+{
+    vox_u32 z;
+    for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+        vox_cell *cell = &world->cells[(z * VOX_WORLD_HEIGHT *
+                                        VOX_WORLD_WIDTH) +
+                                       (y * VOX_WORLD_WIDTH) + x];
+        cell->material = material;
+        cell->flags = 0U;
+        cell->temperature_q16 = 20L << 16;
+        cell->damage_q16 = 0L;
+    }
+}
+
 static vox_result digs_add_metal_span(vox_world *world, vox_u32 left,
                                       vox_u32 right, vox_u32 y)
 {
@@ -887,12 +1536,12 @@ vox_result vox_digs_generate_map(vox_world *world, vox_u16 map_style,
     for (y = 0U; y < VOX_WORLD_HEIGHT; ++y) {
         for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
             vox_u16 material = digs_map_material(map_style, seed, x, y);
-            if (material != VOX_MAT_AIR &&
-                digs_set_column(world, x, y, material) != VOX_OK) {
-                return VOX_ERR_INVALID;
+            if (material != VOX_MAT_AIR) {
+                digs_write_map_column(world, x, y, material);
             }
         }
     }
+    if (vox_world_rebuild(world) != VOX_OK) return VOX_ERR_INVALID;
     if (digs_add_overhead_fixtures(world, map_style, seed) != VOX_OK) {
         return VOX_ERR_INVALID;
     }
@@ -1015,14 +1664,116 @@ static int digs_cell_is_rope_anchor(const vox_world *world,
         const vox_cell *cell = vox_world_cell(world, x, y, z);
         if (cell != 0 &&
             (cell->flags & VOX_CELL_LOOSE) == 0U &&
-            (cell->material == VOX_MAT_BEDROCK ||
-             cell->material == VOX_MAT_STONE ||
-             cell->material == VOX_MAT_METAL ||
-             cell->material == VOX_MAT_COAL)) {
+            cell->material == VOX_MAT_METAL) {
             return 1;
         }
     }
     return 0;
+}
+
+static int digs_dropship_contains_point(const vox_digs_match *match,
+                                        vox_i32 x_q16, vox_i32 y_q16,
+                                        vox_i32 margin_q16)
+{
+    vox_i32 delta_x;
+    vox_i32 delta_y;
+    if (match == 0 || match->dropship.phase ==
+        VOX_DIGS_DROPSHIP_PHASE_DEPARTED) {
+        return 0;
+    }
+    delta_x = x_q16 - match->dropship.position_x_q16;
+    delta_y = y_q16 - match->dropship.position_y_q16;
+    if (delta_x < 0L) delta_x = -delta_x;
+    if (delta_y < 0L) delta_y = -delta_y;
+    return delta_x <= VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16 + margin_q16 &&
+           delta_y <= VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16 + margin_q16;
+}
+
+static int digs_dropship_player_near(const vox_digs_match *match,
+                                     vox_u16 player, vox_i32 radius_q16)
+{
+    if (!vox_digs_player_is_active(match, player)) {
+        return 0;
+    }
+    return digs_dropship_contains_point(
+        match, match->players[player].position_x.value_q16,
+        match->players[player].position_y.value_q16, radius_q16);
+}
+
+/* Ejection is only for an actual launch-deck rider.  Boarding and grapple
+ * reach intentionally extend beyond the hull, so using that broader radius
+ * here would teleport a nearby miner and could put their rope through rock. */
+static int digs_dropship_player_on_deck(const vox_digs_match *match,
+                                        vox_u16 player)
+{
+    vox_i32 deck_y;
+    if (match == 0 || !vox_digs_player_is_active(match, player) ||
+        !match->alive[player] || digs_player_extracted(match, player)) {
+        return 0;
+    }
+    deck_y = match->dropship.position_y_q16 -
+             VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16 -
+             match->players[player].half_height_q16;
+    return match->players[player].position_x.value_q16 >=
+               match->dropship.position_x_q16 -
+               VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16 &&
+           match->players[player].position_x.value_q16 <=
+               match->dropship.position_x_q16 +
+               VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16 &&
+           match->players[player].position_y.value_q16 == deck_y;
+}
+
+/* The ground spawn finder still records a safe respawn target.  The initial
+ * live body rides on the moving dropship deck with a compact slot offset.
+ * No terrain platform is synthesized for this vehicle-only state. */
+static void digs_dropship_stage_player(vox_digs_match *match,
+                                       vox_u16 player)
+{
+    vox_i32 offset_x;
+    if (match == 0 || !vox_digs_player_is_active(match, player) ||
+        !match->alive[player] || digs_player_extracted(match, player) ||
+        (match->dropship.launched_mask & (vox_u16)(1U << player)) != 0U) {
+        return;
+    }
+    offset_x = ((vox_i32)player * 2L -
+                (vox_i32)(match->rules.player_count - 1U)) * 49152L;
+    match->players[player].position_x.value_q16 =
+        match->dropship.position_x_q16 + offset_x;
+    match->players[player].position_y.value_q16 =
+        match->dropship.position_y_q16 -
+        VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16 -
+        match->players[player].half_height_q16;
+    match->players[player].velocity_x.value_q16 =
+        match->dropship.velocity_x_q16;
+    match->players[player].velocity_y.value_q16 = 0L;
+    match->players[player].flags = VOX_PHYSICS_BODY_GROUNDED;
+}
+
+static void digs_dropship_follow_player(vox_digs_match *match,
+                                        vox_u16 player)
+{
+    if (!vox_digs_player_is_active(match, player) ||
+        digs_player_extracted(match, player) ||
+        (match->dropship.launched_mask & (vox_u16)(1U << player)) != 0U ||
+        !digs_dropship_player_near(match, player,
+                                   VOX_DIGS_DROPSHIP_BOARD_RADIUS_Q16)) {
+        return;
+    }
+    digs_dropship_stage_player(match, player);
+}
+
+static vox_u16 digs_rope_cell_material(const vox_world *world,
+                                       vox_u32 x, vox_u32 y)
+{
+    vox_u32 z;
+    vox_u16 fallback = VOX_MAT_STONE;
+    for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+        const vox_cell *cell = vox_world_cell(world, x, y, z);
+        if (cell == 0 || cell->material == VOX_MAT_AIR) continue;
+        if (cell->material == VOX_MAT_METAL) return VOX_MAT_METAL;
+        fallback = cell->material;
+    }
+    return fallback;
 }
 
 static vox_i32 digs_distance_approx(vox_i32 delta_x, vox_i32 delta_y)
@@ -1048,6 +1799,7 @@ static void digs_detach_rope(vox_digs_match *match, vox_u16 player,
     rope->state = VOX_DIGS_ROPE_IDLE;
     rope->point_count = 0U;
     rope->target_player = VOX_DIGS_NO_PLAYER;
+    rope->flags = 0U;
     rope->tension_q16 = 0L;
     digs_emit_event(match, event_type, player, VOX_DIGS_NO_PLAYER,
                     VOX_DIGS_TOOL_PICK, VOX_MAT_METAL,
@@ -1118,22 +1870,179 @@ static int digs_segment_is_clear(const vox_world *world,
     return 1;
 }
 
+/*
+ * Choose a visible terrain target from a bounded aim cone.  The eight best
+ * candidates are retained in score order so a second press can deterministically
+ * choose the next target instead of merely casting at the same cell again.
+ */
+static int digs_select_rope_target(const vox_digs_match *match, vox_u16 player,
+                                   vox_u16 skip, vox_u16 *target_x,
+                                   vox_u16 *target_y, vox_u16 avoid_x,
+                                   vox_u16 avoid_y)
+{
+    vox_i32 source_x = match->players[player].position_x.value_q16;
+    vox_i32 source_y = match->players[player].position_y.value_q16;
+    vox_i32 source_cell_x = digs_q16_to_cell(source_x);
+    vox_i32 source_cell_y = digs_q16_to_cell(source_y);
+    vox_i32 aim_x = (vox_i32)match->aim_x[player] - source_cell_x;
+    vox_i32 aim_y = (vox_i32)match->aim_y[player] - source_cell_y;
+    vox_i32 score[8];
+    vox_u16 candidate_x[8];
+    vox_u16 candidate_y[8];
+    vox_u16 count = 0U;
+    vox_i32 min_x;
+    vox_i32 max_x;
+    vox_i32 min_y;
+    vox_i32 max_y;
+    vox_i32 x;
+    vox_i32 y;
+    vox_u16 i;
+    if (aim_x == 0L && aim_y == 0L) {
+        aim_x = match->facing_right[player] ? 1L : -1L;
+    }
+    min_x = source_cell_x - (DIGS_ROPE_MAX_LENGTH_Q16 >> 16);
+    max_x = source_cell_x + (DIGS_ROPE_MAX_LENGTH_Q16 >> 16);
+    min_y = source_cell_y - (DIGS_ROPE_MAX_LENGTH_Q16 >> 16);
+    max_y = source_cell_y + (DIGS_ROPE_MAX_LENGTH_Q16 >> 16);
+    if (min_x < 0L) min_x = 0L;
+    if (min_y < 0L) min_y = 0L;
+    if (max_x >= (vox_i32)VOX_WORLD_WIDTH)
+        max_x = (vox_i32)VOX_WORLD_WIDTH - 1L;
+    if (max_y >= (vox_i32)VOX_WORLD_HEIGHT)
+        max_y = (vox_i32)VOX_WORLD_HEIGHT - 1L;
+    for (y = min_y; y <= max_y; ++y) {
+        for (x = min_x; x <= max_x; ++x) {
+            vox_i32 delta_x = x - source_cell_x;
+            vox_i32 delta_y = y - source_cell_y;
+            vox_i32 dot = delta_x * aim_x + delta_y * aim_y;
+            vox_i32 cross;
+            vox_i32 distance_q16;
+            vox_i32 distance_cells;
+            vox_i32 value;
+            vox_u16 material;
+            vox_u16 insert;
+            if ((delta_x == 0L && delta_y == 0L) || dot <= 0L ||
+                ((vox_u16)x == avoid_x && (vox_u16)y == avoid_y) ||
+                !digs_cell_is_solid(&match->world, (vox_u32)x,
+                                    (vox_u32)y)) continue;
+            distance_q16 = digs_distance_approx(delta_x << 16,
+                                                delta_y << 16);
+            if (distance_q16 < DIGS_ROPE_MIN_LENGTH_Q16 ||
+                distance_q16 > DIGS_ROPE_MAX_LENGTH_Q16 ||
+                !digs_segment_is_clear(&match->world, source_x, source_y,
+                    (x << 16) + 32768L, (y << 16) + 32768L, 0, 0)) continue;
+            distance_cells = distance_q16 >> 16;
+            cross = delta_x * aim_y - delta_y * aim_x;
+            if (cross < 0L) cross = -cross;
+            value = (cross * 1024L) / (dot + 1L) + distance_cells * 4L;
+            material = digs_rope_cell_material(&match->world,
+                                               (vox_u32)x, (vox_u32)y);
+            if (material == VOX_MAT_METAL) value -= 512L;
+            insert = 0U;
+            while (insert < count &&
+                   (score[insert] < value ||
+                    (score[insert] == value && candidate_x[insert] <=
+                     (vox_u16)x))) insert++;
+            if (insert >= 8U) continue;
+            if (count < 8U) count++;
+            for (i = (vox_u16)(count - 1U); i > insert; --i) {
+                score[i] = score[i - 1U];
+                candidate_x[i] = candidate_x[i - 1U];
+                candidate_y[i] = candidate_y[i - 1U];
+            }
+            score[insert] = value;
+            candidate_x[insert] = (vox_u16)x;
+            candidate_y[insert] = (vox_u16)y;
+        }
+    }
+    /* The dropship is a virtual solid target; it is not written into terrain. */
+    if (match->dropship.phase != VOX_DIGS_DROPSHIP_PHASE_DEPARTED) {
+        vox_i32 ship_x = digs_q16_to_cell(match->dropship.position_x_q16);
+        vox_i32 ship_y = digs_q16_to_cell(match->dropship.position_y_q16);
+        vox_i32 delta_x = ship_x - source_cell_x;
+        vox_i32 delta_y = ship_y - source_cell_y;
+        vox_i32 dot = delta_x * aim_x + delta_y * aim_y;
+        vox_i32 distance_q16 = digs_distance_approx(delta_x << 16,
+                                                     delta_y << 16);
+        if (ship_x >= 0L && ship_y >= 0L &&
+            ship_x < (vox_i32)VOX_WORLD_WIDTH &&
+            ship_y < (vox_i32)VOX_WORLD_HEIGHT &&
+            dot > 0L && distance_q16 >= DIGS_ROPE_MIN_LENGTH_Q16 &&
+            distance_q16 <= DIGS_ROPE_MAX_LENGTH_Q16 &&
+            ((vox_u16)ship_x != avoid_x || (vox_u16)ship_y != avoid_y) &&
+            digs_segment_is_clear(&match->world, source_x, source_y,
+                match->dropship.position_x_q16,
+                match->dropship.position_y_q16, 0, 0)) {
+            vox_i32 cross = delta_x * aim_y - delta_y * aim_x;
+            vox_i32 value;
+            vox_u16 insert;
+            if (cross < 0L) cross = -cross;
+            value = (cross * 1024L) / (dot + 1L) +
+                    (distance_q16 >> 16) * 4L - 768L;
+            insert = 0U;
+            while (insert < count &&
+                   (score[insert] < value ||
+                    (score[insert] == value && candidate_x[insert] <=
+                     (vox_u16)ship_x))) insert++;
+            if (insert < 8U) {
+                if (count < 8U) count++;
+                for (i = (vox_u16)(count - 1U); i > insert; --i) {
+                    score[i] = score[i - 1U];
+                    candidate_x[i] = candidate_x[i - 1U];
+                    candidate_y[i] = candidate_y[i - 1U];
+                }
+                score[insert] = value;
+                candidate_x[insert] = (vox_u16)ship_x;
+                candidate_y[insert] = (vox_u16)ship_y;
+            }
+        }
+    }
+    if (count == 0U) return 0;
+    i = (vox_u16)(skip % count);
+    *target_x = candidate_x[i];
+    *target_y = candidate_y[i];
+    return 1;
+}
+
 static int digs_begin_rope_cast(vox_digs_match *match, vox_u16 player)
 {
     vox_digs_rope *rope = &match->ropes[player];
     vox_i32 source_x = match->players[player].position_x.value_q16;
     vox_i32 source_y = match->players[player].position_y.value_q16;
-    vox_i32 delta_x = ((vox_i32)match->aim_x[player] << 16) + 32768L -
-                      source_x;
-    vox_i32 delta_y = ((vox_i32)match->aim_y[player] << 16) + 32768L -
-                      source_y;
-    vox_i32 distance = digs_distance_approx(delta_x, delta_y);
+    vox_u16 target_x = match->aim_x[player];
+    vox_u16 target_y = match->aim_y[player];
+    vox_i32 delta_x;
+    vox_i32 delta_y;
+    vox_i32 distance;
+    vox_u16 avoid_x = 65535U;
+    vox_u16 avoid_y = 65535U;
+    vox_u16 skip = 0U;
     vox_i32 divisor;
     vox_i32 direction_x_q8;
     vox_i32 direction_y_q8;
-    if (distance <= 0 || rope->state != VOX_DIGS_ROPE_IDLE) {
+    if (rope->state != VOX_DIGS_ROPE_IDLE) {
         return 0;
     }
+    if (rope->retarget_cursor != 0U) {
+        avoid_x = rope->target_x;
+        avoid_y = rope->target_y;
+        /* The current target is removed from the sorted candidate list.  A
+         * cursor of one therefore selects the first alternative; later
+         * presses advance through the remaining stable list instead of
+         * repeatedly returning to the best target. */
+        skip = (vox_u16)(rope->retarget_cursor - 1U);
+    }
+    if (!digs_select_rope_target(match, player, skip, &target_x, &target_y,
+                                 avoid_x, avoid_y)) {
+        /* A cast without a visible terrain, fixture, ship, or miner target
+         * is a real miss.  Never turn an arbitrary aim coordinate into a
+         * phantom anchor. */
+        return 0;
+    }
+    delta_x = ((vox_i32)target_x << 16) + 32768L - source_x;
+    delta_y = ((vox_i32)target_y << 16) + 32768L - source_y;
+    distance = digs_distance_approx(delta_x, delta_y);
+    if (distance <= 0) return 0;
     divisor = distance / 256L;
     if (divisor <= 0L) {
         divisor = 1L;
@@ -1156,6 +2065,11 @@ static int digs_begin_rope_cast(vox_digs_match *match, vox_u16 player)
     rope->integrity = 100U;
     rope->point_count = 0U;
     rope->target_player = VOX_DIGS_NO_PLAYER;
+    rope->flags = 0U;
+    rope->target_x = 0U;
+    rope->target_y = 0U;
+    rope->target_x = target_x;
+    rope->target_y = target_y;
     digs_emit_event(match, VOX_DIGS_EVENT_ROPE_CAST, player,
                     VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK,
                     VOX_MAT_METAL, source_x, source_y, 0U,
@@ -1196,6 +2110,8 @@ static void digs_rope_hook_player(vox_digs_match *match, vox_u16 owner,
     rope->state = VOX_DIGS_ROPE_IDLE;
     rope->point_count = 0U;
     rope->target_player = VOX_DIGS_NO_PLAYER;
+    rope->target_x = 0U;
+    rope->target_y = 0U;
 }
 
 static void digs_step_rope_cast(vox_digs_match *match, vox_u16 player)
@@ -1226,12 +2142,59 @@ static void digs_step_rope_cast(vox_digs_match *match, vox_u16 player)
             digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_BREAK);
             return;
         }
+        if (digs_dropship_contains_point(match, rope->hook_x_q16,
+                                         rope->hook_y_q16, 0L)) {
+            vox_digs_rope_point *point = &rope->points[0];
+            rope->anchor_x_q16 = match->dropship.position_x_q16;
+            rope->anchor_y_q16 = match->dropship.position_y_q16;
+            rope->length_q16 = digs_distance_approx(
+                rope->anchor_x_q16 -
+                    match->players[player].position_x.value_q16,
+                rope->anchor_y_q16 -
+                    match->players[player].position_y.value_q16);
+            if (rope->length_q16 < DIGS_ROPE_MIN_LENGTH_Q16) {
+                rope->length_q16 = DIGS_ROPE_MIN_LENGTH_Q16;
+            }
+            point->position_x_q16 = rope->anchor_x_q16;
+            point->position_y_q16 = rope->anchor_y_q16;
+            point->previous_x_q16 = rope->anchor_x_q16;
+            point->previous_y_q16 = rope->anchor_y_q16;
+            rope->point_count = 1U;
+            rope->state = VOX_DIGS_ROPE_ATTACHED;
+            rope->tension_q16 = 0L;
+            rope->flags = VOX_DIGS_ROPE_TARGET_SHIP;
+            rope->target_x = (vox_u16)x_cell;
+            rope->target_y = (vox_u16)y_cell;
+            digs_emit_event(match, VOX_DIGS_EVENT_ROPE_ATTACH, player,
+                            VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK,
+                            VOX_MAT_METAL, rope->anchor_x_q16,
+                            rope->anchor_y_q16,
+                            (vox_u16)(rope->length_q16 >> 16),
+                            (vox_u16)(digs_noise(match->rules.seed,
+                                match->tick, player,
+                                0x524F5045U) & 7U));
+            digs_emit_event(match, VOX_DIGS_EVENT_SHIP_GRAPPLE, player,
+                            VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK,
+                            VOX_MAT_METAL, rope->anchor_x_q16,
+                            rope->anchor_y_q16,
+                            (vox_u16)(rope->length_q16 >> 16), 0U);
+            return;
+        }
         /* Terrain wins a same-sample tie, preventing hooks through cover. */
         if (digs_cell_is_solid(&match->world, (vox_u32)x_cell,
                                (vox_u32)y_cell)) {
-            if (digs_cell_is_rope_anchor(&match->world, (vox_u32)x_cell,
-                                         (vox_u32)y_cell)) {
-                vox_digs_rope_point *point = &rope->points[0];
+            vox_digs_rope_point *point = &rope->points[0];
+                const vox_cell *target_cell = 0;
+                vox_u32 target_z;
+                for (target_z = 0U; target_z < VOX_WORLD_DEPTH; ++target_z) {
+                    const vox_cell *sample = vox_world_cell(
+                        &match->world, (vox_u32)x_cell, (vox_u32)y_cell,
+                        target_z);
+                    if (sample != 0 && sample->material != VOX_MAT_AIR) {
+                        target_cell = sample;
+                        break;
+                    }
+                }
                 rope->anchor_x_q16 = (x_cell << 16) + 32768L;
                 rope->anchor_y_q16 = (y_cell << 16) + 32768L;
                 rope->length_q16 = digs_distance_approx(
@@ -1249,18 +2212,21 @@ static void digs_step_rope_cast(vox_digs_match *match, vox_u16 player)
                 rope->point_count = 1U;
                 rope->state = VOX_DIGS_ROPE_ATTACHED;
                 rope->tension_q16 = 0L;
+                rope->flags = digs_cell_is_rope_anchor(
+                    &match->world, (vox_u32)x_cell, (vox_u32)y_cell) ?
+                    VOX_DIGS_ROPE_TARGET_FIXTURE :
+                    VOX_DIGS_ROPE_TARGET_TERRAIN;
+                rope->target_x = (vox_u16)x_cell;
+                rope->target_y = (vox_u16)y_cell;
                 digs_emit_event(match, VOX_DIGS_EVENT_ROPE_ATTACH, player,
                                 VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK,
-                                VOX_MAT_METAL, rope->anchor_x_q16,
+                                target_cell != 0 ? target_cell->material :
+                                VOX_MAT_STONE, rope->anchor_x_q16,
                                 rope->anchor_y_q16,
                                 (vox_u16)(rope->length_q16 >> 16),
                                 (vox_u16)(digs_noise(match->rules.seed,
                                     match->tick, player,
                                     0x524F5045U) & 7U));
-            } else {
-                digs_detach_rope(match, player,
-                                 VOX_DIGS_EVENT_ROPE_BREAK);
-            }
             return;
         }
         for (victim = 0U; victim < match->rules.player_count; ++victim) {
@@ -1301,11 +2267,24 @@ static void digs_step_rope(vox_digs_match *match, vox_u16 player)
     }
     anchor_x = rope->anchor_x_q16 >> 16;
     anchor_y = rope->anchor_y_q16 >> 16;
-    if (anchor_x < 0 || anchor_y < 0 ||
-        anchor_x >= (vox_i32)VOX_WORLD_WIDTH ||
-        anchor_y >= (vox_i32)VOX_WORLD_HEIGHT ||
-        !digs_cell_is_rope_anchor(&match->world, (vox_u32)anchor_x,
-                                  (vox_u32)anchor_y)) {
+    if (rope->flags == VOX_DIGS_ROPE_TARGET_SHIP) {
+        if (match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_DEPARTED) {
+            digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_BREAK);
+            return;
+        }
+        rope->anchor_x_q16 = match->dropship.position_x_q16;
+        rope->anchor_y_q16 = match->dropship.position_y_q16;
+        rope->target_x = (vox_u16)digs_q16_to_cell(
+            match->dropship.position_x_q16);
+        rope->target_y = (vox_u16)digs_q16_to_cell(
+            match->dropship.position_y_q16);
+        rope->points[0].position_x_q16 = rope->anchor_x_q16;
+        rope->points[0].position_y_q16 = rope->anchor_y_q16;
+    } else if (anchor_x < 0 || anchor_y < 0 ||
+               anchor_x >= (vox_i32)VOX_WORLD_WIDTH ||
+               anchor_y >= (vox_i32)VOX_WORLD_HEIGHT ||
+               digs_cell_is_solid(&match->world, (vox_u32)anchor_x,
+                                  (vox_u32)anchor_y) == 0) {
         digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_BREAK);
         return;
     }
@@ -1386,6 +2365,11 @@ static void digs_step_rope(vox_digs_match *match, vox_u16 player)
             digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_BREAK);
         }
     }
+    if (rope->flags == VOX_DIGS_ROPE_TARGET_SHIP &&
+        digs_dropship_player_near(match, player,
+                                  VOX_DIGS_DROPSHIP_BOARD_RADIUS_Q16)) {
+        (void)vox_digs_dropship_board(match, player);
+    }
 }
 
 static vox_i32 digs_run_speed(const vox_digs_match *match, vox_u16 player)
@@ -1430,6 +2414,14 @@ static int digs_player_on_slippery_material(const vox_digs_match *match,
                           cell->material == VOX_MAT_WATER)) {
             return 1;
         }
+        {
+            const vox_fluid_cell *fluid = vox_fluid_cell_get_at(
+                &match->fluids, (vox_u16)x, (vox_u16)y, (vox_u16)z);
+            if (fluid != 0 && (fluid->material == VOX_FLUID_BLOOD ||
+                               fluid->material == VOX_FLUID_WATER)) {
+                return 1;
+            }
+        }
     }
     return 0;
 }
@@ -1444,6 +2436,16 @@ static void digs_apply_player_controls(vox_digs_match *match, vox_u16 player)
     vox_i16 analog_x = match->move_x_q15[player];
     vox_i32 acceleration;
     vox_i32 deceleration;
+    if (digs_player_extracted(match, player)) {
+        match->player_actions[player] = 0U;
+        return;
+    }
+    if ((pressed & VOX_DIGS_ACTION_FIRE) != 0U &&
+        match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_LAUNCH &&
+        digs_dropship_player_near(match, player,
+                                  VOX_DIGS_DROPSHIP_BOARD_RADIUS_Q16)) {
+        (void)vox_digs_dropship_launch(match, player);
+    }
     if (body->flags & VOX_PHYSICS_BODY_GROUNDED) {
         match->coyote_ticks[player] = DIGS_COYOTE_TICKS;
     } else if (match->coyote_ticks[player] > 0U) {
@@ -1491,6 +2493,18 @@ static void digs_apply_player_controls(vox_digs_match *match, vox_u16 player)
     } else if (!(actions & VOX_DIGS_ACTION_JUMP)) {
         match->jump_hold_ticks[player] = 0U;
     }
+    if ((pressed & VOX_DIGS_ACTION_DASH) &&
+        match->dash_cooldown[player] == 0U) {
+        vox_i32 direction = match->facing_right[player] ? 1L : -1L;
+        body->velocity_x.value_q16 = direction * VOX_DIGS_DASH_SPEED_Q16;
+        match->dash_cooldown[player] = VOX_DIGS_DASH_COOLDOWN_TICKS;
+        match->dash_invulnerability[player] =
+            VOX_DIGS_DASH_INVULNERABILITY_TICKS;
+        digs_emit_event(match, VOX_DIGS_EVENT_DASH, player,
+                        VOX_DIGS_NO_PLAYER, match->selected_weapon[player],
+                        VOX_MAT_SMOKE, body->position_x.value_q16,
+                        body->position_y.value_q16, 0U, 0U);
+    }
     if ((actions & VOX_DIGS_ACTION_STEAM) &&
         match->steam_q16[player] != 0U) {
         if (body->velocity_y.value_q16 >
@@ -1522,12 +2536,23 @@ static void digs_apply_player_controls(vox_digs_match *match, vox_u16 player)
                                                   DIGS_STEAM_RECHARGE_Q16);
         }
     }
-    if ((actions & VOX_DIGS_ACTION_ROPE) &&
-        match->ropes[player].state == VOX_DIGS_ROPE_IDLE) {
+    if (actions & VOX_DIGS_ACTION_JUMP) {
+        /* Jump is the explicit, reliable rope cancellation gesture. */
+        if (match->ropes[player].state != VOX_DIGS_ROPE_IDLE) {
+            match->ropes[player].retarget_cursor = 0U;
+            digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_DETACH);
+        }
+    } else if ((pressed & VOX_DIGS_ACTION_ROPE) &&
+               match->ropes[player].state == VOX_DIGS_ROPE_IDLE) {
         (void)digs_begin_rope_cast(match, player);
-    } else if (!(actions & VOX_DIGS_ACTION_ROPE) &&
-               match->ropes[player].state != VOX_DIGS_ROPE_IDLE) {
+    } else if ((pressed & VOX_DIGS_ACTION_ROPE) &&
+               match->ropes[player].state == VOX_DIGS_ROPE_ATTACHED) {
+        /* Pressing again retargets; holding no longer owns attachment. */
+        if (match->ropes[player].retarget_cursor < 65535U) {
+            match->ropes[player].retarget_cursor++;
+        }
         digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_DETACH);
+        (void)digs_begin_rope_cast(match, player);
     }
 }
 
@@ -1545,11 +2570,9 @@ void vox_digs_rules_classic(vox_digs_rules *rules)
     rules->seed = 0x564F5831U;
     rules->player_count = 2U;
     rules->bot_mask = 0x0002U;
-    rules->team_mode = 0U;
     rules->map_style = VOX_DIGS_MAP_COAL_RIDGE;
     rules->weapon_mask = (vox_u16)((1U << VOX_DIGS_TOOL_COUNT) - 1U);
     rules->fx_budget = VOX_DIGS_FX_STANDARD;
-    rules->friendly_fire = 0U;
     rules->respawn_mode = VOX_DIGS_RESPAWN_AUTO;
     rules->respawn_delay_ticks = VOX_DIGS_RESPAWN_TICKS;
     rules->reserved = 0U;
@@ -1568,14 +2591,12 @@ static vox_result digs_validate_rules(const vox_digs_rules *rules)
         rules->lava_start_tick >= rules->match_ticks ||
         rules->player_count == 0U ||
         rules->player_count > VOX_DIGS_MAX_SLOTS ||
-        rules->team_mode > VOX_DIGS_MODE_MINERS_VS_MACHINES ||
         rules->map_style >= VOX_DIGS_MAP_COUNT || rules->weapon_mask == 0U ||
         (rules->weapon_mask &
          (vox_u16)~((1U << VOX_DIGS_TOOL_COUNT) - 1U)) != 0U ||
         (rules->fx_budget != VOX_DIGS_FX_RETRO &&
          rules->fx_budget != VOX_DIGS_FX_STANDARD &&
          rules->fx_budget != VOX_DIGS_FX_CARNAGE) ||
-        rules->friendly_fire > 1U ||
         rules->respawn_mode > VOX_DIGS_RESPAWN_ON_FIRE ||
         rules->respawn_delay_ticks >
             (vox_u16)(60U * VOX_DIGS_TICKS_PER_SECOND) ||
@@ -1595,14 +2616,359 @@ static vox_result digs_validate_rules(const vox_digs_rules *rules)
     return VOX_OK;
 }
 
+
+/*
+ * Identity, not slot.  RIVET is RIVET whichever seat he spawns in, and the
+ * account the miners keep has to follow the person rather than the position
+ * or "they remember you" is a lie the moment the roster shuffles.
+ */
+vox_u16 vox_digs_memory_identity(const vox_digs_match *match, vox_u16 player)
+{
+    vox_u16 archetype;
+    if (match == 0 || !vox_digs_player_is_active(match, player)) {
+        return (vox_u16)VOX_DIGS_IDENTITY_COUNT;
+    }
+    if (!vox_digs_player_is_bot(match, player)) {
+        return (vox_u16)VOX_DIGS_IDENTITY_PLAYER;
+    }
+    archetype = vox_digs_bot_archetype(match, player);
+    switch (archetype) {
+    case VOX_DIGS_ARCHETYPE_ENGINEER:
+        return (vox_u16)VOX_DIGS_IDENTITY_RIVET;
+    case VOX_DIGS_ARCHETYPE_BERSERKER:
+        return (vox_u16)VOX_DIGS_IDENTITY_CINDER;
+    default:
+        break;
+    }
+    return (vox_u16)VOX_DIGS_IDENTITY_FLAMEY;
+}
+
+vox_u16 vox_digs_regard_index(vox_u16 a, vox_u16 b)
+{
+    vox_u16 low;
+    vox_u16 high;
+    if (a == b || a >= VOX_DIGS_IDENTITY_COUNT ||
+        b >= VOX_DIGS_IDENTITY_COUNT) {
+        return (vox_u16)VOX_DIGS_MAX_PAIRS;
+    }
+    low = a < b ? a : b;
+    high = a < b ? b : a;
+    return (vox_u16)((low * (2U * VOX_DIGS_IDENTITY_COUNT - low - 1U)) / 2U +
+                     (high - low - 1U));
+}
+
+void vox_digs_memory_init(vox_digs_bot_memory *memory)
+{
+    vox_u16 i;
+    vox_u16 j;
+    if (memory == 0) {
+        return;
+    }
+    memory->abi_version = VOX_ABI_VERSION;
+    memory->struct_size = (vox_u32)sizeof(*memory);
+    memory->memory_version = VOX_DIGS_MEMORY_VERSION;
+    memory->launch_counter = 0U;
+    memory->elapsed_coarse = 0U;
+    for (i = 0U; i < VOX_DIGS_IDENTITY_COUNT; ++i) {
+        const vox_digs_personality *base =
+            i < VOX_DIGS_ARCHETYPE_COUNT ?
+            vox_digs_personality_get(i) : 0;
+        if (base != 0) {
+            memory->identities[i].traits = *base;
+        } else {
+            /* The player's own miner: middling on every axis. */
+            memory->identities[i].traits.aggression = 128U;
+            memory->identities[i].traits.patience = 128U;
+            memory->identities[i].traits.caution = 128U;
+            memory->identities[i].traits.grudge = 128U;
+            memory->identities[i].traits.sociability = 128U;
+            memory->identities[i].traits.reserved = 0U;
+        }
+        memory->identities[i].matches_played = 0U;
+        memory->identities[i].wins = 0U;
+        memory->identities[i].kills = 0U;
+        memory->identities[i].deaths = 0U;
+        memory->identities[i].reserved = 0U;
+    }
+    for (j = 0U; j < VOX_DIGS_MAX_PAIRS; ++j) {
+        memory->regard[j].tone = (vox_u16)VOX_DIGS_TONE_NEUTRAL;
+        memory->regard[j].valence = 0;
+        memory->regard[j].matches_met = 0U;
+        memory->regard[j].kills_for = 0U;
+        memory->regard[j].kills_against = 0U;
+        memory->regard[j].truces = 0U;
+        memory->regard[j].betrayals = 0U;
+        memory->regard[j].reserved = 0U;
+    }
+    (void)vox_digs_memory_hash(memory);
+}
+
+vox_u32 vox_digs_memory_hash(vox_digs_bot_memory *memory)
+{
+    vox_u32 hash = 2166136261U;
+    vox_u16 i;
+    if (memory == 0) {
+        return 0U;
+    }
+    hash = digs_hash_mix(hash, memory->memory_version);
+    /*
+     * launch_counter and elapsed_coarse are deliberately NOT folded in.
+     *
+     * They come from the port's wall clock, and this digest is folded into
+     * vox_digs_hash -- so including them put time(0) into the authoritative
+     * match hash.  The simulation never reads either field, so two matches
+     * one launch apart were provably identical tick for tick, with the same
+     * world hash, the same scores and the same deaths, and a different state
+     * hash from tick zero.  Any replay verifier or desync detector comparing
+     * state hashes would have called an identical match a divergence, and a
+     * recorded replay could never be reproduced by the same binary on the
+     * same machine the next day.
+     *
+     * This digest is not persisted -- the chronicle has its own checksum --
+     * so its only consumer is the match hash, and the match hash must be a
+     * function of what the simulation can see.
+     */
+    for (i = 0U; i < VOX_DIGS_IDENTITY_COUNT; ++i) {
+        const vox_digs_identity_record *r = &memory->identities[i];
+        hash = digs_hash_mix(hash, (vox_u32)r->traits.aggression);
+        hash = digs_hash_mix(hash, (vox_u32)r->traits.patience);
+        hash = digs_hash_mix(hash, (vox_u32)r->traits.caution);
+        hash = digs_hash_mix(hash, (vox_u32)r->traits.grudge);
+        hash = digs_hash_mix(hash, (vox_u32)r->traits.sociability);
+        hash = digs_hash_mix(hash, (vox_u32)r->matches_played);
+        hash = digs_hash_mix(hash, (vox_u32)r->wins);
+        hash = digs_hash_mix(hash, (vox_u32)r->kills);
+        hash = digs_hash_mix(hash, (vox_u32)r->deaths);
+    }
+    for (i = 0U; i < VOX_DIGS_MAX_PAIRS; ++i) {
+        const vox_digs_regard *g = &memory->regard[i];
+        hash = digs_hash_mix(hash, (vox_u32)g->tone);
+        hash = digs_hash_mix(hash, (vox_u32)(vox_u16)g->valence);
+        hash = digs_hash_mix(hash, (vox_u32)g->matches_met);
+        hash = digs_hash_mix(hash, (vox_u32)g->kills_for);
+        hash = digs_hash_mix(hash, (vox_u32)g->kills_against);
+        hash = digs_hash_mix(hash, (vox_u32)g->truces);
+        hash = digs_hash_mix(hash, (vox_u32)g->betrayals);
+    }
+    memory->memory_hash = hash;
+    return hash;
+}
+
 vox_result vox_digs_match_init(vox_digs_match *match,
                                const vox_digs_rules *rules)
 {
+    return vox_digs_match_init_ex(match, rules, 0);
+}
+
+
+/*
+ * How far a trait may move in one match, per archetype.  RIVET revises
+ * slowly and remembers; CINDER swings and forgets; FLAMEY is unpredictable.
+ * Bounded hard, because a bot that drifts far enough stops being the
+ * character the player learned, which is the opposite of the point.
+ */
+static const vox_u16
+digs_drift_rate[VOX_DIGS_ARCHETYPE_COUNT] = {3U, 9U, 6U};
+#define DIGS_DRIFT_FLOOR 40U
+#define DIGS_DRIFT_CEILING 235U
+/* Exchanges in a match past which a miner counts as talkative. */
+#define DIGS_DRIFT_TALKATIVE 6U
+
+static vox_u16 digs_drift_trait(vox_u16 value, vox_i32 direction,
+                                vox_u16 rate)
+{
+    vox_i32 moved = (vox_i32)value + direction * (vox_i32)rate;
+    if (moved < (vox_i32)DIGS_DRIFT_FLOOR) {
+        moved = (vox_i32)DIGS_DRIFT_FLOOR;
+    }
+    if (moved > (vox_i32)DIGS_DRIFT_CEILING) {
+        moved = (vox_i32)DIGS_DRIFT_CEILING;
+    }
+    return (vox_u16)moved;
+}
+
+vox_result vox_digs_match_export_memory(const vox_digs_match *match,
+                                        vox_digs_bot_memory *memory)
+{
+    vox_u16 a;
+    vox_u16 b;
+    vox_u16 pair_seen[VOX_DIGS_MAX_PAIRS];
+    vox_u16 truce_seen[VOX_DIGS_MAX_PAIRS];
+    vox_u16 betrayal_seen[VOX_DIGS_MAX_PAIRS];
+    vox_u32 strongest_change[VOX_DIGS_MAX_PAIRS];
+    if (match == 0 || memory == 0) {
+        return VOX_ERR_INVALID;
+    }
+    *memory = match->memory;
+    memory->abi_version = VOX_ABI_VERSION;
+    memory->struct_size = (vox_u32)sizeof(*memory);
+    memory->memory_version = VOX_DIGS_MEMORY_VERSION;
+    for (a = 0U; a < VOX_DIGS_MAX_PAIRS; ++a) {
+        pair_seen[a] = 0U;
+        truce_seen[a] = 0U;
+        betrayal_seen[a] = 0U;
+        strongest_change[a] = 0U;
+    }
+    for (a = 0U; a < match->rules.player_count; ++a) {
+        vox_u16 identity = vox_digs_memory_identity(match, a);
+        vox_digs_identity_record *record;
+        vox_u16 rate;
+        vox_u16 archetype;
+        if (identity >= VOX_DIGS_IDENTITY_COUNT) {
+            continue;
+        }
+        record = &memory->identities[identity];
+        if (record->matches_played < 65535U) {
+            record->matches_played++;
+        }
+        if (record->kills + match->scores[a] < 65535U) {
+            record->kills = (vox_u16)(record->kills + match->scores[a]);
+        }
+        if (record->deaths + match->deaths[a] < 65535U) {
+            record->deaths = (vox_u16)(record->deaths + match->deaths[a]);
+        }
+        if (match->phase == VOX_DIGS_RESULTS && !match->result_draw &&
+            match->winner_player == a && record->wins < 65535U) {
+            record->wins++;
+        }
+        archetype = vox_digs_bot_archetype(match, a);
+        rate = archetype < VOX_DIGS_ARCHETYPE_COUNT ?
+               digs_drift_rate[archetype] : 4U;
+        /*
+         * Drift follows what the match actually did to them.  Small steps --
+         * a nudge per match, not a personality transplant -- and every axis
+         * points at a decision the AI visibly makes, so a drifted bot plays
+         * differently rather than merely carrying different numbers.
+         */
+        {
+            vox_i32 fortune = (vox_i32)match->scores[a] -
+                              (vox_i32)match->deaths[a];
+            vox_i32 sign = fortune > 0 ? 1L : (fortune < 0 ? -1L : 0L);
+            vox_u32 talk = 0U;
+            vox_u16 betrayed = 0U;
+            vox_u16 other;
+            for (other = 0U; other < match->rules.player_count; ++other) {
+                vox_u16 pair = vox_digs_pair_index(a, other);
+                const vox_digs_contract *contract;
+                if (pair >= VOX_DIGS_MAX_PAIRS) {
+                    continue;
+                }
+                contract = &match->contracts[pair];
+                talk += contract->exchanges;
+                if (contract->last_stimulus == VOX_DIGS_STIMULUS_BETRAYED &&
+                    contract->last_actor != a) {
+                    betrayed++;
+                }
+            }
+            /* Winning makes a miner bolder and less careful. */
+            record->traits.aggression =
+                digs_drift_trait(record->traits.aggression, sign, rate);
+            record->traits.caution =
+                digs_drift_trait(record->traits.caution, -sign, rate);
+            /*
+             * A miner who spent the match dying stops waiting around; one who
+             * survived can afford to take their time.  Patience is the
+             * decision cadence, so this is visible as twitchiness.
+             */
+            record->traits.patience =
+                digs_drift_trait(record->traits.patience, sign, rate);
+            /*
+             * Being betrayed is what makes a grudge, and a grudge is what
+             * makes a miner hunt somebody past whoever is nearer.  Nothing
+             * else earns it; winning quietly lets it fade.
+             */
+            record->traits.grudge = digs_drift_trait(record->traits.grudge,
+                betrayed > 0U ? 1L : (sign > 0L ? -1L : 0L), rate);
+            /*
+             * Talking begets talking.  A match spent in conversation leaves
+             * them chattier next time, a silent one leaves them quieter --
+             * which feeds straight back into how often they speak up.
+             */
+            record->traits.sociability =
+                digs_drift_trait(record->traits.sociability,
+                                 talk >= DIGS_DRIFT_TALKATIVE ? 1L : -1L,
+                                 rate);
+        }
+    }
+    for (a = 0U; a < match->rules.player_count; ++a) {
+        for (b = (vox_u16)(a + 1U); b < match->rules.player_count; ++b) {
+            vox_u16 pair = vox_digs_pair_index(a, b);
+            vox_u16 slot = vox_digs_regard_index(
+                vox_digs_memory_identity(match, a),
+                vox_digs_memory_identity(match, b));
+            const vox_digs_contract *contract;
+            vox_digs_regard *regard;
+            vox_i32 change;
+            vox_u32 magnitude;
+            if (pair >= VOX_DIGS_MAX_PAIRS || slot >= VOX_DIGS_MAX_PAIRS) {
+                continue;
+            }
+            contract = &match->contracts[pair];
+            regard = &memory->regard[slot];
+            /* Two human slots share the PLAYER identity.  A quiet second
+             * seat must not overwrite the first seat's live relationship
+             * with a bot merely because it appears later in slot order.
+             * Merge by persistent identity instead: retain the greatest
+             * match-local change, retaining the first slot on an exact tie
+             * for stable deterministic ordering. */
+            if (!contract->met) {
+                continue;
+            }
+            change = (vox_i32)contract->valence -
+                     (vox_i32)match->memory.regard[slot].valence;
+            magnitude = change < 0L ? (vox_u32)(-change) :
+                        (vox_u32)change;
+            if (pair_seen[slot] == 0U || magnitude > strongest_change[slot]) {
+                regard->tone = contract->tone;
+                regard->valence = contract->valence;
+                strongest_change[slot] = magnitude;
+            }
+            if (pair_seen[slot] == 0U && regard->matches_met < 65535U) {
+                regard->matches_met++;
+            }
+            pair_seen[slot] = 1U;
+            if (contract->tone >= VOX_DIGS_TONE_TRUCE &&
+                truce_seen[slot] == 0U &&
+                regard->truces < 65535U) {
+                regard->truces++;
+                truce_seen[slot] = 1U;
+            }
+            if (contract->last_stimulus == VOX_DIGS_STIMULUS_BETRAYED &&
+                betrayal_seen[slot] == 0U &&
+                regard->betrayals < 65535U) {
+                regard->betrayals++;
+                betrayal_seen[slot] = 1U;
+            }
+        }
+    }
+    (void)vox_digs_memory_hash(memory);
+    return VOX_OK;
+}
+
+vox_result vox_digs_match_init_ex(vox_digs_match *match,
+                                  const vox_digs_rules *rules,
+                                  const vox_digs_bot_memory *memory)
+{
     vox_u16 i;
+    vox_u16 frame;
+    vox_digs_bot_memory canonical;
     vox_result result = digs_validate_rules(rules);
     if (match == 0 || result != VOX_OK) {
         return VOX_ERR_INVALID;
     }
+    /*
+     * A missing or foreign snapshot is not an error, it is a first meeting.
+     * Anything that does not match this build is discarded rather than
+     * reinterpreted -- a snapshot read the wrong way round would produce
+     * plausible traits and a wrong match, which is worse than no memory.
+     */
+    if (memory == 0 || memory->abi_version != VOX_ABI_VERSION ||
+        memory->struct_size < (vox_u32)sizeof(*memory) ||
+        memory->memory_version != VOX_DIGS_MEMORY_VERSION) {
+        vox_digs_memory_init(&canonical);
+        memory = &canonical;
+    }
+    match->memory = *memory;
     match->abi_version = VOX_ABI_VERSION;
     match->struct_size = (vox_u32)sizeof(*match);
     match->rules = *rules;
@@ -1610,12 +2976,87 @@ vox_result vox_digs_match_init(vox_digs_match *match,
                               rules->seed) != VOX_OK) {
         return VOX_ERR_INVALID;
     }
+    vox_fluid_init(&match->fluids);
+    vox_rigid_init(&match->ragdolls);
+    for (i = 0U; i < VOX_RIGID_MAX_BODIES; ++i) {
+        match->rigid_source[i] = VOX_DIGS_NO_PLAYER;
+        match->rigid_weapon[i] = VOX_DIGS_TOOL_PICK;
+        match->rigid_impact_cooldown[i] = 0U;
+        match->rigid_material[i] = VOX_MAT_AIR;
+        match->rigid_loose_cells[i] = 0U;
+    }
+    match->rigid_settle_discarded = 0U;
+    vox_structure_init(&match->structure);
+    /* Establish the authored map's support/load baseline before the first
+     * gameplay tick.  Initial analysis intentionally has no armed chunks, so
+     * natural overhangs are measured but not detached; a later blast can then
+     * enter its affected frontier immediately instead of waiting behind the
+     * 640-chunk startup scan. */
+    if (vox_structure_step(&match->structure, &match->world,
+                           VOX_STRUCTURE_FRONTIER_CAPACITY) != VOX_OK) {
+        return VOX_ERR_INVALID;
+    }
+    match->structure.tick = 0U;
+    match->structure.cascade_count = 0U;
+    {
+        vox_u16 pair;
+        for (pair = 0U; pair < VOX_DIGS_MAX_PAIRS; ++pair) {
+            vox_u16 slot;
+            match->contracts[pair].tone = (vox_u16)VOX_DIGS_TONE_NEUTRAL;
+            match->contracts[pair].valence = 0;
+            match->contracts[pair].tone_ticks = 0U;
+            match->contracts[pair].quiet_ticks = 0U;
+            match->contracts[pair].last_speaker = VOX_DIGS_NO_PLAYER;
+            match->contracts[pair].exchanges = 0U;
+            match->contracts[pair].met = 0U;
+            match->contracts[pair].recent_cursor = 0U;
+            match->contracts[pair].last_stimulus =
+                (vox_u16)VOX_DIGS_STIMULUS_NONE;
+            match->contracts[pair].last_actor = VOX_DIGS_NO_PLAYER;
+            match->contracts[pair].last_stimulus_tick = 0U;
+            for (slot = 0U; slot < VOX_DIGS_RECENT_LINES; ++slot) {
+                match->contracts[pair].recent_lines[slot] = 0U;
+            }
+        }
+    }
+    /*
+     * Carry the accounts in.  Two miners who left the last match hating each
+     * other start this one hating each other, which is the entire point of
+     * the exercise -- but the tone dwells from zero, so the first thing that
+     * happens can still move it.
+     */
+    {
+        vox_u16 a;
+        vox_u16 b;
+        for (a = 0U; a < match->rules.player_count; ++a) {
+            for (b = (vox_u16)(a + 1U); b < match->rules.player_count; ++b) {
+                vox_u16 pair = vox_digs_pair_index(a, b);
+                vox_u16 slot = vox_digs_regard_index(
+                    vox_digs_memory_identity(match, a),
+                    vox_digs_memory_identity(match, b));
+                if (pair >= VOX_DIGS_MAX_PAIRS ||
+                    slot >= VOX_DIGS_MAX_PAIRS) {
+                    continue;
+                }
+                match->contracts[pair].tone = match->memory.regard[slot].tone;
+                match->contracts[pair].valence =
+                    match->memory.regard[slot].valence;
+                match->contracts[pair].met =
+                    match->memory.regard[slot].matches_met > 0U ? 1U : 0U;
+            }
+        }
+    }
     match->tick = 0U;
     match->phase = VOX_DIGS_RUNNING;
     match->result_reason = VOX_DIGS_END_NONE;
     match->result_draw = 0U;
     match->winner_player = VOX_DIGS_NO_PLAYER;
-    match->winner_team = VOX_DIGS_NO_TEAM;
+    match->speech_floor_ticks = 0U;
+    match->speech_answer_ticks = 0U;
+    match->speech_dry_ticks = 0U;
+    match->speech_exchange_lines = 0U;
+    match->speech_last_line = 0U;
+    match->speech_exchange_heat = 0;
     match->lava_level_q16 = 0U;
     match->lava_surface_y = (vox_u16)DIGS_LAVA_BASIN_TOP;
     match->projectile_count = 0U;
@@ -1624,6 +3065,44 @@ vox_result vox_digs_match_init(vox_digs_match *match,
     match->event_head = 0U;
     match->event_count = 0U;
     match->event_sequence = 0U;
+    match->replay.active = 0U;
+    match->replay.frame_count = 0U;
+    match->replay.play_cursor = 0U;
+    match->replay.capture_cursor = 0U;
+    match->replay.killer = VOX_DIGS_NO_PLAYER;
+    match->replay.victim = VOX_DIGS_NO_PLAYER;
+    match->replay.headshot = 0U;
+    match->replay.multi_kill = 0U;
+    match->replay.award_value = 0U;
+    match->replay.kill_streak = 0U;
+    match->replay.cave_in_scale = 0U;
+    match->replay.blast_distance = DIGS_REPLAY_NO_BLAST_DISTANCE;
+    match->replay.reserved = 0U;
+    match->replay.selected_tick = 0U;
+    match->replay.seed = rules->seed;
+    for (frame = 0U; frame < VOX_DIGS_REPLAY_MAX_FRAMES; ++frame) {
+        digs_replay_frame_init(&match->replay.frames[frame]);
+    }
+    match->dropship.position_x_q16 =
+        VOX_DIGS_DROPSHIP_LAUNCH_START_X_Q16;
+    match->dropship.position_y_q16 = VOX_DIGS_DROPSHIP_CRUISE_Y_Q16;
+    match->dropship.previous_position_x_q16 =
+        match->dropship.position_x_q16;
+    /* `match_init` supplies a terrain-grounded core fixture.  A playable
+     * host explicitly calls vox_digs_dropship_begin before its first tick;
+     * until then the virtual hull must neither move nor collide with a
+     * simulation that deliberately omitted the launch sequence. */
+    match->dropship.velocity_x_q16 = 0L;
+    match->dropship.phase = VOX_DIGS_DROPSHIP_PHASE_DEPARTED;
+    match->dropship.route_ticks = 0U;
+    match->dropship.launched_mask = 0U;
+    match->dropship.extracted_mask = 0U;
+    match->dropship.alarmed = 0U;
+    match->dropship.collision_cooldown = 0U;
+    for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
+        match->awards[i] = 0U;
+        match->award_value[i] = 0U;
+    }
     match->terrain_hash = vox_world_hash(&match->world);
     vox_physics_step_config_default(&match->physics_config);
     match->physics_config.gravity_q16 *= (vox_i32)DIGS_DENSITY_SCALE;
@@ -1663,6 +3142,8 @@ vox_result vox_digs_match_init(vox_digs_match *match,
         match->coyote_ticks[i] = 0U;
         match->jump_buffer_ticks[i] = 0U;
         match->jump_hold_ticks[i] = 0U;
+        match->dash_cooldown[i] = 0U;
+        match->dash_invulnerability[i] = 0U;
         match->steam_q16[i] = 65535U;
         match->weapon_cooldown[i] = 0U;
         match->selected_weapon[i] = VOX_DIGS_TOOL_PICK;
@@ -1673,6 +3154,23 @@ vox_result vox_digs_match_init(vox_digs_match *match,
         match->last_damage_part[i] = VOX_DIGS_NO_PART;
         match->rail_charge_ticks[i] = 0U;
         match->rail_charging[i] = 0U;
+        match->speech_stimulus[i] = (vox_u16)VOX_DIGS_STIMULUS_NONE;
+        match->speech_subject[i] = VOX_DIGS_NO_PLAYER;
+        match->speech_delay[i] = 0U;
+        match->speech_cooldown[i] = 0U;
+        match->speech_urge_ticks[i] = (vox_u16)(DIGS_SPEECH_URGE_MIN +
+            (digs_noise(rules->seed, 0U, i, 0xC1A7U) %
+             DIGS_SPEECH_URGE_SPAN));
+        match->speech_audience[i] = (vox_u16)VOX_DIGS_AUDIENCE_ONE;
+        match->speech_self_stimulus[i] = (vox_u16)VOX_DIGS_STIMULUS_NONE;
+        match->speech_self_tick[i] = 0U;
+        match->speech_recent_cursor[i] = 0U;
+        {
+            vox_u16 slot;
+            for (slot = 0U; slot < VOX_DIGS_SPEAKER_RECENT; ++slot) {
+                match->speech_recent[i][slot] = 0U;
+            }
+        }
         match->weapon_charge_ticks[i] = 0U;
         match->weapon_charging[i] = 0U;
         match->bolt_shot_streak[i] = 0U;
@@ -1691,6 +3189,10 @@ vox_result vox_digs_match_init(vox_digs_match *match,
         match->ropes[i].point_count = 0U;
         match->ropes[i].target_player = VOX_DIGS_NO_PLAYER;
         match->ropes[i].flags = 0U;
+        match->ropes[i].target_x = 0U;
+        match->ropes[i].target_y = 0U;
+        match->ropes[i].retarget_cursor = 0U;
+        match->ropes[i].reserved = 0U;
         {
             vox_u16 point;
             for (point = 0U; point < VOX_DIGS_ROPE_MAX_POINTS; ++point) {
@@ -1706,8 +3208,18 @@ vox_result vox_digs_match_init(vox_digs_match *match,
         match->bots[i].state_ticks = 0U;
         match->bots[i].roam_direction = (vox_i16)((i & 1U) ? -1 : 1);
         match->bots[i].decision_ticks = (vox_u16)(i * 2U);
+        match->bots[i].retreat_lock_ticks = 0U;
+        match->bots[i].roam_goal_x = 0U;
+        match->bots[i].roam_goal_ticks = 0U;
+        match->bots[i].stuck_ticks = 0U;
+        match->bots[i].breach_lock_ticks = 0U;
+        match->bots[i].breach_ticks = 0U;
         match->bots[i].last_seen_x_q16 = 0L;
         match->bots[i].last_seen_y_q16 = 0L;
+        match->bots[i].tunnel_state = VOX_DIGS_TUNNEL_NONE;
+        match->bots[i].tunnel_safety_q8 = 255U;
+        match->bots[i].collapse_risk_q8 = 0U;
+        match->bots[i].extraction_ticks = 0U;
         digs_init_anatomy(match, i);
         vox_physics_body_init(&match->players[i]);
         if (match->alive[i] &&
@@ -1770,11 +3282,1102 @@ vox_result vox_digs_match_init(vox_digs_match *match,
     return VOX_OK;
 }
 
-static vox_u16 digs_team_for_player(const vox_digs_match *match,
-                                    vox_u16 player)
+static void digs_replay_frame_init(vox_digs_replay_frame *frame)
 {
-    return vox_digs_player_is_bot(match, player) ?
-           VOX_DIGS_TEAM_MACHINES : VOX_DIGS_TEAM_MINERS;
+    vox_u16 i;
+    if (frame == 0) return;
+    frame->tick = 0U;
+    frame->fluid_hash = 0U;
+    frame->rigid_hash = 0U;
+    frame->event_sequence = 0U;
+    frame->terrain_origin_x = 0U;
+    frame->terrain_origin_y = 0U;
+    frame->terrain_width = 0U;
+    frame->terrain_height = 0U;
+    frame->camera_x_q16 = 0L;
+    frame->camera_y_q16 = 0L;
+    frame->camera_zoom_q16 = 65536L;
+    frame->rigid_count = 0U;
+    frame->fluid_count = 0U;
+    frame->effect_count = 0U;
+    frame->event_count = 0U;
+    for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
+        frame->player_x_q16[i] = 0L;
+        frame->player_y_q16[i] = 0L;
+        frame->player_alive[i] = 0U;
+        frame->player_health[i] = 0U;
+    }
+    for (i = 0U; i < VOX_DIGS_REPLAY_WINDOW_CELLS; ++i) {
+        frame->terrain_material[i] = VOX_MAT_AIR;
+    }
+    for (i = 0U; i < VOX_DIGS_REPLAY_MAX_RIGIDS; ++i) {
+        frame->rigids[i].position_x_q16 = 0L;
+        frame->rigids[i].position_y_q16 = 0L;
+        frame->rigids[i].velocity_x_q16 = 0L;
+        frame->rigids[i].velocity_y_q16 = 0L;
+        frame->rigids[i].angle_q16 = 0L;
+        frame->rigids[i].angular_velocity_q16 = 0L;
+        frame->rigids[i].half_width_q16 = 0L;
+        frame->rigids[i].half_height_q16 = 0L;
+        frame->rigids[i].flags = 0U;
+        frame->rigids[i].reserved = 0U;
+    }
+    for (i = 0U; i < VOX_DIGS_REPLAY_MAX_FLUIDS; ++i) {
+        frame->fluids[i].x = 0U;
+        frame->fluids[i].y = 0U;
+        frame->fluids[i].z = 0U;
+        frame->fluids[i].material = VOX_FLUID_NONE;
+        frame->fluids[i].volume_q16 = 0L;
+        frame->fluids[i].temperature_q16 = 0L;
+        frame->fluids[i].flow_q16 = 0L;
+    }
+    for (i = 0U; i < VOX_DIGS_REPLAY_MAX_EFFECTS; ++i) {
+        frame->effects[i].position_x_q16 = 0L;
+        frame->effects[i].position_y_q16 = 0L;
+        frame->effects[i].velocity_x_q16 = 0L;
+        frame->effects[i].velocity_y_q16 = 0L;
+        frame->effects[i].material = VOX_MAT_AIR;
+        frame->effects[i].ttl_ticks = 0U;
+        frame->effects[i].variant = 0U;
+        frame->effects[i].source = VOX_DIGS_NO_PLAYER;
+        frame->effects[i].depth = 0U;
+        frame->effects[i].flags = 0U;
+    }
+    for (i = 0U; i < VOX_DIGS_REPLAY_MAX_EVENTS; ++i) {
+        frame->events[i].sequence = 0U;
+        frame->events[i].tick = 0U;
+        frame->events[i].position_x_q16 = 0L;
+        frame->events[i].position_y_q16 = 0L;
+        frame->events[i].type = VOX_DIGS_EVENT_NONE;
+        frame->events[i].source = VOX_DIGS_NO_PLAYER;
+        frame->events[i].target = VOX_DIGS_NO_PLAYER;
+        frame->events[i].weapon = VOX_DIGS_TOOL_PICK;
+        frame->events[i].material = VOX_MAT_AIR;
+        frame->events[i].magnitude = 0U;
+        frame->events[i].variant = 0U;
+        frame->events[i].reserved = 0U;
+    }
+}
+
+static int digs_replay_in_window(vox_u16 x, vox_u16 y,
+                                 vox_u16 origin_x, vox_u16 origin_y)
+{
+    return x >= origin_x && y >= origin_y &&
+           x < (vox_u16)(origin_x + VOX_DIGS_REPLAY_WINDOW_DIAMETER) &&
+           y < (vox_u16)(origin_y + VOX_DIGS_REPLAY_WINDOW_DIAMETER);
+}
+
+static void digs_replay_capture(vox_digs_match *match)
+{
+    vox_u16 frame_index;
+    vox_digs_replay_frame *frame;
+    vox_u16 player;
+    vox_u16 row;
+    vox_u16 column;
+    vox_u16 index;
+    vox_i32 focus_x;
+    vox_i32 focus_y;
+    vox_u16 focus_player = 0U;
+    vox_u16 origin_x;
+    vox_u16 origin_y;
+    if ((match->tick % VOX_DIGS_REPLAY_CAPTURE_STRIDE) != 0U) return;
+    frame_index = match->replay.capture_cursor;
+    frame = &match->replay.frames[frame_index];
+    match->replay.capture_cursor = (vox_u16)(
+        (frame_index + 1U) % VOX_DIGS_REPLAY_MAX_FRAMES);
+    digs_replay_frame_init(frame);
+    frame->tick = match->tick;
+    frame->fluid_hash = vox_fluid_hash(&match->fluids);
+    frame->rigid_hash = vox_rigid_hash(&match->ragdolls);
+    frame->event_sequence = match->event_sequence;
+    for (player = 0U; player < VOX_DIGS_MAX_SLOTS; ++player) {
+        frame->player_x_q16[player] =
+            match->players[player].position_x.value_q16;
+        frame->player_y_q16[player] =
+            match->players[player].position_y.value_q16;
+        frame->player_alive[player] = match->alive[player];
+        frame->player_health[player] = match->health[player];
+    }
+    if (match->replay.killer < VOX_DIGS_MAX_SLOTS &&
+        vox_digs_player_is_active(match, match->replay.killer)) {
+        focus_player = match->replay.killer;
+    }
+    focus_x = frame->player_x_q16[focus_player] >> 16;
+    focus_y = frame->player_y_q16[focus_player] >> 16;
+    if (focus_x < (vox_i32)VOX_DIGS_REPLAY_WINDOW_RADIUS) {
+        origin_x = 0U;
+    } else if (focus_x + (vox_i32)VOX_DIGS_REPLAY_WINDOW_RADIUS >=
+               (vox_i32)VOX_WORLD_WIDTH) {
+        origin_x = (vox_u16)(VOX_WORLD_WIDTH -
+                             VOX_DIGS_REPLAY_WINDOW_DIAMETER);
+    } else {
+        origin_x = (vox_u16)(focus_x -
+                             (vox_i32)VOX_DIGS_REPLAY_WINDOW_RADIUS);
+    }
+    if (focus_y < (vox_i32)VOX_DIGS_REPLAY_WINDOW_RADIUS) {
+        origin_y = 0U;
+    } else if (focus_y + (vox_i32)VOX_DIGS_REPLAY_WINDOW_RADIUS >=
+               (vox_i32)VOX_WORLD_HEIGHT) {
+        origin_y = (vox_u16)(VOX_WORLD_HEIGHT -
+                             VOX_DIGS_REPLAY_WINDOW_DIAMETER);
+    } else {
+        origin_y = (vox_u16)(focus_y -
+                             (vox_i32)VOX_DIGS_REPLAY_WINDOW_RADIUS);
+    }
+    frame->terrain_origin_x = origin_x;
+    frame->terrain_origin_y = origin_y;
+    frame->terrain_width = VOX_DIGS_REPLAY_WINDOW_DIAMETER;
+    frame->terrain_height = VOX_DIGS_REPLAY_WINDOW_DIAMETER;
+    frame->camera_x_q16 = frame->player_x_q16[focus_player];
+    frame->camera_y_q16 = frame->player_y_q16[focus_player];
+    frame->camera_zoom_q16 = 65536L;
+    for (row = 0U; row < VOX_DIGS_REPLAY_WINDOW_DIAMETER; ++row) {
+        for (column = 0U; column < VOX_DIGS_REPLAY_WINDOW_DIAMETER;
+             ++column) {
+            const vox_cell *cell = vox_world_cell(
+                &match->world, (vox_u32)(origin_x + column),
+                (vox_u32)(origin_y + row), VOX_WORLD_DEPTH - 1U);
+            frame->terrain_material[row * VOX_DIGS_REPLAY_WINDOW_DIAMETER +
+                                    column] = cell == 0 ? VOX_MAT_AIR :
+                                    cell->material;
+        }
+    }
+    for (index = 0U; index < match->ragdolls.body_count &&
+         frame->rigid_count < VOX_DIGS_REPLAY_MAX_RIGIDS; ++index) {
+        const vox_rigid_body *body = &match->ragdolls.bodies[index];
+        vox_u16 x = (vox_u16)(body->position_x_q16 >> 16);
+        vox_u16 y = (vox_u16)(body->position_y_q16 >> 16);
+        vox_digs_replay_rigid *snapshot;
+        if ((body->flags & VOX_RIGID_BODY_ACTIVE) == 0U ||
+            !digs_replay_in_window(x, y, origin_x, origin_y)) continue;
+        snapshot = &frame->rigids[frame->rigid_count];
+        snapshot->position_x_q16 = body->position_x_q16;
+        snapshot->position_y_q16 = body->position_y_q16;
+        snapshot->velocity_x_q16 = body->velocity_x_q16;
+        snapshot->velocity_y_q16 = body->velocity_y_q16;
+        snapshot->angle_q16 = body->angle_q16;
+        snapshot->angular_velocity_q16 = body->angular_velocity_q16;
+        snapshot->half_width_q16 = body->half_width_q16;
+        snapshot->half_height_q16 = body->half_height_q16;
+        snapshot->flags = body->flags;
+        snapshot->reserved = 0U;
+        frame->rigid_count++;
+    }
+    for (index = 0U; index < match->fluids.active_cells &&
+         frame->fluid_count < VOX_DIGS_REPLAY_MAX_FLUIDS; ++index) {
+        const vox_fluid_cell *fluid = &match->fluids.cells[index];
+        vox_digs_replay_fluid *snapshot;
+        if (fluid->active == 0U || !digs_replay_in_window(
+                fluid->x, fluid->y, origin_x, origin_y)) continue;
+        snapshot = &frame->fluids[frame->fluid_count];
+        snapshot->x = fluid->x;
+        snapshot->y = fluid->y;
+        snapshot->z = fluid->z;
+        snapshot->material = fluid->material;
+        snapshot->volume_q16 = fluid->volume_q16;
+        snapshot->temperature_q16 = fluid->temperature_q16;
+        snapshot->flow_q16 = fluid->flow_q16;
+        frame->fluid_count++;
+    }
+    for (index = 0U; index < VOX_DIGS_MAX_EFFECTS &&
+         frame->effect_count < VOX_DIGS_REPLAY_MAX_EFFECTS; ++index) {
+        const vox_digs_effect *effect = &match->effects[index];
+        vox_u16 x = (vox_u16)(effect->position_x_q16 >> 16);
+        vox_u16 y = (vox_u16)(effect->position_y_q16 >> 16);
+        vox_digs_replay_effect *snapshot;
+        if (effect->active == 0U || !digs_replay_in_window(
+                x, y, origin_x, origin_y)) continue;
+        snapshot = &frame->effects[frame->effect_count];
+        snapshot->position_x_q16 = effect->position_x_q16;
+        snapshot->position_y_q16 = effect->position_y_q16;
+        snapshot->velocity_x_q16 = effect->velocity_x_q16;
+        snapshot->velocity_y_q16 = effect->velocity_y_q16;
+        snapshot->material = effect->material;
+        snapshot->ttl_ticks = effect->ttl_ticks;
+        snapshot->variant = effect->variant;
+        snapshot->source = effect->source;
+        snapshot->depth = effect->depth;
+        snapshot->flags = effect->flags;
+        frame->effect_count++;
+    }
+    {
+        vox_u16 available = match->event_count;
+        vox_u16 first = available > VOX_DIGS_REPLAY_MAX_EVENTS ?
+                        (vox_u16)(available - VOX_DIGS_REPLAY_MAX_EVENTS) : 0U;
+        for (index = first; index < available &&
+             frame->event_count < VOX_DIGS_REPLAY_MAX_EVENTS; ++index) {
+            const vox_digs_event *event = vox_digs_event_get(match, index);
+            vox_digs_replay_event *snapshot;
+            if (event == 0) continue;
+            snapshot = &frame->events[frame->event_count];
+            snapshot->sequence = event->sequence;
+            snapshot->tick = event->tick;
+            snapshot->position_x_q16 = event->position_x_q16;
+            snapshot->position_y_q16 = event->position_y_q16;
+            snapshot->type = event->type;
+            snapshot->source = event->source;
+            snapshot->target = event->target;
+            snapshot->weapon = event->weapon;
+            snapshot->material = event->material;
+            snapshot->magnitude = event->magnitude;
+            snapshot->variant = event->variant;
+            snapshot->reserved = event->reserved;
+            frame->event_count++;
+        }
+    }
+    if (match->replay.frame_count < VOX_DIGS_REPLAY_MAX_FRAMES) {
+        match->replay.frame_count++;
+    }
+}
+
+vox_result vox_digs_replay_step(vox_digs_match *match,
+                                vox_digs_replay_frame *frame)
+{
+    vox_u16 start;
+    vox_u16 index;
+    if (match == 0 || frame == 0 || match->phase != VOX_DIGS_RESULTS ||
+        match->replay.active == 0U || match->replay.frame_count == 0U) {
+        return VOX_ERR_INVALID;
+    }
+    start = match->replay.frame_count < VOX_DIGS_REPLAY_MAX_FRAMES ?
+            0U : match->replay.capture_cursor;
+    index = (vox_u16)((start + match->replay.play_cursor) %
+                      VOX_DIGS_REPLAY_MAX_FRAMES);
+    *frame = match->replay.frames[index];
+    match->replay.play_cursor++;
+    if (match->replay.play_cursor >= match->replay.frame_count) {
+        match->replay.active = 0U;
+    }
+    return VOX_OK;
+}
+
+static vox_u16 digs_rigid_free_slot(const vox_digs_match *match)
+{
+    vox_u16 body_index;
+    if (match == 0) return VOX_RIGID_MAX_BODIES;
+    for (body_index = 0U; body_index < VOX_RIGID_MAX_BODIES;
+         ++body_index) {
+        if ((match->ragdolls.bodies[body_index].flags &
+             VOX_RIGID_BODY_ACTIVE) == 0U) {
+            return body_index;
+        }
+    }
+    return VOX_RIGID_MAX_BODIES;
+}
+
+static void digs_note_rigid_spawn(vox_digs_match *match, vox_u16 body_index,
+                                  vox_u16 source, vox_u16 weapon,
+                                  vox_u16 material, vox_u16 loose_cells)
+{
+    if (match == 0 || body_index >= VOX_RIGID_MAX_BODIES) return;
+    match->rigid_source[body_index] =
+        source < VOX_DIGS_MAX_SLOTS ? source : VOX_DIGS_NO_PLAYER;
+    match->rigid_weapon[body_index] = weapon < VOX_DIGS_TOOL_COUNT ?
+                                      weapon : VOX_DIGS_TOOL_PICK;
+    match->rigid_impact_cooldown[body_index] = 0U;
+    match->rigid_material[body_index] = material < VOX_MAT_COUNT ?
+                                        material : VOX_MAT_STONE;
+    match->rigid_loose_cells[body_index] =
+        (match->ragdolls.bodies[body_index].flags &
+         VOX_RIGID_BODY_DEBRIS) != 0U ? loose_cells : 0U;
+}
+
+static void digs_spawn_blast_debris(vox_digs_match *match, vox_u32 x,
+                                    vox_u32 y, vox_u16 radius,
+                                    vox_u16 scrap, vox_u16 source,
+                                    vox_u16 weapon)
+{
+    vox_u16 piece;
+    for (piece = 0U; piece < 4U; ++piece) {
+        vox_u16 body_index;
+        vox_u32 noise = digs_noise(match->rules.seed, match->tick,
+                                   piece, x + y * 17U);
+        vox_i32 offset_x = (vox_i32)(noise % (radius * 2U + 1U)) -
+                           (vox_i32)radius;
+        vox_i32 offset_y = (vox_i32)((noise >> 8) % (radius + 1U));
+        if (vox_rigid_spawn(&match->ragdolls, &body_index,
+                            ((vox_i32)x + offset_x) << 16,
+                            ((vox_i32)y - offset_y) << 16,
+                            scrap != 0U ? 8192L : 12288L,
+                            scrap != 0U ? 8192L : 12288L,
+                            scrap != 0U ? 16384L : 32768L,
+                            scrap != 0U ? VOX_RIGID_BODY_SCRAP :
+                            VOX_RIGID_BODY_DEBRIS) != VOX_OK) {
+            break; /* stable pool order: least-important later pieces drop. */
+        }
+        digs_note_rigid_spawn(match, body_index, source, weapon,
+                              scrap != 0U ? VOX_MAT_METAL : VOX_MAT_STONE,
+                              scrap != 0U ? 0U : 1U);
+        match->ragdolls.bodies[body_index].velocity_x_q16 =
+            ((vox_i32)((noise >> 16) % 9U) - 4L) * 8192L;
+        match->ragdolls.bodies[body_index].velocity_y_q16 =
+            -((vox_i32)((noise >> 20) % 5U) + 1L) * 4096L;
+        match->ragdolls.bodies[body_index].angular_velocity_q16 =
+            ((vox_i32)((noise >> 24) % 17U) - 8L) * 4096L;
+    }
+}
+
+/*
+ * Blast terrain and handle overhead hooks as structural objects.  Metal
+ * fixtures are found before the blast because the world kernel quite
+ * correctly has no knowledge of grappling semantics.  A fixture hit by the
+ * fracture envelope loses every remaining anchor cell in its column and
+ * becomes a bounded radial scrap body.  The scan and pool insertion are
+ * stable: row-major fixture order wins, and later pieces are discarded when
+ * the rigid pool is full rather than being teleported into the sky.
+ */
+static vox_result digs_blast(vox_digs_match *match, vox_u32 x, vox_u32 y,
+                             vox_u32 z, vox_u16 radius, vox_i32 heat_q16,
+                             vox_u16 source, vox_u16 weapon)
+{
+    vox_u16 fixture_x[16];
+    vox_u16 fixture_y[16];
+    vox_u16 fixture_count = 0U;
+    long min_x;
+    long max_x;
+    long min_y;
+    long max_y;
+    long sample_x;
+    long sample_y;
+    long fracture_radius;
+    long fracture_squared;
+    vox_result result;
+    vox_u16 i;
+    if (match == 0 || radius == 0U || radius > VOX_BLAST_MAX_RADIUS) {
+        return VOX_ERR_INVALID;
+    }
+    fracture_radius = (long)radius + 2L;
+    fracture_squared = fracture_radius * fracture_radius;
+    min_x = (long)x - fracture_radius;
+    max_x = (long)x + fracture_radius;
+    min_y = (long)y - fracture_radius;
+    max_y = (long)y + fracture_radius;
+    if (min_x < 0L) min_x = 0L;
+    if (min_y < 0L) min_y = 0L;
+    if (max_x >= (long)VOX_WORLD_WIDTH) {
+        max_x = (long)VOX_WORLD_WIDTH - 1L;
+    }
+    if (max_y >= (long)VOX_WORLD_HEIGHT) {
+        max_y = (long)VOX_WORLD_HEIGHT - 1L;
+    }
+    for (sample_y = min_y; sample_y <= max_y; ++sample_y) {
+        for (sample_x = min_x; sample_x <= max_x; ++sample_x) {
+            long delta_x = sample_x - (long)x;
+            long delta_y = sample_y - (long)y;
+            if (delta_x * delta_x + delta_y * delta_y > fracture_squared ||
+                !digs_cell_is_rope_anchor(&match->world,
+                                           (vox_u32)sample_x,
+                                           (vox_u32)sample_y)) {
+                continue;
+            }
+            if (fixture_count < 16U) {
+                fixture_x[fixture_count] = (vox_u16)sample_x;
+                fixture_y[fixture_count] = (vox_u16)sample_y;
+                fixture_count++;
+            }
+        }
+    }
+    result = vox_world_blast(&match->world, x, y, z, radius, heat_q16);
+    if (result != VOX_OK) return result;
+    /* Every blast invalidates the same deterministic support frontier.  This
+     * lives here rather than only in direct-tool use so fused projectiles,
+     * hitscan bores, and AI weapons cannot bypass cave-in scheduling. */
+    (void)vox_structure_invalidate_with_cause(
+        &match->structure, x, y,
+        (vox_u32)radius + VOX_STRUCTURE_COHESION_CELLS,
+        source, weapon);
+    for (i = 0U; i < fixture_count; ++i) {
+        vox_u32 depth;
+        vox_u32 noise;
+        vox_u16 body_index;
+        vox_i32 delta_x = (vox_i32)fixture_x[i] - (vox_i32)x;
+        vox_i32 delta_y = (vox_i32)fixture_y[i] - (vox_i32)y;
+        /* The fracture mask may leave an outer metal cell intact.  It is
+         * still part of the destroyed fixture, so remove it explicitly. */
+        for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+            const vox_cell *cell = vox_world_cell(&match->world,
+                                                   fixture_x[i],
+                                                   fixture_y[i], depth);
+            if (cell != 0 && cell->material == VOX_MAT_METAL) {
+                (void)vox_world_set(&match->world, fixture_x[i],
+                                    fixture_y[i], depth, VOX_MAT_AIR, 0L);
+            }
+        }
+        noise = digs_noise(match->rules.seed, match->tick, i,
+                           (vox_u32)fixture_x[i] * 17U + fixture_y[i]);
+        if (delta_x == 0L && delta_y == 0L) {
+            delta_x = (noise & 1U) != 0U ? 1L : -1L;
+        }
+        if (vox_rigid_spawn(&match->ragdolls, &body_index,
+                            ((vox_i32)fixture_x[i] << 16) + 32768L,
+                            ((vox_i32)fixture_y[i] << 16) + 32768L,
+                            8192L, 8192L, 16384L,
+                            VOX_RIGID_BODY_SCRAP) == VOX_OK) {
+            digs_note_rigid_spawn(match, body_index, source, weapon,
+                                  VOX_MAT_METAL, 0U);
+            match->ragdolls.bodies[body_index].velocity_x_q16 =
+                delta_x * 8192L +
+                ((vox_i32)((noise >> 8) % 5U) - 2L) * 2048L;
+            match->ragdolls.bodies[body_index].velocity_y_q16 =
+                delta_y * 8192L - 32768L -
+                (vox_i32)((noise >> 12) % 4U) * 2048L;
+            match->ragdolls.bodies[body_index].angular_velocity_q16 =
+                ((vox_i32)((noise >> 16) % 17U) - 8L) * 4096L;
+        }
+        digs_emit_event(match, VOX_DIGS_EVENT_FIXTURE_BREAK, source,
+                        VOX_DIGS_NO_PLAYER, weapon, VOX_MAT_METAL,
+                        (vox_i32)fixture_x[i] << 16,
+                        (vox_i32)fixture_y[i] << 16, 1U,
+                        (vox_u16)(noise & 15U));
+    }
+    return VOX_OK;
+}
+
+/* Consume a small, stable number of collapse seeds per tick.  The structure
+ * scheduler finds unsupported terrain; this game-facing bridge is where it
+ * becomes a rigid debris fragment and a normal authoritative event.  A full
+ * rigid pool restores the fragment as loose terrain instead of deleting it,
+ * leaving the existing bounded gravity solver as the explicit overflow path. */
+static void digs_step_structural_cascades(vox_digs_match *match)
+{
+    vox_u16 fragment;
+    for (fragment = 0U; fragment < 2U; ++fragment) {
+        vox_structure_collapse collapse;
+        vox_structure_cluster detached;
+        vox_result result;
+        vox_u16 weapon;
+        vox_u16 material;
+        vox_u32 noise;
+        vox_i32 impulse_x;
+        vox_i32 impulse_y;
+        vox_u16 body_index;
+        if (vox_structure_pop_collapse(&match->structure, &collapse) !=
+            VOX_OK) {
+            break;
+        }
+        result = vox_cluster_extract_unsupported(&match->world, collapse.x,
+                                                 collapse.y, collapse.z,
+                                                 &detached);
+        if (result != VOX_OK || detached.count == 0U) {
+            continue;
+        }
+        weapon = collapse.weapon < VOX_DIGS_TOOL_COUNT ? collapse.weapon :
+                 VOX_DIGS_TOOL_PICK;
+        material = detached.cells[0].material;
+        noise = digs_noise(match->rules.seed, match->tick, fragment,
+                           (vox_u32)collapse.x * 257U + collapse.y);
+        impulse_x = ((vox_i32)((noise >> 8) % 17U) - 8L) * 4096L;
+        impulse_y = -((vox_i32)((noise >> 16) % 9U) + 2L) * 4096L;
+        body_index = digs_rigid_free_slot(match);
+        if (vox_cluster_spawn_debris(&detached, &match->ragdolls,
+                                     impulse_x, impulse_y) != VOX_OK) {
+            /* Capacity is visible in hashed state and recoverable in terrain;
+             * later fragments never get silently moved to the ceiling. */
+            if (vox_cluster_restore(&match->world, &detached, 1U) == VOX_OK) {
+                match->structure.discarded_collapse++;
+                (void)vox_structure_invalidate_with_cause(
+                    &match->structure, collapse.x, collapse.y,
+                    VOX_STRUCTURE_COHESION_CELLS + 2U,
+                    collapse.source, weapon);
+            }
+            continue;
+        }
+        digs_note_rigid_spawn(match, body_index, collapse.source, weapon,
+                              material, detached.count);
+        digs_emit_event(match, VOX_DIGS_EVENT_CAVE_IN, collapse.source,
+                        VOX_DIGS_NO_PLAYER, weapon, material,
+                        ((vox_i32)collapse.x << 16) + 32768L,
+                        ((vox_i32)collapse.y << 16) + 32768L,
+                        detached.count,
+                        detached.complete == 0U ? 1U : collapse.risk_q8);
+        if (collapse.source != VOX_STRUCTURE_NO_SOURCE &&
+            vox_digs_player_is_active(match, collapse.source)) {
+            (void)vox_digs_award_note(match, collapse.source,
+                                      VOX_DIGS_AWARD_CAVE_IN_ARTIST,
+                                      detached.count);
+        }
+        /* Re-evaluate both edges of the removed fragment.  This carries an
+         * overlong roof through the fixed chunk frontier without a single
+         * unbounded cross-map traversal. */
+        (void)vox_structure_invalidate_with_cause(
+            &match->structure, detached.min_x, detached.min_y,
+            VOX_STRUCTURE_COHESION_CELLS + 2U, collapse.source, weapon);
+        (void)vox_structure_invalidate_with_cause(
+            &match->structure, detached.max_x, detached.max_y,
+            VOX_STRUCTURE_COHESION_CELLS + 2U, collapse.source, weapon);
+    }
+}
+
+/* Rigid terrain stays in the generic physics pool, so collision with miners
+ * is resolved here in stable body/slot order.  This makes a falling cave-in
+ * consequential without teaching the C89 physics library about game rules or
+ * letting a resting slab repeatedly score damage. */
+static void digs_step_rigid_impacts(vox_digs_match *match)
+{
+    vox_u16 body_index;
+    if (match == 0 || match->phase != VOX_DIGS_RUNNING) return;
+    for (body_index = 0U; body_index < VOX_RIGID_MAX_BODIES;
+         ++body_index) {
+        vox_rigid_body *body = &match->ragdolls.bodies[body_index];
+        vox_u32 speed_x;
+        vox_u32 speed_y;
+        vox_u32 speed;
+        vox_u32 damage_value;
+        vox_u32 mass_units;
+        vox_i32 extent_x;
+        vox_i32 extent_y;
+        vox_u16 player;
+        vox_u16 source;
+        vox_u16 weapon;
+        vox_u16 material;
+        if (match->rigid_impact_cooldown[body_index] > 0U) {
+            match->rigid_impact_cooldown[body_index]--;
+        }
+        if ((body->flags & VOX_RIGID_BODY_ACTIVE) == 0U ||
+            (body->flags & (VOX_RIGID_BODY_DEBRIS |
+                            VOX_RIGID_BODY_SCRAP)) == 0U ||
+            match->rigid_impact_cooldown[body_index] != 0U) {
+            continue;
+        }
+        speed_x = digs_abs_i32(body->velocity_x_q16);
+        speed_y = digs_abs_i32(body->velocity_y_q16);
+        if (speed_x > 4294967295U - speed_y) {
+            speed = 4294967295U;
+        } else {
+            speed = speed_x + speed_y;
+        }
+        if (speed < (vox_u32)DIGS_RIGID_IMPACT_MIN_SPEED_Q16) {
+            continue;
+        }
+        extent_x = body->half_width_q16 + body->half_height_q16;
+        extent_y = extent_x;
+        if (extent_x < 0L || extent_y < 0L) {
+            continue;
+        }
+        mass_units = body->mass_q16 > 0L ?
+                     (vox_u32)(body->mass_q16 / 65536L) : 0U;
+        if (mass_units > 32U) mass_units = 32U;
+        damage_value = 4U + speed / 16384U + mass_units / 4U;
+        if (damage_value > DIGS_RIGID_IMPACT_MAX_DAMAGE) {
+            damage_value = DIGS_RIGID_IMPACT_MAX_DAMAGE;
+        }
+        source = match->rigid_source[body_index];
+        if (!vox_digs_player_is_active(match, source)) {
+            source = VOX_DIGS_NO_PLAYER;
+        }
+        weapon = match->rigid_weapon[body_index] < VOX_DIGS_TOOL_COUNT ?
+                 match->rigid_weapon[body_index] : VOX_DIGS_TOOL_PICK;
+        material = match->rigid_material[body_index] < VOX_MAT_COUNT ?
+                   match->rigid_material[body_index] :
+                   ((body->flags & VOX_RIGID_BODY_SCRAP) != 0U ?
+                    VOX_MAT_METAL : VOX_MAT_STONE);
+        for (player = 0U; player < match->rules.player_count; ++player) {
+            vox_i32 player_extent_x;
+            vox_i32 player_extent_y;
+            if (!match->alive[player] || digs_player_extracted(match, player)) {
+                continue;
+            }
+            player_extent_x = match->players[player].half_width_q16;
+            player_extent_y = match->players[player].half_height_q16;
+            if (digs_abs_i32(body->position_x_q16 -
+                             match->players[player].position_x.value_q16) >
+                (vox_u32)(extent_x + player_extent_x) ||
+                digs_abs_i32(body->position_y_q16 -
+                             match->players[player].position_y.value_q16) >
+                (vox_u32)(extent_y + player_extent_y)) {
+                continue;
+            }
+            match->rigid_impact_cooldown[body_index] =
+                DIGS_RIGID_IMPACT_COOLDOWN_TICKS;
+            digs_emit_event(match, VOX_DIGS_EVENT_DEBRIS_IMPACT, source,
+                            player, weapon, material,
+                            body->position_x_q16, body->position_y_q16,
+                            (vox_u16)damage_value, body_index);
+            (void)vox_digs_apply_hit(match, source, player, weapon,
+                                     VOX_DIGS_PART_TORSO,
+                                     (vox_u16)damage_value,
+                                     VOX_DIGS_DAMAGE_BLUNT);
+            body->velocity_x_q16 /= 2L;
+            body->velocity_y_q16 /= 2L;
+            if (match->phase != VOX_DIGS_RUNNING) return;
+            break;
+        }
+    }
+}
+
+/* Return the number of compact debris cells reintroduced near a sleeping
+ * rigid body.  The ring/depth order is stable, the cells are loose so they
+ * re-enter the ordinary deterministic terrain gravity path, and the caller
+ * accounts any cells that did not fit the fixed budget. */
+static vox_u16 digs_settle_rigid_debris(vox_digs_match *match,
+                                        vox_u16 body_index)
+{
+    vox_rigid_body *body;
+    vox_i32 center_x;
+    vox_i32 center_y;
+    vox_u16 material;
+    vox_u16 wanted;
+    vox_u16 placed = 0U;
+    vox_u16 radius;
+    vox_i32 offset_x;
+    vox_i32 offset_y;
+    vox_u32 depth;
+    if (match == 0 || body_index >= VOX_RIGID_MAX_BODIES) return 0U;
+    body = &match->ragdolls.bodies[body_index];
+    material = match->rigid_material[body_index];
+    wanted = match->rigid_loose_cells[body_index];
+    if (wanted == 0U || material == VOX_MAT_AIR || material >= VOX_MAT_COUNT) {
+        return 0U;
+    }
+    if (wanted > DIGS_RIGID_SETTLE_MAX_CELLS) {
+        wanted = DIGS_RIGID_SETTLE_MAX_CELLS;
+    }
+    center_x = body->position_x_q16 >> 16;
+    center_y = body->position_y_q16 >> 16;
+    for (radius = 0U; radius <= DIGS_RIGID_SETTLE_RADIUS && placed < wanted;
+         ++radius) {
+        for (offset_y = -(vox_i32)radius;
+             offset_y <= (vox_i32)radius && placed < wanted; ++offset_y) {
+            for (offset_x = -(vox_i32)radius;
+                 offset_x <= (vox_i32)radius && placed < wanted; ++offset_x) {
+                vox_i32 cell_x;
+                vox_i32 cell_y;
+                if (radius != 0U && offset_x != -(vox_i32)radius &&
+                    offset_x != (vox_i32)radius &&
+                    offset_y != -(vox_i32)radius &&
+                    offset_y != (vox_i32)radius) {
+                    continue;
+                }
+                cell_x = center_x + offset_x;
+                cell_y = center_y + offset_y;
+                if (cell_x < 0L || cell_y < 0L ||
+                    cell_x >= (vox_i32)VOX_WORLD_WIDTH ||
+                    cell_y >= (vox_i32)VOX_WORLD_HEIGHT) {
+                    continue;
+                }
+                for (depth = 0U; depth < VOX_WORLD_DEPTH && placed < wanted;
+                     ++depth) {
+                    const vox_cell *cell = vox_world_cell(
+                        &match->world, (vox_u32)cell_x, (vox_u32)cell_y,
+                        depth);
+                    if (cell == 0 || cell->material != VOX_MAT_AIR) {
+                        continue;
+                    }
+                    if (vox_world_set(&match->world, (vox_u32)cell_x,
+                                      (vox_u32)cell_y, depth, material,
+                                      20L << 16) != VOX_OK ||
+                        vox_world_set_loose(&match->world, (vox_u32)cell_x,
+                                            (vox_u32)cell_y, depth, 1U) !=
+                            VOX_OK) {
+                        continue;
+                    }
+                    placed++;
+                }
+            }
+        }
+    }
+    if (placed != 0U) {
+        (void)vox_structure_invalidate(&match->structure,
+                                       (vox_u32)center_x,
+                                       (vox_u32)center_y,
+                                       DIGS_RIGID_SETTLE_RADIUS);
+    }
+    return placed;
+}
+
+static void digs_recycle_sleeping_rigids(vox_digs_match *match)
+{
+    vox_u16 body_index;
+    for (body_index = 0U; body_index < match->ragdolls.body_count;
+         ++body_index) {
+        vox_rigid_body *body = &match->ragdolls.bodies[body_index];
+        vox_u16 material;
+        vox_u16 settle_total;
+        vox_u16 settle_placed;
+        vox_u16 settle_discarded;
+        if ((body->flags & VOX_RIGID_BODY_ACTIVE) == 0U ||
+            (body->flags & VOX_RIGID_BODY_SLEEPING) == 0U ||
+            body->sleep_ticks < 180U ||
+            (body->flags & (VOX_RIGID_BODY_CORPSE |
+                            VOX_RIGID_BODY_DEBRIS |
+                            VOX_RIGID_BODY_SCRAP)) == 0U) {
+            continue;
+        }
+        material = match->rigid_material[body_index] < VOX_MAT_COUNT ?
+                   match->rigid_material[body_index] :
+                   ((body->flags & VOX_RIGID_BODY_SCRAP) != 0U ?
+                    VOX_MAT_METAL : VOX_MAT_STONE);
+        settle_total = 0U;
+        settle_placed = 0U;
+        settle_discarded = 0U;
+        if ((body->flags & VOX_RIGID_BODY_DEBRIS) != 0U) {
+            settle_total = match->rigid_loose_cells[body_index];
+            settle_placed = digs_settle_rigid_debris(match, body_index);
+            if (settle_placed < settle_total) {
+                settle_discarded = (vox_u16)(settle_total - settle_placed);
+                if ((vox_u32)settle_discarded >
+                    4294967295U - match->rigid_settle_discarded) {
+                    match->rigid_settle_discarded = 4294967295U;
+                } else {
+                    match->rigid_settle_discarded += settle_discarded;
+                }
+            }
+        }
+        digs_emit_event(match, VOX_DIGS_EVENT_DEBRIS_IMPACT,
+                        VOX_DIGS_NO_PLAYER, VOX_DIGS_NO_PLAYER,
+                        VOX_DIGS_TOOL_PICK, material,
+                        body->position_x_q16, body->position_y_q16,
+                        settle_placed, settle_discarded);
+        (void)vox_rigid_release(&match->ragdolls, body_index);
+        match->rigid_source[body_index] = VOX_DIGS_NO_PLAYER;
+        match->rigid_weapon[body_index] = VOX_DIGS_TOOL_PICK;
+        match->rigid_impact_cooldown[body_index] = 0U;
+        match->rigid_material[body_index] = VOX_MAT_AIR;
+        match->rigid_loose_cells[body_index] = 0U;
+    }
+}
+
+vox_result vox_digs_award_note(vox_digs_match *match, vox_u16 player,
+                               vox_u16 award, vox_u16 value)
+{
+    vox_u16 bit;
+    if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
+        !vox_digs_player_is_active(match, player) ||
+        award >= VOX_DIGS_MAX_AWARDS) return VOX_ERR_INVALID;
+    bit = (vox_u16)(1U << award);
+    if ((match->awards[player] & bit) == 0U) {
+        vox_u16 other;
+        match->awards[player] = (vox_u16)(match->awards[player] | bit);
+        if (match->award_value[player] <= (vox_u16)(65535U - value)) {
+            match->award_value[player] = (vox_u16)(match->award_value[player] +
+                                                   value);
+        } else {
+            match->award_value[player] = 65535U;
+        }
+        /* Awards are part of the miners' existing social memory, not a new
+         * identity record.  Everyone active in the mine can react to the
+         * deed through the ordinary deterministic contract path. */
+        for (other = 0U; other < match->rules.player_count; ++other) {
+            if (other != player && match->alive[other] &&
+                !digs_player_extracted(match, other)) {
+                digs_contract_note(match, player, other,
+                                   (vox_u16)VOX_DIGS_STIMULUS_STREAK);
+            }
+        }
+        digs_emit_event(match, VOX_DIGS_EVENT_AWARD, player,
+                        VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK,
+                        VOX_MAT_AIR, match->players[player].position_x.value_q16,
+                        match->players[player].position_y.value_q16,
+                        value, award);
+    }
+    return VOX_OK;
+}
+
+static int digs_dropship_hits_player(const vox_digs_match *match,
+                                     vox_u16 player)
+{
+    vox_i32 body_min_x;
+    vox_i32 body_max_x;
+    vox_i32 body_min_y;
+    vox_i32 body_max_y;
+    vox_i32 ship_min_x;
+    vox_i32 ship_max_x;
+    vox_i32 ship_min_y;
+    vox_i32 ship_max_y;
+    vox_i32 previous_min_x;
+    vox_i32 previous_max_x;
+    if (!match->alive[player] || digs_player_extracted(match, player) ||
+        (match->dropship.launched_mask & (vox_u16)(1U << player)) == 0U) {
+        return 0;
+    }
+    body_min_x = match->players[player].position_x.value_q16 -
+                 match->players[player].half_width_q16;
+    body_max_x = match->players[player].position_x.value_q16 +
+                 match->players[player].half_width_q16;
+    body_min_y = match->players[player].position_y.value_q16 -
+                 match->players[player].half_height_q16;
+    body_max_y = match->players[player].position_y.value_q16 +
+                 match->players[player].half_height_q16;
+    ship_min_x = match->dropship.position_x_q16 -
+                 VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16;
+    ship_max_x = match->dropship.position_x_q16 +
+                 VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16;
+    ship_min_y = match->dropship.position_y_q16 -
+                 VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16;
+    ship_max_y = match->dropship.position_y_q16 +
+                 VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16;
+    if (body_max_y < ship_min_y || body_min_y > ship_max_y) {
+        return 0;
+    }
+    if (body_max_x >= ship_min_x && body_min_x <= ship_max_x) {
+        return 1;
+    }
+    previous_min_x = match->dropship.previous_position_x_q16 -
+                     VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16;
+    previous_max_x = match->dropship.previous_position_x_q16 +
+                     VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16;
+    return body_max_x >= previous_min_x && body_min_x <= previous_max_x;
+}
+
+vox_result vox_digs_dropship_launch(vox_digs_match *match, vox_u16 player)
+{
+    vox_u16 bit;
+    if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
+        !vox_digs_player_is_active(match, player) ||
+        !match->alive[player] || digs_player_extracted(match, player) ||
+        match->dropship.phase != VOX_DIGS_DROPSHIP_PHASE_LAUNCH ||
+        match->dropship.route_ticks > VOX_DIGS_DROP_SHIP_ROUTE_TICKS) {
+        return VOX_ERR_INVALID;
+    }
+    bit = (vox_u16)(1U << player);
+    if ((match->dropship.launched_mask & bit) != 0U) return VOX_OK;
+    match->dropship.launched_mask = (vox_u16)(match->dropship.launched_mask |
+                                              bit);
+    /* A player pressing FIRE while staged is on top of the hull.  Move that
+     * body through the ship's open hold before giving it a downward launch;
+     * the next dropship collision query must see a clear vertical interval.
+     * Do not teleport an independently positioned auto-releasee. */
+    if (digs_dropship_player_on_deck(match, player)) {
+        match->players[player].position_y.value_q16 =
+            match->dropship.position_y_q16 +
+            VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16 +
+            match->players[player].half_height_q16 +
+            DIGS_DROPSHIP_EJECT_CLEARANCE_Q16;
+        match->players[player].flags = (vox_u16)(
+            match->players[player].flags &
+            (vox_u16)~VOX_PHYSICS_BODY_GROUNDED);
+    }
+    match->players[player].velocity_x.value_q16 =
+        match->dropship.velocity_x_q16;
+    match->players[player].velocity_y.value_q16 =
+        VOX_DIGS_DROPSHIP_LAUNCH_SPEED_Q16;
+    digs_emit_event(match, VOX_DIGS_EVENT_SHIP_LAUNCH, player,
+                    VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK, VOX_MAT_METAL,
+                    match->dropship.position_x_q16,
+                    match->dropship.position_y_q16, 0U, 0U);
+    return VOX_OK;
+}
+
+vox_result vox_digs_dropship_begin(vox_digs_match *match)
+{
+    vox_u16 player;
+    if (match == 0 || match->abi_version != VOX_ABI_VERSION ||
+        match->struct_size < (vox_u32)sizeof(*match) ||
+        match->phase != VOX_DIGS_RUNNING ||
+        match->tick != 0U ||
+        match->dropship.phase != VOX_DIGS_DROPSHIP_PHASE_DEPARTED ||
+        match->dropship.route_ticks != 0U) {
+        return VOX_ERR_INVALID;
+    }
+    match->dropship.position_x_q16 = VOX_DIGS_DROPSHIP_LAUNCH_START_X_Q16;
+    match->dropship.position_y_q16 = VOX_DIGS_DROPSHIP_CRUISE_Y_Q16;
+    match->dropship.previous_position_x_q16 =
+        match->dropship.position_x_q16;
+    match->dropship.velocity_x_q16 = DIGS_DROPSHIP_ROUTE_SPEED_Q16;
+    match->dropship.phase = VOX_DIGS_DROPSHIP_PHASE_LAUNCH;
+    match->dropship.launched_mask = 0U;
+    match->dropship.extracted_mask = 0U;
+    match->dropship.alarmed = 0U;
+    match->dropship.collision_cooldown = 0U;
+    for (player = 0U; player < match->rules.player_count; ++player) {
+        digs_dropship_stage_player(match, player);
+    }
+    match->state_hash = vox_digs_hash(match);
+    return VOX_OK;
+}
+
+vox_result vox_digs_dropship_board(vox_digs_match *match, vox_u16 player)
+{
+    vox_u16 bit;
+    if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
+        !vox_digs_player_is_active(match, player) ||
+        !match->alive[player] || digs_player_extracted(match, player) ||
+        match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_DEPARTED ||
+        (match->dropship.launched_mask & (vox_u16)(1U << player)) == 0U ||
+        !digs_dropship_player_near(match, player,
+                                   VOX_DIGS_DROPSHIP_BOARD_RADIUS_Q16)) {
+        return VOX_ERR_INVALID;
+    }
+    bit = (vox_u16)(1U << player);
+    match->dropship.extracted_mask =
+        (vox_u16)(match->dropship.extracted_mask | bit);
+    match->player_actions[player] = 0U;
+    match->previous_actions[player] = 0U;
+    match->players[player].position_x.value_q16 =
+        match->dropship.position_x_q16;
+    match->players[player].position_y.value_q16 =
+        match->dropship.position_y_q16 -
+        VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16 -
+        match->players[player].half_height_q16;
+    match->players[player].velocity_x.value_q16 =
+        match->dropship.velocity_x_q16;
+    match->players[player].velocity_y.value_q16 = 0L;
+    match->players[player].flags = VOX_PHYSICS_BODY_GROUNDED;
+    digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_DETACH);
+    (void)vox_digs_award_note(match, player,
+                              VOX_DIGS_AWARD_EXTRACTIONIST, 100U);
+    digs_emit_event(match, VOX_DIGS_EVENT_SHIP_EXTRACT, player,
+                    VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK, VOX_MAT_METAL,
+                    match->dropship.position_x_q16,
+                    match->dropship.position_y_q16, 0U, 0U);
+    return VOX_OK;
+}
+
+vox_result vox_digs_dropship_grapple(vox_digs_match *match, vox_u16 player)
+{
+    vox_digs_rope *rope;
+    vox_i32 length;
+    if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
+        !vox_digs_player_is_active(match, player) ||
+        !match->alive[player] || digs_player_extracted(match, player) ||
+        match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_DEPARTED ||
+        !digs_segment_is_clear(&match->world,
+            match->players[player].position_x.value_q16,
+            match->players[player].position_y.value_q16,
+            match->dropship.position_x_q16,
+            match->dropship.position_y_q16, 0, 0)) {
+        return VOX_ERR_INVALID;
+    }
+    length = digs_distance_approx(
+        match->dropship.position_x_q16 -
+            match->players[player].position_x.value_q16,
+        match->dropship.position_y_q16 -
+            match->players[player].position_y.value_q16);
+    if (length < DIGS_ROPE_MIN_LENGTH_Q16 ||
+        length > DIGS_ROPE_MAX_LENGTH_Q16) {
+        return VOX_ERR_INVALID;
+    }
+    rope = &match->ropes[player];
+    if (rope->state != VOX_DIGS_ROPE_IDLE) {
+        digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_DETACH);
+    }
+    rope->anchor_x_q16 = match->dropship.position_x_q16;
+    rope->anchor_y_q16 = match->dropship.position_y_q16;
+    rope->length_q16 = length;
+    rope->tension_q16 = 0L;
+    rope->hook_x_q16 = rope->anchor_x_q16;
+    rope->hook_y_q16 = rope->anchor_y_q16;
+    rope->active = 1U;
+    rope->integrity = 100U;
+    rope->state = VOX_DIGS_ROPE_ATTACHED;
+    rope->point_count = 1U;
+    rope->target_player = VOX_DIGS_NO_PLAYER;
+    rope->flags = VOX_DIGS_ROPE_TARGET_SHIP;
+    rope->target_x = (vox_u16)digs_q16_to_cell(
+        match->dropship.position_x_q16);
+    rope->target_y = (vox_u16)digs_q16_to_cell(
+        match->dropship.position_y_q16);
+    rope->points[0].position_x_q16 = rope->anchor_x_q16;
+    rope->points[0].position_y_q16 = rope->anchor_y_q16;
+    rope->points[0].previous_x_q16 = rope->anchor_x_q16;
+    rope->points[0].previous_y_q16 = rope->anchor_y_q16;
+    digs_emit_event(match, VOX_DIGS_EVENT_ROPE_ATTACH, player,
+                    VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK, VOX_MAT_METAL,
+                    rope->anchor_x_q16, rope->anchor_y_q16,
+                    (vox_u16)(length >> 16), 0U);
+    digs_emit_event(match, VOX_DIGS_EVENT_SHIP_GRAPPLE, player,
+                    VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_PICK, VOX_MAT_METAL,
+                    rope->anchor_x_q16, rope->anchor_y_q16,
+                    (vox_u16)(length >> 16), 0U);
+    return VOX_OK;
+}
+
+vox_result vox_digs_dropship_step(vox_digs_match *match)
+{
+    vox_u16 player;
+    if (match == 0 || match->phase != VOX_DIGS_RUNNING) return VOX_ERR_INVALID;
+    /* The launch ship is opt-in at the host boundary.  This makes a plain
+     * match_init useful for deterministic terrain, AI, and tooling scenarios
+     * without an invisible virtual hull changing their simulation. */
+    if (match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_DEPARTED) {
+        return VOX_OK;
+    }
+    if (match->dropship.collision_cooldown > 0U) {
+        match->dropship.collision_cooldown--;
+    }
+    match->dropship.previous_position_x_q16 =
+        match->dropship.position_x_q16;
+    if (match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_LAUNCH ||
+        match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_EXTRACTION) {
+        match->dropship.position_x_q16 += match->dropship.velocity_x_q16;
+        match->dropship.route_ticks++;
+        if (match->dropship.route_ticks >= VOX_DIGS_DROP_SHIP_ROUTE_TICKS) {
+            if (match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_LAUNCH) {
+                for (player = 0U; player < match->rules.player_count; ++player) {
+                    if ((match->dropship.launched_mask &
+                         (vox_u16)(1U << player)) == 0U) {
+                        (void)vox_digs_dropship_launch(match, player);
+                    }
+                }
+                match->dropship.position_x_q16 =
+                    VOX_DIGS_DROPSHIP_LAUNCH_END_X_Q16;
+                match->dropship.phase = VOX_DIGS_DROPSHIP_PHASE_WAITING;
+                match->dropship.route_ticks = 0U;
+                match->dropship.velocity_x_q16 = 0L;
+            } else {
+                match->dropship.position_x_q16 =
+                    VOX_DIGS_DROPSHIP_LAUNCH_START_X_Q16;
+                match->dropship.phase = VOX_DIGS_DROPSHIP_PHASE_DEPARTED;
+                match->dropship.route_ticks = VOX_DIGS_DROP_SHIP_ROUTE_TICKS;
+                match->dropship.velocity_x_q16 = 0L;
+            }
+        }
+    }
+    if (match->tick >= match->rules.lava_start_tick &&
+        match->dropship.alarmed == 0U) {
+        if (match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_LAUNCH) {
+            for (player = 0U; player < match->rules.player_count; ++player) {
+                if ((match->dropship.launched_mask &
+                     (vox_u16)(1U << player)) == 0U) {
+                    (void)vox_digs_dropship_launch(match, player);
+                }
+            }
+        }
+        match->dropship.alarmed = 1U;
+        match->dropship.phase = VOX_DIGS_DROPSHIP_PHASE_EXTRACTION;
+        match->dropship.route_ticks = 0U;
+        match->dropship.velocity_x_q16 = -DIGS_DROPSHIP_ROUTE_SPEED_Q16;
+        digs_emit_event(match, VOX_DIGS_EVENT_SHIP_ALARM,
+                        VOX_DIGS_NO_PLAYER, VOX_DIGS_NO_PLAYER,
+                        VOX_DIGS_TOOL_PICK, VOX_MAT_METAL,
+                        match->dropship.position_x_q16,
+                        match->dropship.position_y_q16, 0U, 0U);
+    }
+    for (player = 0U; player < match->rules.player_count; ++player) {
+        if (match->alive[player] && !digs_player_extracted(match, player)) {
+            digs_dropship_follow_player(match, player);
+        }
+    }
+    if (match->dropship.collision_cooldown == 0U) {
+        for (player = 0U; player < match->rules.player_count; ++player) {
+            if (!digs_dropship_hits_player(match, player)) {
+                continue;
+            }
+            match->dropship.collision_cooldown =
+                VOX_DIGS_DROPSHIP_COLLISION_COOLDOWN_TICKS;
+            digs_emit_event(match, VOX_DIGS_EVENT_SHIP_COLLISION, player,
+                            VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_SLEDGE,
+                            VOX_MAT_METAL,
+                            match->players[player].position_x.value_q16,
+                            match->players[player].position_y.value_q16,
+                            100U, 0U);
+            (void)vox_digs_apply_hit(match, VOX_DIGS_NO_PLAYER, player,
+                                     VOX_DIGS_TOOL_SLEDGE,
+                                     VOX_DIGS_PART_TORSO, 100U,
+                                     VOX_DIGS_DAMAGE_BLUNT |
+                                     VOX_DIGS_DAMAGE_EXPLOSIVE);
+            if (!match->alive[player]) {
+                digs_emit_event(match, VOX_DIGS_EVENT_SHIP_SPLATTER, player,
+                                VOX_DIGS_NO_PLAYER, VOX_DIGS_TOOL_SLEDGE,
+                                VOX_MAT_BLOOD,
+                                match->players[player].position_x.value_q16,
+                                match->players[player].position_y.value_q16,
+                                100U, 0U);
+            }
+            break; /* stable one-impact-per-cooldown policy */
+        }
+    }
+    return VOX_OK;
 }
 
 static int digs_score_limit_reached(const vox_digs_match *match)
@@ -1782,15 +4385,6 @@ static int digs_score_limit_reached(const vox_digs_match *match)
     vox_u16 i;
     if (match->rules.score_limit == 0U) {
         return 0;
-    }
-    if (match->rules.team_mode == VOX_DIGS_MODE_MINERS_VS_MACHINES) {
-        vox_u32 team_scores[2] = {0U, 0U};
-        for (i = 0U; i < match->rules.player_count; ++i) {
-            vox_u16 team = digs_team_for_player(match, i);
-            team_scores[team] += match->scores[i];
-        }
-        return team_scores[0] >= match->rules.score_limit ||
-               team_scores[1] >= match->rules.score_limit;
     }
     for (i = 0U; i < match->rules.player_count; ++i) {
         if ((vox_u32)match->scores[i] >= match->rules.score_limit) {
@@ -1809,21 +4403,7 @@ static void digs_finish_match(vox_digs_match *match, vox_u16 reason)
     match->result_reason = reason;
     match->result_draw = 0U;
     match->winner_player = VOX_DIGS_NO_PLAYER;
-    match->winner_team = VOX_DIGS_NO_TEAM;
-    if (match->rules.team_mode == VOX_DIGS_MODE_MINERS_VS_MACHINES) {
-        vox_u32 team_scores[2] = {0U, 0U};
-        for (i = 0U; i < match->rules.player_count; ++i) {
-            vox_u16 team = digs_team_for_player(match, i);
-            team_scores[team] += match->scores[i];
-        }
-        if (team_scores[0] == team_scores[1]) {
-            match->result_draw = 1U;
-        } else {
-            match->winner_team = team_scores[0] > team_scores[1] ?
-                                 VOX_DIGS_TEAM_MINERS :
-                                 VOX_DIGS_TEAM_MACHINES;
-        }
-    } else {
+    {
         vox_u16 best_score = 0U;
         vox_u16 best_player = VOX_DIGS_NO_PLAYER;
         vox_u16 tied = 0U;
@@ -1850,7 +4430,7 @@ static void digs_finish_match(vox_digs_match *match, vox_u16 reason)
         match->move_y_q15[i] = 0;
     }
     digs_emit_event(match, VOX_DIGS_EVENT_MATCH_END,
-                    match->winner_player, match->winner_team,
+                    match->winner_player, VOX_DIGS_NO_PLAYER,
                     VOX_DIGS_TOOL_PICK, VOX_MAT_METAL, 0L, 0L,
                     reason, match->result_draw);
 }
@@ -1968,8 +4548,16 @@ vox_result vox_digs_match_step(vox_digs_match *match)
         match->state_hash = vox_digs_hash(match);
         return VOX_OK;
     }
+    if (vox_digs_dropship_step(match) != VOX_OK) {
+        return VOX_ERR_INVALID;
+    }
     for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
         if (!vox_digs_player_is_active(match, i)) {
+            continue;
+        }
+        if (digs_player_extracted(match, i)) {
+            match->player_actions[i] = 0U;
+            match->previous_actions[i] = 0U;
             continue;
         }
         if (match->last_attacker[i] != VOX_DIGS_NO_PLAYER &&
@@ -1981,6 +4569,12 @@ vox_result vox_digs_match_step(vox_digs_match *match)
         }
         if (match->weapon_cooldown[i] > 0U) {
             match->weapon_cooldown[i]--;
+        }
+        if (match->dash_cooldown[i] > 0U) {
+            match->dash_cooldown[i]--;
+        }
+        if (match->dash_invulnerability[i] > 0U) {
+            match->dash_invulnerability[i]--;
         }
         if (match->alive[i] && match->spawn_shield_ticks[i] > 0U) {
             match->spawn_shield_ticks[i]--;
@@ -2014,7 +4608,8 @@ vox_result vox_digs_match_step(vox_digs_match *match)
         if (match->phase != VOX_DIGS_RUNNING) {
             break;
         }
-        if (match->alive[i] && vox_digs_player_is_bot(match, i) &&
+        if (match->alive[i] && !digs_player_extracted(match, i) &&
+            vox_digs_player_is_bot(match, i) &&
             vox_digs_bot_think(match, i) != VOX_OK) {
             return VOX_ERR_INVALID;
         }
@@ -2026,9 +4621,26 @@ vox_result vox_digs_match_step(vox_digs_match *match)
     if (vox_world_step(&match->world, 0) != VOX_OK) {
         return VOX_ERR_INVALID;
     }
+    if (vox_fluid_step_terrain(&match->fluids, &match->world,
+                               VOX_FLUID_MAX_CELLS) != VOX_OK ||
+        vox_structure_step(&match->structure, &match->world, 8U) != VOX_OK) {
+        return VOX_ERR_INVALID;
+    }
+    digs_step_structural_cascades(match);
+    if (vox_rigid_step_fluids(&match->ragdolls, &match->world,
+                              &match->fluids,
+                              match->physics_config.gravity_q16) != VOX_OK) {
+        return VOX_ERR_INVALID;
+    }
+    digs_step_rigid_impacts(match);
+    if (match->phase != VOX_DIGS_RUNNING) {
+        match->state_hash = vox_digs_hash(match);
+        return VOX_OK;
+    }
+    digs_recycle_sleeping_rigids(match);
     for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
         vox_result physics_result;
-        if (!match->alive[i]) {
+        if (!match->alive[i] || digs_player_extracted(match, i)) {
             continue;
         }
         digs_apply_player_controls(match, i);
@@ -2039,34 +4651,75 @@ vox_result vox_digs_match_step(vox_digs_match *match)
         physics_result = vox_physics_step_world(
             &match->players[i], &match->world, &match->physics_config);
         if (physics_result == VOX_ERR_COLLISION) {
-            vox_u16 source = digs_last_attacker_is_recent(match, i) ?
-                             match->last_attacker[i] :
-                             VOX_DIGS_NO_PLAYER;
-            digs_emit_event(match, VOX_DIGS_EVENT_CRUSH, source, i,
-                            match->last_damage_weapon[i], VOX_MAT_STONE,
-                            match->players[i].position_x.value_q16,
-                            match->players[i].position_y.value_q16,
-                            match->health[i],
-                            match->last_damage_part[i]);
-            if (source != VOX_DIGS_NO_PLAYER) {
-                (void)vox_digs_record_kill(match, source, i);
+            if (match->spawn_shield_ticks[i] != 0U) {
+                /*
+                 * A spawn-shielded miner is invulnerable, so burial cannot
+                 * hurt them.  Hold the struggle timer at zero rather than
+                 * letting it run invisibly, or the shield expiring would
+                 * kill them instantly with an already-elapsed countdown.
+                 */
+                match->buried_ticks[i] = 0U;
             } else {
-                digs_environment_defeat(match, i);
+                vox_u16 source = digs_last_attacker_is_recent(match, i) ?
+                                 match->last_attacker[i] :
+                                 VOX_DIGS_NO_PLAYER;
+                /*
+                 * Announce the burial once, on entry, so a host can react to
+                 * it without the event ring filling with one crush per tick
+                 * for the whole struggle.
+                 */
+                if (match->buried_ticks[i] == 0U) {
+                    digs_emit_event(match, VOX_DIGS_EVENT_CRUSH, source, i,
+                                    match->last_damage_weapon[i],
+                                    VOX_MAT_STONE,
+                                    match->players[i].position_x.value_q16,
+                                    match->players[i].position_y.value_q16,
+                                    match->health[i],
+                                    match->last_damage_part[i]);
+                }
+                if (match->buried_ticks[i] < 65535U) {
+                    match->buried_ticks[i]++;
+                }
+                /*
+                 * Crush pressure is ordinary blunt damage, so it routes
+                 * through the one damage funnel: anatomy, bleeding, and kill
+                 * attribution all behave exactly as they do for any other
+                 * source, and a miner crushed shortly after being shot still
+                 * credits the shooter.
+                 */
+                (void)vox_digs_apply_hit(match, source, i,
+                                         VOX_DIGS_TOOL_SLEDGE,
+                                         VOX_DIGS_PART_TORSO,
+                                         DIGS_BURIED_DAMAGE_PER_TICK,
+                                         VOX_DIGS_DAMAGE_BLUNT);
+                if (match->alive[i] &&
+                    match->buried_ticks[i] >= DIGS_BURIED_LETHAL_TICKS) {
+                    if (source != VOX_DIGS_NO_PLAYER) {
+                        (void)vox_digs_record_kill(match, source, i);
+                    } else {
+                        digs_environment_defeat(match, i);
+                    }
+                }
             }
         } else if (physics_result != VOX_OK) {
             return VOX_ERR_INVALID;
+        } else {
+            /* Free again: the struggle timer only counts consecutive ticks. */
+            match->buried_ticks[i] = 0U;
         }
     }
     digs_step_projectiles(match);
     digs_step_effects(match);
     for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
-        if (match->alive[i]) {
+        if (match->alive[i] && !digs_player_extracted(match, i)) {
             digs_step_rope(match, i);
         }
         match->previous_actions[i] = match->player_actions[i];
     }
     digs_step_bleeding(match);
     digs_step_reactions(match);
+    digs_step_contracts(match);
+    digs_step_speech(match);
     if (match->tick >= match->rules.lava_start_tick) {
         remaining = match->rules.match_ticks - match->rules.lava_start_tick;
         match->lava_level_q16 = digs_scale_lava_level(
@@ -2074,6 +4727,8 @@ vox_result vox_digs_match_step(vox_digs_match *match)
     }
     digs_update_lava(match);
     digs_apply_lava_hazards(match);
+    digs_apply_fluid_hazards(match);
+    digs_replay_capture(match);
     match->tick++;
     if (digs_score_limit_reached(match)) {
         digs_finish_match(match, VOX_DIGS_END_SCORE);
@@ -2142,9 +4797,1306 @@ static void digs_spawn_death_gore(vox_digs_match *match, vox_u16 victim,
     }
 }
 
+static void digs_spawn_corpse_assembly(vox_digs_match *match,
+                                       vox_u16 victim, vox_u16 killer)
+{
+    static const vox_u16 parent[VOX_DIGS_ANATOMY_PART_COUNT] = {
+        VOX_DIGS_PART_TORSO, VOX_DIGS_NO_PART, VOX_DIGS_PART_TORSO,
+        VOX_DIGS_PART_TORSO, VOX_DIGS_PART_TORSO,
+        VOX_DIGS_PART_LEFT_UPPER_ARM, VOX_DIGS_PART_RIGHT_UPPER_ARM,
+        VOX_DIGS_PART_LEFT_FOREARM, VOX_DIGS_PART_RIGHT_FOREARM,
+        VOX_DIGS_PART_PELVIS, VOX_DIGS_PART_PELVIS,
+        VOX_DIGS_PART_LEFT_THIGH, VOX_DIGS_PART_RIGHT_THIGH,
+        VOX_DIGS_PART_LEFT_SHIN, VOX_DIGS_PART_RIGHT_SHIN
+    };
+    vox_u16 bodies[VOX_DIGS_ANATOMY_PART_COUNT];
+    vox_u16 part;
+    vox_u16 weapon = match->last_damage_weapon[victim];
+    vox_i32 origin_x = match->players[victim].position_x.value_q16;
+    vox_i32 origin_y = match->players[victim].position_y.value_q16;
+    int explosive = weapon == VOX_DIGS_TOOL_BLAST_CHARGE ||
+                    weapon == VOX_DIGS_TOOL_CONCUSSION_GRENADE ||
+                    weapon == VOX_DIGS_TOOL_NAIL_BOMB;
+    int heat = weapon == VOX_DIGS_TOOL_CINDER_FLASK;
+    for (part = 0U; part < VOX_DIGS_ANATOMY_PART_COUNT; ++part) {
+        vox_digs_hurtbox box;
+        vox_u32 noise;
+        vox_u16 body_index;
+        vox_i32 mass;
+        bodies[part] = VOX_DIGS_NO_PART;
+        if (vox_digs_anatomy_hurtbox(part, &box) != VOX_OK) {
+            continue;
+        }
+        noise = digs_noise(match->rules.seed, match->tick,
+                           (vox_u32)victim,
+                           0xC0FF5000U + (vox_u32)part +
+                           (vox_u32)killer * 17U);
+        mass = part == VOX_DIGS_PART_TORSO ? 131072L :
+               (part == VOX_DIGS_PART_PELVIS ? 98304L : 49152L);
+        if (vox_rigid_spawn(&match->ragdolls, &body_index,
+                            origin_x + box.offset_x_q16,
+                            origin_y + box.offset_y_q16,
+                            box.half_width_q16, box.half_height_q16, mass,
+                            VOX_RIGID_BODY_CORPSE) != VOX_OK) {
+            continue;
+        }
+        digs_note_rigid_spawn(match, body_index, killer, weapon,
+                              VOX_MAT_FLESH, 0U);
+        bodies[part] = body_index;
+        match->ragdolls.bodies[body_index].velocity_x_q16 =
+            match->players[victim].velocity_x.value_q16 +
+            ((vox_i32)(noise % 9U) - 4L) * 4096L;
+        match->ragdolls.bodies[body_index].velocity_y_q16 =
+            match->players[victim].velocity_y.value_q16 -
+            (vox_i32)((noise >> 8) % 5U) * 4096L;
+        match->ragdolls.bodies[body_index].angle_q16 =
+            (vox_i32)(noise & 65535U);
+        match->ragdolls.bodies[body_index].angular_velocity_q16 =
+            ((vox_i32)((noise >> 16) % 17U) - 8L) * 3072L;
+    }
+    for (part = 0U; part < VOX_DIGS_ANATOMY_PART_COUNT; ++part) {
+        vox_u16 parent_part = parent[part];
+        vox_u16 joint_index;
+        vox_i32 rest;
+        if (parent_part == VOX_DIGS_NO_PART ||
+            bodies[part] == VOX_DIGS_NO_PART ||
+            parent_part >= VOX_DIGS_ANATOMY_PART_COUNT ||
+            bodies[parent_part] == VOX_DIGS_NO_PART ||
+            (match->anatomy[victim][part].flags & VOX_DIGS_PART_SEVERED) != 0U ||
+            (match->anatomy[victim][parent_part].flags &
+             VOX_DIGS_PART_SEVERED) != 0U ||
+            (part == match->last_damage_part[victim]) || explosive || heat) {
+            continue;
+        }
+        rest = digs_distance_approx(
+            match->ragdolls.bodies[bodies[part]].position_x_q16 -
+                match->ragdolls.bodies[bodies[parent_part]].position_x_q16,
+            match->ragdolls.bodies[bodies[part]].position_y_q16 -
+                match->ragdolls.bodies[bodies[parent_part]].position_y_q16);
+        if (rest < (vox_i32)(1L << 15)) rest = (vox_i32)(1L << 15);
+        (void)vox_rigid_joint_add(&match->ragdolls, &joint_index,
+                                  bodies[parent_part], bodies[part], rest,
+                                  -16384L, 16384L);
+    }
+}
+
+
+/*
+ * Pairs are unordered, so (a, b) and (b, a) are the same account.  Four slots
+ * give six of them: (0,1) (0,2) (0,3) (1,2) (1,3) (2,3).
+ */
+vox_u16 vox_digs_speech_duration(vox_u16 line_id)
+{
+    vox_u32 life = (vox_u32)digs_lines_length(line_id) *
+                   DIGS_SPEECH_TICKS_PER_CHAR + DIGS_SPEECH_READ_MARGIN;
+    if (life < DIGS_SPEECH_DURATION_MIN) {
+        life = DIGS_SPEECH_DURATION_MIN;
+    }
+    if (life > DIGS_SPEECH_DURATION_MAX) {
+        life = DIGS_SPEECH_DURATION_MAX;
+    }
+    return (vox_u16)life;
+}
+
+vox_u16 vox_digs_pair_index(vox_u16 a, vox_u16 b)
+{
+    vox_u16 low;
+    vox_u16 high;
+    if (a == b || a >= VOX_DIGS_MAX_SLOTS || b >= VOX_DIGS_MAX_SLOTS) {
+        return (vox_u16)VOX_DIGS_MAX_PAIRS;
+    }
+    low = a < b ? a : b;
+    high = a < b ? b : a;
+    return (vox_u16)((low * (2U * VOX_DIGS_MAX_SLOTS - low - 1U)) / 2U +
+                     (high - low - 1U));
+}
+
+const vox_digs_contract *vox_digs_contract_get(const vox_digs_match *match,
+                                               vox_u16 a, vox_u16 b)
+{
+    vox_u16 index;
+    if (match == 0) {
+        return 0;
+    }
+    index = vox_digs_pair_index(a, b);
+    if (index >= VOX_DIGS_MAX_PAIRS) {
+        return 0;
+    }
+    return &match->contracts[index];
+}
+
+const char *vox_digs_tone_name(vox_u16 tone)
+{
+    static const char *names[VOX_DIGS_TONE_COUNT] = {
+        "FEUD", "HOSTILE", "NEEDLING", "NEUTRAL",
+        "WARY", "THAWING", "TRUCE", "BONDED"
+    };
+    return tone < VOX_DIGS_TONE_COUNT ? names[tone] : "NEUTRAL";
+}
+
+/* Which band of feeling a balance falls in, read from where we already are. */
+static vox_u16 digs_contract_band(vox_i32 valence, vox_u16 current)
+{
+    if (valence >= DIGS_CONTRACT_BONDED_AT) {
+        return (vox_u16)VOX_DIGS_TONE_BONDED;
+    }
+    if (valence >= DIGS_CONTRACT_TRUCE_AT) {
+        return (vox_u16)VOX_DIGS_TONE_TRUCE;
+    }
+    if (valence >= DIGS_CONTRACT_WARM_AT) {
+        return (current == (vox_u16)VOX_DIGS_TONE_TRUCE ||
+                current == (vox_u16)VOX_DIGS_TONE_BONDED ||
+                current == (vox_u16)VOX_DIGS_TONE_WARY) ?
+               (vox_u16)VOX_DIGS_TONE_WARY : (vox_u16)VOX_DIGS_TONE_THAWING;
+    }
+    if (valence <= DIGS_CONTRACT_FEUD_AT) {
+        return (vox_u16)VOX_DIGS_TONE_FEUD;
+    }
+    if (valence <= DIGS_CONTRACT_HOSTILE_AT) {
+        return (vox_u16)VOX_DIGS_TONE_HOSTILE;
+    }
+    if (valence <= DIGS_CONTRACT_NEEDLE_AT) {
+        return (vox_u16)VOX_DIGS_TONE_NEEDLING;
+    }
+    return (vox_u16)VOX_DIGS_TONE_NEUTRAL;
+}
+
+/*
+ * Settle the tone against the balance.  The margin is applied toward wherever
+ * we already are, which is what makes leaving a tone cost more than entering
+ * it; the dwell stops even a decisive swing from flipping twice in a second.
+ */
+static void digs_contract_settle(vox_digs_contract *contract)
+{
+    vox_i32 biased = contract->valence;
+    vox_u16 raw = digs_contract_band(contract->valence, contract->tone);
+    vox_u16 target;
+    if (contract->tone > raw) {
+        biased += DIGS_CONTRACT_TONE_MARGIN;
+    } else if (contract->tone < raw) {
+        biased -= DIGS_CONTRACT_TONE_MARGIN;
+    }
+    target = digs_contract_band(biased, contract->tone);
+    if (target != contract->tone &&
+        contract->tone_ticks >= DIGS_CONTRACT_TONE_DWELL_TICKS) {
+        contract->tone = target;
+        contract->tone_ticks = 0U;
+    }
+}
+
+/*
+ * Move the balance between two miners.  Everything that happens between them
+ * -- a shot, a kill, a near miss, a word -- arrives here.
+ */
+static void digs_contract_adjust(vox_digs_match *match, vox_u16 a, vox_u16 b,
+                                 vox_i32 delta)
+{
+    vox_digs_contract *contract;
+    vox_i32 valence;
+    vox_u16 index = vox_digs_pair_index(a, b);
+    if (index >= VOX_DIGS_MAX_PAIRS) {
+        return;
+    }
+    contract = &match->contracts[index];
+    contract->met = 1U;
+    valence = (vox_i32)contract->valence + delta;
+    if (valence > DIGS_CONTRACT_VALENCE_MAX) {
+        valence = DIGS_CONTRACT_VALENCE_MAX;
+    } else if (valence < -DIGS_CONTRACT_VALENCE_MAX) {
+        valence = -DIGS_CONTRACT_VALENCE_MAX;
+    }
+    contract->valence = (vox_i16)valence;
+    digs_contract_settle(contract);
+}
+
+
+/*
+ * What each thing that can happen between two miners is worth to the account.
+ *
+ * Zero is not "nothing happened" -- it is "this is worth saying something
+ * about, but it does not change what they think of each other".  Meeting
+ * someone is not yet an opinion, and the lava rising is nobody's fault.
+ */
+static const vox_i16
+digs_stimulus_valence[VOX_DIGS_STIMULUS_COUNT] = {
+    0,      /* NONE           */
+    0,      /* FIRST_MEETING  */
+    0,      /* SPOTTED        */
+    -6,     /* HURT_THEM      */
+    -6,     /* HURT_BY        */
+    -4,     /* NEAR_MISS      */
+    -50,    /* LIMB_TAKEN     */
+    -50,    /* LIMB_LOST      */
+    -140,   /* KILLED_THEM    */
+    -140,   /* KILLED_BY      */
+    -60,    /* REVENGE        -- settling a score stings less than starting one */
+    -180,   /* HUMILIATED     */
+    0,      /* STREAK         */
+    150,    /* SAVED_BY       */
+    90,     /* TEAMED_UP      */
+    -260,   /* BETRAYED       */
+    40,     /* TRUCE_OFFERED  */
+    200,    /* TRUCE_ACCEPTED */
+    -300,   /* TRUCE_BROKEN   */
+    -20,    /* TAUNTED        */
+    0,      /* LAVA_CLOSE     */
+    0,      /* BURIED         */
+    0,      /* DOOMED         */
+    0,      /* LONG_ABSENCE   */
+    0,      /* MATCH_START    */
+    0,      /* MATCH_END      */
+    0,      /* IDLE           */
+    0,      /* MOVE           */
+    0,      /* WEAPON         */
+    0,      /* MISS           */
+    0,      /* HIT            */
+    0,      /* NEAR_DEATH     */
+    0,      /* CAVE_IN        */
+    0,      /* GRAPPLE        */
+    0,      /* KILL           */
+    0,      /* HUMILIATION    */
+    0       /* ESCAPE         */
+};
+
+const char *vox_digs_stimulus_name(vox_u16 stimulus)
+{
+    static const char *names[VOX_DIGS_STIMULUS_COUNT] = {
+        "NONE", "FIRST MEETING", "SPOTTED", "HURT THEM", "HURT BY",
+        "NEAR MISS", "LIMB TAKEN", "LIMB LOST", "KILLED THEM", "KILLED BY",
+        "REVENGE", "HUMILIATED", "STREAK", "SAVED BY", "TEAMED UP",
+        "BETRAYED", "TRUCE OFFERED", "TRUCE ACCEPTED", "TRUCE BROKEN",
+        "TAUNTED", "LAVA CLOSE", "BURIED", "DOOMED", "LONG ABSENCE",
+        "MATCH START", "MATCH END", "IDLE", "MOVE", "WEAPON", "MISS",
+        "HIT", "NEAR DEATH", "CAVE IN", "GRAPPLE", "KILL",
+        "HUMILIATION", "ESCAPE"
+    };
+    return stimulus < VOX_DIGS_STIMULUS_COUNT ? names[stimulus] : "NONE";
+}
+
+/*
+ * Record that something happened between two miners.  This is the single door
+ * every stimulus comes through: it moves the account by the table above and
+ * leaves the event on the contract for whoever speaks next to talk about.
+ */
+static void digs_contract_note(vox_digs_match *match, vox_u16 actor,
+                               vox_u16 subject, vox_u16 stimulus)
+{
+    vox_digs_contract *contract;
+    vox_u16 index;
+    if (stimulus >= VOX_DIGS_STIMULUS_COUNT) {
+        return;
+    }
+    index = vox_digs_pair_index(actor, subject);
+    if (index >= VOX_DIGS_MAX_PAIRS) {
+        return;
+    }
+    contract = &match->contracts[index];
+    /*
+     * Shooting a miner you have an arrangement with is not an ordinary hit.
+     * It is the arrangement ending, and it costs accordingly -- this is the
+     * only way a truce can be spent, and it has to hurt or a truce would be
+     * free to take and free to break.
+     */
+    if ((stimulus == VOX_DIGS_STIMULUS_HURT_THEM ||
+         stimulus == VOX_DIGS_STIMULUS_KILLED_THEM) &&
+        (contract->tone == VOX_DIGS_TONE_TRUCE ||
+         contract->tone == VOX_DIGS_TONE_BONDED)) {
+        stimulus = (vox_u16)VOX_DIGS_STIMULUS_TRUCE_BROKEN;
+    }
+    contract->last_stimulus = stimulus;
+    contract->last_actor = actor;
+    contract->last_stimulus_tick = match->tick;
+    digs_contract_adjust(match, actor, subject,
+                         (vox_i32)digs_stimulus_valence[stimulus]);
+    digs_speech_prompt(match, actor, subject, stimulus);
+    digs_speech_prompt(match, subject, actor, digs_stimulus_mirror(stimulus));
+}
+
+
+/*
+ * The same event seen from the other side.  Somebody has to be hurt for
+ * somebody else to have hurt them, and each of them has different things to
+ * say about it.
+ */
+static vox_u16 digs_stimulus_mirror(vox_u16 stimulus)
+{
+    switch (stimulus) {
+    case VOX_DIGS_STIMULUS_HURT_THEM:
+        return (vox_u16)VOX_DIGS_STIMULUS_HURT_BY;
+    case VOX_DIGS_STIMULUS_HURT_BY:
+        return (vox_u16)VOX_DIGS_STIMULUS_HURT_THEM;
+    case VOX_DIGS_STIMULUS_LIMB_TAKEN:
+        return (vox_u16)VOX_DIGS_STIMULUS_LIMB_LOST;
+    case VOX_DIGS_STIMULUS_LIMB_LOST:
+        return (vox_u16)VOX_DIGS_STIMULUS_LIMB_TAKEN;
+    case VOX_DIGS_STIMULUS_KILLED_THEM:
+    case VOX_DIGS_STIMULUS_REVENGE:
+        return (vox_u16)VOX_DIGS_STIMULUS_KILLED_BY;
+    case VOX_DIGS_STIMULUS_KILLED_BY:
+        return (vox_u16)VOX_DIGS_STIMULUS_KILLED_THEM;
+    case VOX_DIGS_STIMULUS_TRUCE_BROKEN:
+        return (vox_u16)VOX_DIGS_STIMULUS_BETRAYED;
+    case VOX_DIGS_STIMULUS_TRUCE_OFFERED:
+        return (vox_u16)VOX_DIGS_STIMULUS_TRUCE_ACCEPTED;
+    case VOX_DIGS_STIMULUS_FIRST_MEETING:
+        return (vox_u16)VOX_DIGS_STIMULUS_FIRST_MEETING;
+    default:
+        break;
+    }
+    return (vox_u16)VOX_DIGS_STIMULUS_NONE;
+}
+
+/* How badly this wants saying -- louder things interrupt quieter ones. */
+static vox_u16 digs_stimulus_urgency(vox_u16 stimulus)
+{
+    vox_i32 weight;
+    if (stimulus >= VOX_DIGS_STIMULUS_COUNT) {
+        return 0U;
+    }
+    weight = (vox_i32)digs_stimulus_valence[stimulus];
+    if (weight < 0) {
+        weight = -weight;
+    }
+    /* The wordless emergencies are urgent without moving the account. */
+    if (stimulus == VOX_DIGS_STIMULUS_DOOMED ||
+        stimulus == VOX_DIGS_STIMULUS_BURIED ||
+        stimulus == VOX_DIGS_STIMULUS_LAVA_CLOSE) {
+        weight += 220;
+    }
+    /*
+     * So are announcements.  Urgency is derived from how far something moves
+     * the account, and meeting somebody for the first time moves it by
+     * nothing at all -- so a first meeting rolled at four in ten thousand
+     * and was never once spoken.  These are rare by construction (a first
+     * meeting happens once per pair, a match starts once) so making them
+     * certain costs almost nothing and they are the lines that place
+     * everyone in the room.
+     */
+    if (stimulus == VOX_DIGS_STIMULUS_FIRST_MEETING ||
+        stimulus == VOX_DIGS_STIMULUS_MATCH_START ||
+        stimulus == VOX_DIGS_STIMULUS_MATCH_END ||
+        stimulus == VOX_DIGS_STIMULUS_STREAK) {
+        weight += 210;
+    }
+    return (vox_u16)(weight + 1);
+}
+
+/*
+ * A temperament for whoever is speaking, including the human.
+ *
+ * vox_digs_personality_get returns null for anyone who is not a bot, and the
+ * speech pacing needs a temperament for every speaker -- the player's miner
+ * waits before answering like the rest of them.  Middle of the road on every
+ * axis, so the three opponents stay the distinctive ones.
+ */
+/*
+ * The traits this miner is actually running on: the drifted ones from the
+ * snapshot, not the archetype table.  A bot that has been through a dozen
+ * matches should not still be reading its factory settings.
+ */
+static const vox_digs_personality *digs_player_traits(
+    const vox_digs_match *match, vox_u16 player)
+{
+    vox_u16 identity = vox_digs_memory_identity(match, player);
+    if (identity < VOX_DIGS_IDENTITY_COUNT) {
+        return &match->memory.identities[identity].traits;
+    }
+    return vox_digs_personality_get(VOX_DIGS_ARCHETYPE_ENGINEER);
+}
+
+static const vox_digs_personality *digs_speaker_personality(
+    const vox_digs_match *match, vox_u16 player)
+{
+    static const vox_digs_personality miner = {
+        128U, 128U, 128U, 128U, 128U, 0U
+    };
+    const vox_digs_personality *personality = digs_player_traits(match,
+                                                                 player);
+    return personality != 0 ? personality : &miner;
+}
+
+/*
+ * Queue something for this miner to say.  Louder news displaces quieter news
+ * already waiting, so a miner who is shot while still working up to a remark
+ * about the weather says the thing that actually happened.
+ */
+/* A dice roll, in parts per thousand, off the one noise source there is. */
+static int digs_speech_roll(const vox_digs_match *match, vox_u16 player,
+                            vox_u32 chance, vox_u16 salt)
+{
+    if (chance == 0U) {
+        return 0;
+    }
+    if (chance >= 1000U) {
+        return 1;
+    }
+    return (digs_noise(match->rules.seed, match->tick, player, salt) %
+            1000U) < chance;
+}
+
+/*
+ * How likely this miner is to speak up unprompted, per thousand.
+ *
+ * Sociability is the whole of it in the ordinary case, which is what makes
+ * one of them audibly chattier than another.  Two things override it: the
+ * window after the player has spoken, when everyone is keener to answer, and
+ * a long enough silence, which makes the next roll a certainty so a quiet
+ * match still has voices in it.
+ */
+static vox_u32 digs_speech_chattiness(const vox_digs_match *match,
+                                      vox_u16 player)
+{
+    const vox_digs_personality *personality =
+        digs_speaker_personality(match, player);
+    vox_u32 chance = ((vox_u32)personality->sociability *
+                      DIGS_SPEECH_URGE_SCALE) / 255U;
+    if (match->speech_dry_ticks >= DIGS_SPEECH_DRY_TICKS) {
+        return 1000U;
+    }
+    if (match->speech_answer_ticks > 0U) {
+        chance += DIGS_SPEECH_ANSWER_BONUS;
+    }
+    return chance;
+}
+
+/* Record an intention to speak.  The decision has already been made. */
+static void digs_speech_set(vox_digs_match *match, vox_u16 speaker,
+                            vox_u16 subject, vox_u16 stimulus)
+{
+    const vox_digs_personality *personality;
+    vox_u32 noise;
+    vox_u32 delay;
+    if (!vox_digs_player_is_active(match, speaker) || !match->alive[speaker] ||
+        stimulus == VOX_DIGS_STIMULUS_NONE ||
+        stimulus >= VOX_DIGS_STIMULUS_COUNT) {
+        return;
+    }
+    /*
+     * The chatter cooldown exists to stop a miner monologuing across a whole
+     * match.  Inside a live exchange it does the opposite -- it silences the
+     * answer, which is the one line that makes it a conversation.  The floor
+     * still spaces everything, so nobody can run away with it.
+     */
+    if (match->speech_cooldown[speaker] != 0U &&
+        match->speech_answer_ticks == 0U &&
+        digs_stimulus_urgency(stimulus) < DIGS_SPEECH_ALWAYS_URGENCY) {
+        return;
+    }
+    if (match->speech_stimulus[speaker] != VOX_DIGS_STIMULUS_NONE &&
+        digs_stimulus_urgency(match->speech_stimulus[speaker]) >=
+        digs_stimulus_urgency(stimulus)) {
+        return;
+    }
+    personality = digs_speaker_personality(match, speaker);
+    noise = digs_noise(match->rules.seed, match->tick, speaker, 0x5EEDU);
+    delay = DIGS_SPEECH_DELAY_MIN +
+            ((vox_u32)personality->patience * DIGS_SPEECH_DELAY_SPAN) / 255U;
+    /*
+     * Wait for the other miner to finish -- or do not, which is the point.
+     *
+     * A reply used to land fifteen to seventy ticks in against a bubble that
+     * is up for a hundred and fifty, so a bot cut the player off every single
+     * time.  How much of the say-time a miner waits out is patience: RIVET
+     * nearly always lets you finish, CINDER talks over you, and the jitter is
+     * wide enough that FLAMEY is a coin toss.
+     */
+    if (match->speech_last_line != 0U) {
+        vox_u32 life = vox_digs_speech_duration(match->speech_last_line);
+        delay += (life * ((vox_u32)personality->patience +
+                          DIGS_SPEECH_PATIENCE_FLOOR)) / 255U;
+        delay += noise % (1U + life / 3U);
+    }
+    /* Chatty miners are also erratic about when they pipe up. */
+    delay += (noise % 25U) * (vox_u32)personality->sociability / 255U;
+    /*
+     * Never queue a reply for longer than the exchange it belongs to.  A
+     * delay past the window is not merely late: the exchange is torn down
+     * underneath it and the between-exchange floor then sits on the line, so
+     * it arrives many seconds later into a conversation that no longer
+     * exists.  Waiting out the line is the intent; waiting past the end of
+     * the conversation is not.
+     */
+    if (match->speech_answer_ticks > 0U &&
+        delay >= (vox_u32)match->speech_answer_ticks) {
+        delay = match->speech_answer_ticks > 1U ?
+                (vox_u32)(match->speech_answer_ticks - 1U) : 1U;
+    }
+    match->speech_stimulus[speaker] = stimulus;
+    match->speech_subject[speaker] = subject;
+    match->speech_delay[speaker] = (vox_u16)delay;
+}
+
+/*
+ * Something happened -- does this miner remark on it?
+ *
+ * Loud news always gets said: a kill, a betrayal, being buried.  Everything
+ * quieter is rolled for, scaled by how loud it was and by how talkative the
+ * miner is.  This is what stopped every pellet in a firefight earning two
+ * lines of commentary.
+ */
+static void digs_speech_prompt(vox_digs_match *match, vox_u16 speaker,
+                               vox_u16 subject, vox_u16 stimulus)
+{
+    vox_u32 urgency;
+    if (stimulus == VOX_DIGS_STIMULUS_NONE ||
+        stimulus >= VOX_DIGS_STIMULUS_COUNT ||
+        !vox_digs_player_is_active(match, speaker)) {
+        return;
+    }
+    urgency = digs_stimulus_urgency(stimulus);
+    if (urgency < DIGS_SPEECH_ALWAYS_URGENCY) {
+        const vox_digs_personality *personality =
+            digs_speaker_personality(match, speaker);
+        /*
+         * Cut hard against the old denominator.  Every kill used to be
+         * worth a remark from both parties, and a violent match has fifty of
+         * them -- which spent the whole budget on isolated event barks and
+         * left nothing for the exchanges they are supposed to start.  Fewer
+         * things get remarked on now, and the ones that do turn into a
+         * conversation.
+         */
+        vox_u32 chance = (urgency * DIGS_SPEECH_EVENT_SCALE *
+                          (vox_u32)personality->sociability) / 900U;
+        if (match->speech_answer_ticks > 0U) {
+            chance += DIGS_SPEECH_ANSWER_BONUS;
+        }
+        if (!digs_speech_roll(match, speaker, chance,
+                              (vox_u16)(0x0517U + stimulus))) {
+            return;
+        }
+    }
+    digs_speech_set(match, speaker, subject, stimulus);
+}
+
+
+/*
+ * Has this line been heard lately -- by this pair, or from this speaker to
+ * anyone at all?
+ *
+ * The second half is the new one.  Only the pair remembered before, so RIVET
+ * could say the same thing to CINDER and then to the player and neither of
+ * them was any the wiser, while the player heard it twice.
+ *
+ * depth bounds how far back to look, because a pool of five lines against a
+ * memory of eight would otherwise exclude everything it has and the caller
+ * would fall back to whatever it started on -- which is the repetition this
+ * is meant to prevent, arrived at from the other direction.
+ */
+static int digs_speech_heard(const vox_digs_match *match, vox_u16 speaker,
+                             const vox_digs_contract *contract,
+                             vox_u16 line, vox_u16 depth)
+{
+    vox_u16 i;
+    for (i = 0U; i < depth && i < VOX_DIGS_SPEAKER_RECENT; ++i) {
+        vox_u16 at = (vox_u16)((match->speech_recent_cursor[speaker] +
+                                VOX_DIGS_SPEAKER_RECENT - 1U - i) %
+                               VOX_DIGS_SPEAKER_RECENT);
+        if (match->speech_recent[speaker][at] == line) {
+            return 1;
+        }
+    }
+    if (contract != 0) {
+        for (i = 0U; i < depth && i < VOX_DIGS_RECENT_LINES; ++i) {
+            vox_u16 at = (vox_u16)((contract->recent_cursor +
+                                    VOX_DIGS_RECENT_LINES - 1U - i) %
+                                   VOX_DIGS_RECENT_LINES);
+            if (contract->recent_lines[at] == line) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/*
+ * Choose the words.  The pool comes from the speaker's voice, how they feel
+ * about the subject, and what just happened; the recent ring keeps a pair
+ * from saying the same thing twice running.
+ */
+static vox_u16 digs_speech_choose(vox_digs_match *match, vox_u16 speaker,
+                                  vox_u16 subject, vox_u16 stimulus,
+                                  vox_u16 *tone_out)
+{
+    digs_line_pool pool;
+    vox_digs_contract *contract = 0;
+    vox_u16 tone = (vox_u16)VOX_DIGS_TONE_NEUTRAL;
+    vox_u16 pair = vox_digs_pair_index(speaker, subject);
+    vox_u32 roll;
+    vox_u16 attempt;
+    vox_u16 chosen;
+    if (pair < VOX_DIGS_MAX_PAIRS) {
+        contract = &match->contracts[pair];
+        tone = contract->tone;
+    }
+    *tone_out = tone;
+    pool = digs_lines_pool(digs_lines_voice_for(match, speaker), tone,
+                           stimulus);
+    if (pool.count == 0U) {
+        return 65535U;
+    }
+    /*
+     * Re-roll past anything heard lately, rather than walking forward.
+     *
+     * Stepping to the next line on a collision looks harmless and is not:
+     * once two picks collide the walk hands out consecutive lines, so a pool
+     * gets read out in order and the writing sounds like a list.  A fresh
+     * roll each attempt keeps the distribution flat.
+     */
+    {
+        vox_u16 depth = pool.count > 1U ? (vox_u16)(pool.count - 1U) : 0U;
+        roll = digs_noise(match->rules.seed, match->tick, speaker,
+                          (vox_u16)(0x1A1EU + stimulus));
+        chosen = (vox_u16)(pool.first + (vox_u16)(roll % pool.count));
+        for (attempt = 0U; attempt < DIGS_SPEECH_PICK_TRIES; ++attempt) {
+            int unusable = digs_speech_heard(match, speaker, contract,
+                                             chosen, depth);
+            /*
+             * A line that names somebody is nonsense with nobody to name --
+             * "SOMEBODY. COULD BE WORSE." is what a miner muttering to
+             * itself used to come out with.
+             */
+            if (!unusable && subject >= match->rules.player_count &&
+                digs_lines_addresses(chosen)) {
+                unusable = 1;
+            }
+            if (!unusable) {
+                break;
+            }
+            roll = digs_noise(match->rules.seed, match->tick, speaker,
+                              (vox_u16)(0x1A1EU + stimulus + attempt + 1U));
+            chosen = (vox_u16)(pool.first + (vox_u16)(roll % pool.count));
+        }
+    }
+    match->speech_recent[speaker][match->speech_recent_cursor[speaker]] =
+        chosen;
+    match->speech_recent_cursor[speaker] =
+        (vox_u16)((match->speech_recent_cursor[speaker] + 1U) %
+                  VOX_DIGS_SPEAKER_RECENT);
+    if (contract != 0) {
+        contract->recent_lines[contract->recent_cursor] = chosen;
+        contract->recent_cursor = (vox_u16)((contract->recent_cursor + 1U) %
+                                            VOX_DIGS_RECENT_LINES);
+        contract->last_speaker = speaker;
+        contract->quiet_ticks = 0U;
+        if (contract->exchanges < 65535U) {
+            contract->exchanges++;
+        }
+    }
+    return chosen;
+}
+
+
+/*
+ * Who is this aimed at?
+ *
+ * Muttering is muttering whoever is nearby; an announcement is for the room;
+ * everything else is aimed at somebody.  Deriving it from the stimulus keeps
+ * it in one place -- the alternative is every caller deciding, and callers
+ * disagree.
+ */
+static vox_u16 digs_stimulus_audience(vox_u16 stimulus)
+{
+    switch (stimulus) {
+    case VOX_DIGS_STIMULUS_IDLE:
+    case VOX_DIGS_STIMULUS_BURIED:
+    case VOX_DIGS_STIMULUS_LAVA_CLOSE:
+    case VOX_DIGS_STIMULUS_DOOMED:
+    case VOX_DIGS_STIMULUS_MOVE:
+    case VOX_DIGS_STIMULUS_WEAPON:
+    case VOX_DIGS_STIMULUS_MISS:
+    case VOX_DIGS_STIMULUS_HIT:
+    case VOX_DIGS_STIMULUS_NEAR_DEATH:
+    case VOX_DIGS_STIMULUS_CAVE_IN:
+    case VOX_DIGS_STIMULUS_GRAPPLE:
+    case VOX_DIGS_STIMULUS_ESCAPE:
+        return (vox_u16)VOX_DIGS_AUDIENCE_SELF;
+    case VOX_DIGS_STIMULUS_MATCH_START:
+    case VOX_DIGS_STIMULUS_MATCH_END:
+    case VOX_DIGS_STIMULUS_FIRST_MEETING:
+    case VOX_DIGS_STIMULUS_TRUCE_OFFERED:
+    case VOX_DIGS_STIMULUS_HUMILIATED:
+    case VOX_DIGS_STIMULUS_STREAK:
+    case VOX_DIGS_STIMULUS_KILL:
+    case VOX_DIGS_STIMULUS_HUMILIATION:
+        return (vox_u16)VOX_DIGS_AUDIENCE_ALL;
+    default:
+        break;
+    }
+    return (vox_u16)VOX_DIGS_AUDIENCE_ONE;
+}
+
+/* Can this miner make out what was said, and from how far? */
+static int digs_speech_within_earshot(const vox_digs_match *match,
+                                      vox_u16 listener, vox_u16 speaker,
+                                      vox_u16 audience)
+{
+    vox_i32 gap;
+    vox_u32 reach;
+    if (audience == VOX_DIGS_AUDIENCE_ALL) {
+        return 1;
+    }
+    reach = audience == VOX_DIGS_AUDIENCE_SELF ?
+            DIGS_SPEECH_MUTTER_CELLS : DIGS_SPEECH_EARSHOT_CELLS;
+    gap = digs_abs_i32(
+        (match->players[listener].position_x.value_q16 >> 16) -
+        (match->players[speaker].position_x.value_q16 >> 16)) +
+        digs_abs_i32(
+        (match->players[listener].position_y.value_q16 >> 16) -
+        (match->players[speaker].position_y.value_q16 >> 16));
+    return (vox_u32)gap <= reach;
+}
+
+/*
+ * What a listener says back to something aimed at somebody else.
+ *
+ * Answering "you talked" to everything was what made replies feel like a
+ * reflex rather than a response.  Picking off what was actually heard is
+ * what lets a third miner take a side.
+ */
+static vox_u16 digs_speech_chime_in(vox_u16 heard, int defends)
+{
+    switch (heard) {
+    case VOX_DIGS_STIMULUS_KILLED_THEM:
+    case VOX_DIGS_STIMULUS_REVENGE:
+        return defends ? (vox_u16)VOX_DIGS_STIMULUS_HUMILIATED :
+                         (vox_u16)VOX_DIGS_STIMULUS_TEAMED_UP;
+    case VOX_DIGS_STIMULUS_TRUCE_BROKEN:
+    case VOX_DIGS_STIMULUS_BETRAYED:
+        return (vox_u16)VOX_DIGS_STIMULUS_BETRAYED;
+    case VOX_DIGS_STIMULUS_LIMB_TAKEN:
+    case VOX_DIGS_STIMULUS_HURT_THEM:
+        return defends ? (vox_u16)VOX_DIGS_STIMULUS_TAUNTED :
+                         (vox_u16)VOX_DIGS_STIMULUS_SPOTTED;
+    default:
+        break;
+    }
+    return (vox_u16)VOX_DIGS_STIMULUS_TAUNTED;
+}
+
+/*
+ * Where a thought goes next when there is nobody to have it at.
+ *
+ * Feeding a miner's own last line back through the reply mapping collapsed
+ * immediately -- almost everything answers with TAUNTED, and TAUNTED answers
+ * with TAUNTED, so a miner alone said four things and then repeated them.
+ * This is a small arc instead: bored, then sardonic, then fed up, then
+ * defiant, then bored again.  Pressing bark in an empty mine walks it.
+ */
+static vox_u16 digs_speech_self_next(vox_u16 previous)
+{
+    switch (previous) {
+    case VOX_DIGS_STIMULUS_IDLE:
+        return (vox_u16)VOX_DIGS_STIMULUS_TAUNTED;
+    case VOX_DIGS_STIMULUS_TAUNTED:
+        return (vox_u16)VOX_DIGS_STIMULUS_HUMILIATED;
+    case VOX_DIGS_STIMULUS_HUMILIATED:
+        return (vox_u16)VOX_DIGS_STIMULUS_STREAK;
+    case VOX_DIGS_STIMULUS_STREAK:
+        return (vox_u16)VOX_DIGS_STIMULUS_MATCH_END;
+    default:
+        break;
+    }
+    return (vox_u16)VOX_DIGS_STIMULUS_IDLE;
+}
+
+
+/*
+ * Where a reply goes, given how the exchange is running.
+ *
+ * Without this a row was three insults in a queue: every answer was picked
+ * from what was just said and nothing tracked where the whole thing was
+ * heading.  Heat is the memory of that -- an exchange that keeps drawing
+ * blood escalates, one that keeps finding agreement winds down, and the last
+ * line before the cap closes on whichever it turned out to be.
+ */
+static vox_u16 digs_speech_arc(vox_digs_match *match, vox_u16 base,
+                               int closing)
+{
+    int heat = (int)match->speech_exchange_heat;
+    if (closing) {
+        /* Somebody has to have the last word, and it should fit. */
+        if (heat <= DIGS_SPEECH_HEAT_ANGRY) {
+            return (vox_u16)VOX_DIGS_STIMULUS_HUMILIATED;
+        }
+        if (heat >= DIGS_SPEECH_HEAT_CALM) {
+            return (vox_u16)VOX_DIGS_STIMULUS_TRUCE_OFFERED;
+        }
+        return (vox_u16)VOX_DIGS_STIMULUS_MATCH_END;
+    }
+    if (heat <= DIGS_SPEECH_HEAT_ANGRY) {
+        /* It has turned into a row.  Answer in kind. */
+        switch (base) {
+        case VOX_DIGS_STIMULUS_TAUNTED:
+            return (vox_u16)VOX_DIGS_STIMULUS_HUMILIATED;
+        case VOX_DIGS_STIMULUS_HUMILIATED:
+            return (vox_u16)VOX_DIGS_STIMULUS_BETRAYED;
+        case VOX_DIGS_STIMULUS_SPOTTED:
+            return (vox_u16)VOX_DIGS_STIMULUS_TAUNTED;
+        default:
+            break;
+        }
+        return base;
+    }
+    if (heat >= DIGS_SPEECH_HEAT_CALM) {
+        /* It is going somewhere better.  Let it. */
+        switch (base) {
+        case VOX_DIGS_STIMULUS_TAUNTED:
+        case VOX_DIGS_STIMULUS_SPOTTED:
+            return (vox_u16)VOX_DIGS_STIMULUS_TEAMED_UP;
+        case VOX_DIGS_STIMULUS_HUMILIATED:
+            return (vox_u16)VOX_DIGS_STIMULUS_TRUCE_OFFERED;
+        default:
+            break;
+        }
+    }
+    return base;
+}
+
+/*
+ * Everybody hears it, and what they make of it depends on who they like.
+ *
+ * A listener that hears the speaker go after somebody updates its account
+ * with the *speaker*, signed by how it feels about the *subject*: close to
+ * the subject and it sours on the speaker, already hostile to the subject
+ * and it warms to them slightly.  Kept well below the weight of a direct
+ * hit, so overhearing colours the room without deciding it -- this is what
+ * lets alliances form on their own rather than three private two-way
+ * channels running side by side.
+ */
+static void digs_speech_broadcast(vox_digs_match *match, vox_u16 speaker,
+                                  vox_u16 subject, vox_u16 stimulus,
+                                  vox_u16 audience, int may_reply)
+{
+    vox_u16 listener;
+    for (listener = 0U; listener < match->rules.player_count; ++listener) {
+        const vox_digs_contract *feeling;
+        vox_i32 lean = 0L;
+        int addressed = listener == subject;
+        int defends = 0;
+        vox_u32 chance;
+        if (listener == speaker || !match->alive[listener] ||
+            !vox_digs_player_is_active(match, listener)) {
+            continue;
+        }
+        if (!addressed &&
+            !digs_speech_within_earshot(match, listener, speaker, audience)) {
+            continue;
+        }
+        if (!addressed && subject < match->rules.player_count &&
+            subject != listener) {
+            feeling = vox_digs_contract_get(match, listener, subject);
+            if (feeling != 0 && feeling->met) {
+                if (feeling->tone >= VOX_DIGS_TONE_TRUCE) {
+                    lean = -DIGS_SPEECH_OVERHEARD_VALENCE;
+                    defends = 1;
+                } else if (feeling->tone <= VOX_DIGS_TONE_HOSTILE) {
+                    lean = DIGS_SPEECH_OVERHEARD_VALENCE;
+                }
+            }
+        }
+        if (lean != 0L && digs_stimulus_valence[stimulus] < 0) {
+            digs_contract_adjust(match, listener, speaker, lean);
+        }
+        /*
+         * Anyone may answer, not only whoever it was aimed at.  Feeling
+         * strongly about the subject is what makes a third miner speak up.
+         */
+        if (!may_reply) {
+            /*
+             * The exchange just closed on its last line.  Everyone still
+             * heard it -- the opinions above have already moved -- but
+             * nobody answers a conversation that is over.  Queueing a reply
+             * here was how a patient miner ended up speaking into a torn
+             * down exchange after the between-exchange floor had run.
+             */
+            continue;
+        }
+        chance = digs_speech_chattiness(match, listener);
+        if (addressed) {
+            chance += DIGS_SPEECH_REPLY_BONUS;
+        } else if (lean != 0L) {
+            chance += DIGS_SPEECH_CHIME_BONUS;
+        } else {
+            chance = chance / 2U;
+        }
+        if (digs_speech_roll(match, listener, chance,
+                             (vox_u16)(0x7A1BU + listener))) {
+            digs_speech_set(match, listener, speaker,
+                            digs_speech_arc(match,
+                                addressed ?
+                                digs_speech_chime_in(stimulus, 1) :
+                                digs_speech_chime_in(stimulus, defends),
+                                match->speech_exchange_lines + 1U >=
+                                DIGS_SPEECH_EXCHANGE_MAX));
+        }
+    }
+}
+
+/*
+ * Say the queued thing, then decide whether the other one answers.
+ *
+ * The reply is what turns two miners shouting into a conversation.  It is
+ * gated on sociability, so FLAMEY answers nearly everything and RIVET mostly
+ * lets it go, and it only fires while the exchange is still fresh.
+ */
+static void digs_step_speech(vox_digs_match *match)
+{
+    vox_u16 player;
+    if (match->speech_floor_ticks > 0U) {
+        match->speech_floor_ticks--;
+    }
+    if (match->speech_answer_ticks > 0U) {
+        match->speech_answer_ticks--;
+        if (match->speech_answer_ticks == 0U) {
+            /* The exchange died out.  Now the mine goes quiet for a while. */
+            match->speech_floor_ticks = DIGS_SPEECH_FLOOR_BETWEEN;
+            match->speech_exchange_lines = 0U;
+    match->speech_last_line = 0U;
+    match->speech_exchange_heat = 0;
+        }
+    }
+    if (match->speech_dry_ticks < 65535U) {
+        match->speech_dry_ticks++;
+    }
+    for (player = 0U; player < match->rules.player_count; ++player) {
+        vox_u16 stimulus;
+        vox_u16 subject;
+        vox_u16 line;
+        vox_u16 tone = (vox_u16)VOX_DIGS_TONE_NEUTRAL;
+        vox_u16 audience;
+        const vox_digs_personality *personality;
+        int pressed;
+        if (match->speech_cooldown[player] > 0U) {
+            match->speech_cooldown[player]--;
+        }
+        /*
+         * Read the press once and carry it.  Consuming the bit up front and
+         * then testing the same bit further down meant the gate always found
+         * it already cleared, and the miner never said anything at all.
+         */
+        pressed = !vox_digs_player_is_bot(match, player) &&
+                  match->alive[player] &&
+                  (match->player_actions[player] &
+                   VOX_DIGS_ACTION_BARK) != 0U;
+        if (pressed) {
+            /*
+             * A bark is an edge, not a state, but player_actions holds
+             * whatever was last submitted -- so any caller that submits
+             * input less often than it steps would leave the bit set and the
+             * miner would talk on every tick the cooldown allowed.
+             */
+            match->player_actions[player] =
+                (vox_u16)(match->player_actions[player] &
+                          (vox_u16)~VOX_DIGS_ACTION_BARK);
+        }
+        /*
+         * The button is the timing.  A fresh action context (a grapple,
+         * cave-in, hit, and so on) wins over an older queued relationship
+         * prompt; otherwise the queued prompt remains.  Then it clears the
+         * pause and takes the floor off whoever is talking -- the press is a
+         * single tick, so anything that defers it loses it, and a bark button
+         * that sometimes does nothing is worse than one that interrupts.
+         */
+        if (pressed) {
+            vox_u16 action_context =
+                digs_speech_player_action_context(match, player);
+            if (action_context != VOX_DIGS_STIMULUS_NONE) {
+                match->speech_stimulus[player] = action_context;
+                match->speech_subject[player] = VOX_DIGS_NO_PLAYER;
+            } else if (match->speech_stimulus[player] ==
+                       VOX_DIGS_STIMULUS_NONE) {
+                digs_speech_player_context(match, player);
+            }
+            match->speech_delay[player] = 0U;
+            match->speech_cooldown[player] = 0U;
+            match->speech_floor_ticks = 0U;
+        }
+        stimulus = match->speech_stimulus[player];
+        if (stimulus == VOX_DIGS_STIMULUS_NONE) {
+            continue;
+        }
+        if (!match->alive[player]) {
+            /* The dead stop mid-sentence, except about dying. */
+            if (stimulus != VOX_DIGS_STIMULUS_KILLED_BY &&
+                stimulus != VOX_DIGS_STIMULUS_DOOMED) {
+                match->speech_stimulus[player] =
+                    (vox_u16)VOX_DIGS_STIMULUS_NONE;
+                continue;
+            }
+        }
+        if (match->speech_delay[player] > 0U) {
+            match->speech_delay[player]--;
+            continue;
+        }
+        /*
+         * A miner you are driving does not talk by itself.  The simulation
+         * works out what you would say and holds it; pressing bark is what
+         * says it.  Bots have no button, so they speak when they are ready.
+         */
+        if (!vox_digs_player_is_bot(match, player) && !pressed) {
+            continue;
+        }
+        /* Somebody else is mid-sentence.  Wait. */
+        if (match->speech_floor_ticks > 0U) {
+            continue;
+        }
+        subject = match->speech_subject[player];
+        match->speech_stimulus[player] = (vox_u16)VOX_DIGS_STIMULUS_NONE;
+        line = digs_speech_choose(match, player, subject, stimulus, &tone);
+        if (line == 65535U) {
+            continue;
+        }
+        personality = digs_speaker_personality(match, player);
+        match->speech_last_line = line;
+        match->speech_self_stimulus[player] = stimulus;
+        match->speech_self_tick[player] = match->tick;
+        match->speech_dry_ticks = 0U;
+        if (match->speech_exchange_lines < 65535U) {
+            match->speech_exchange_lines++;
+        }
+        {
+            vox_i32 worth = (vox_i32)digs_stimulus_valence[stimulus];
+            vox_i32 heat = (vox_i32)match->speech_exchange_heat +
+                           (worth <= -100L ? -2L :
+                            (worth < 0L ? -1L : (worth > 0L ? 1L : 0L)));
+            if (heat > 6L) heat = 6L;
+            if (heat < -6L) heat = -6L;
+            match->speech_exchange_heat = (vox_i16)heat;
+        }
+        if (match->speech_exchange_lines >= DIGS_SPEECH_EXCHANGE_MAX) {
+            /* Enough said.  Close it and buy the silence now. */
+            match->speech_answer_ticks = 0U;
+            match->speech_exchange_lines = 0U;
+    match->speech_last_line = 0U;
+    match->speech_exchange_heat = 0;
+            match->speech_floor_ticks = DIGS_SPEECH_FLOOR_BETWEEN;
+        } else {
+            /* The window follows the line: a long remark earns a long pause
+             * for somebody to answer it in. */
+            vox_u32 window = (vox_u32)vox_digs_speech_duration(line) +
+                             DIGS_SPEECH_ANSWER_SLACK;
+            match->speech_floor_ticks = DIGS_SPEECH_FLOOR_IN_EXCHANGE;
+            match->speech_answer_ticks = (vox_u16)window;
+        }
+        /*
+         * When the player speaks, the mine turns to look.  Everyone is
+         * briefly likelier to answer, and everyone's clock is pulled in so
+         * the answer arrives while it still reads as an answer -- but it is
+         * still a roll, so it is a conversation rather than a vending
+         * machine.
+         */
+        if (!vox_digs_player_is_bot(match, player)) {
+            vox_u16 other;
+            if (match->speech_answer_ticks < DIGS_SPEECH_ANSWER_WINDOW) {
+                match->speech_answer_ticks = DIGS_SPEECH_ANSWER_WINDOW;
+            }
+            for (other = 0U; other < match->rules.player_count; ++other) {
+                vox_u32 spin;
+                vox_u16 soon;
+                if (other == player || !vox_digs_player_is_bot(match, other)) {
+                    continue;
+                }
+                spin = digs_noise(match->rules.seed, match->tick, other,
+                                  0xA715U);
+                soon = (vox_u16)(DIGS_SPEECH_ANSWER_MIN +
+                                 (spin % DIGS_SPEECH_ANSWER_SPAN));
+                if (match->speech_urge_ticks[other] > soon) {
+                    match->speech_urge_ticks[other] = soon;
+                }
+            }
+        }
+        match->speech_cooldown[player] = (vox_u16)(DIGS_SPEECH_COOLDOWN_MIN +
+            ((255U - (vox_u32)personality->sociability) *
+             DIGS_SPEECH_COOLDOWN_SPAN) / 255U);
+        /*
+         * The audience rides on `material`, which for speech only ever held
+         * a decorative VOX_MAT_SMOKE that nothing read.  Documented at both
+         * ends so it is a deliberate reuse and not a surprise to the next
+         * person who greps for it.
+         */
+        audience = digs_stimulus_audience(stimulus);
+        match->speech_audience[player] = audience;
+        digs_emit_event(match, VOX_DIGS_EVENT_AI_BARK, player, subject,
+                        match->selected_weapon[player], audience,
+                        match->players[player].position_x.value_q16,
+                        match->players[player].position_y.value_q16,
+                        stimulus, line);
+        match->events[(match->event_head + match->event_count - 1U) %
+                      VOX_DIGS_MAX_EVENTS].reserved = tone;
+        /*
+         * And now everybody who could hear it decides what to make of it.
+         * Replies used to be the addressee's alone, which is precisely why
+         * three bots in a room produced three private conversations.
+         */
+        digs_speech_broadcast(match, player, subject, stimulus, audience,
+                              match->speech_answer_ticks > 0U);
+    }
+}
+
+/* One tick of drift back toward indifference, plus the dwell clocks. */
+static void digs_step_contracts(vox_digs_match *match)
+{
+    vox_u16 a;
+    vox_u16 b;
+    int decay = (match->tick % DIGS_CONTRACT_DECAY_TICKS) == 0U;
+    for (a = 0U; a < VOX_DIGS_MAX_SLOTS; ++a)
+    for (b = (vox_u16)(a + 1U); b < VOX_DIGS_MAX_SLOTS; ++b) {
+        vox_u16 index = vox_digs_pair_index(a, b);
+        vox_digs_contract *contract = &match->contracts[index];
+        vox_u16 was = contract->tone;
+        if (contract->tone_ticks < 65535U) {
+            contract->tone_ticks++;
+        }
+        if (contract->quiet_ticks < 65535U) {
+            contract->quiet_ticks++;
+        }
+        if (decay && contract->valence > 0) {
+            contract->valence = (vox_i16)(contract->valence >
+                DIGS_CONTRACT_DECAY_STEP ?
+                contract->valence - DIGS_CONTRACT_DECAY_STEP : 0);
+        } else if (decay && contract->valence < 0) {
+            contract->valence = (vox_i16)(contract->valence <
+                -DIGS_CONTRACT_DECAY_STEP ?
+                contract->valence + DIGS_CONTRACT_DECAY_STEP : 0);
+        }
+        digs_contract_settle(contract);
+        /*
+         * Announce crossings, without moving the account.  A stimulus that
+         * pushed the tone that produced it would be a feedback loop, so this
+         * only gives the pair something to say about where they have got to.
+         */
+        if (contract->tone != was && contract->met) {
+            vox_u16 crossing = (vox_u16)VOX_DIGS_STIMULUS_NONE;
+            if (contract->tone >= VOX_DIGS_TONE_TRUCE &&
+                was < VOX_DIGS_TONE_TRUCE) {
+                crossing = (vox_u16)VOX_DIGS_STIMULUS_TRUCE_ACCEPTED;
+            } else if (was >= VOX_DIGS_TONE_TRUCE &&
+                       contract->tone < VOX_DIGS_TONE_TRUCE) {
+                crossing = (vox_u16)VOX_DIGS_STIMULUS_TRUCE_BROKEN;
+            } else if (contract->tone == VOX_DIGS_TONE_FEUD &&
+                       was != VOX_DIGS_TONE_FEUD) {
+                crossing = (vox_u16)VOX_DIGS_STIMULUS_HUMILIATED;
+            }
+            if (crossing != VOX_DIGS_STIMULUS_NONE) {
+                contract->last_stimulus = crossing;
+                contract->last_stimulus_tick = match->tick;
+                digs_speech_prompt(match, a, b, crossing);
+                digs_speech_prompt(match, b, a, crossing);
+            }
+        }
+    }
+}
+
+/* Replay choice stays render-only, but it must still be reproducible from the
+ * bounded authoritative event history.  A streak is counted since the
+ * killer's most recent recorded death; multi-kill, cave-in, and blast context
+ * use finite recent windows so an old spectacular event cannot own every
+ * later results screen. */
+static void digs_replay_kill_context(const vox_digs_match *match,
+                                     vox_u16 killer, vox_u16 victim,
+                                     vox_u16 *kill_streak,
+                                     vox_u16 *multi_kill,
+                                     vox_u16 *cave_in_scale,
+                                     vox_u16 *blast_distance)
+{
+    vox_u16 event_index;
+    vox_u16 streak = 0U;
+    vox_u16 multi = 1U;
+    vox_u16 cave_in = 0U;
+    vox_u16 nearest_blast = DIGS_REPLAY_NO_BLAST_DISTANCE;
+    vox_u16 blast_seen = 0U;
+    if (kill_streak == 0 || multi_kill == 0 || cave_in_scale == 0 ||
+        blast_distance == 0) {
+        return;
+    }
+    *kill_streak = 1U;
+    *multi_kill = 1U;
+    *cave_in_scale = 0U;
+    *blast_distance = DIGS_REPLAY_NO_BLAST_DISTANCE;
+    if (match == 0) return;
+    for (event_index = 0U; event_index < match->event_count; ++event_index) {
+        const vox_digs_event *event = vox_digs_event_get(match, event_index);
+        vox_u32 age;
+        if (event == 0 || event->tick > match->tick) continue;
+        age = match->tick - event->tick;
+        if (event->type == VOX_DIGS_EVENT_KILL) {
+            if (event->target == killer) {
+                streak = 0U;
+            }
+            if (event->source == killer) {
+                if (streak < 65535U) streak++;
+                if (age <= 90U && multi < 65535U) multi++;
+            }
+        }
+        if (event->type == VOX_DIGS_EVENT_CAVE_IN &&
+            event->source == killer && age <= DIGS_REPLAY_CONTEXT_TICKS &&
+            event->magnitude > cave_in) {
+            cave_in = event->magnitude;
+        }
+        if (event->type == VOX_DIGS_EVENT_EXPLOSION &&
+            event->source == killer && age <= DIGS_REPLAY_BLAST_TICKS) {
+            vox_i32 distance_q16 = digs_distance_approx(
+                event->position_x_q16 -
+                    match->players[victim].position_x.value_q16,
+                event->position_y_q16 -
+                    match->players[victim].position_y.value_q16);
+            vox_u32 distance_cells = distance_q16 > 0L ?
+                                     (vox_u32)distance_q16 >> 16 : 0U;
+            vox_u16 distance = distance_cells >= 65535U ? 65534U :
+                               (vox_u16)distance_cells;
+            if (blast_seen == 0U || distance < nearest_blast) {
+                nearest_blast = distance;
+                blast_seen = 1U;
+            }
+        }
+    }
+    if (streak < 65535U) streak++;
+    *kill_streak = streak;
+    *multi_kill = multi;
+    *cave_in_scale = cave_in;
+    *blast_distance = nearest_blast;
+}
+
+static int digs_replay_candidate_better(
+    const vox_digs_replay_ledger *current, vox_u16 headshot,
+    vox_u16 kill_streak, vox_u16 multi_kill, vox_u16 cave_in_scale,
+    vox_u16 blast_distance, vox_u16 value)
+{
+    if (current == 0 || current->active == 0U) return 1;
+    /* A headshot remains the strongest replay event even when a previous
+     * candidate accumulated more routine award points. */
+    if (headshot != current->headshot) return headshot > current->headshot;
+    if (value != current->award_value) return value > current->award_value;
+    if (cave_in_scale != current->cave_in_scale) {
+        return cave_in_scale > current->cave_in_scale;
+    }
+    if (blast_distance != current->blast_distance) {
+        if (blast_distance == DIGS_REPLAY_NO_BLAST_DISTANCE) return 0;
+        if (current->blast_distance == DIGS_REPLAY_NO_BLAST_DISTANCE) {
+            return 1;
+        }
+        return blast_distance < current->blast_distance;
+    }
+    if (multi_kill != current->multi_kill) {
+        return multi_kill > current->multi_kill;
+    }
+    if (kill_streak != current->kill_streak) {
+        return kill_streak > current->kill_streak;
+    }
+    /* Equal candidates retain the earlier event; input order is the stable
+     * final tie-breaker and no wall clock or pointer order is involved. */
+    return 0;
+}
+
 vox_result vox_digs_record_kill(vox_digs_match *match, vox_u16 killer,
                                 vox_u16 victim)
 {
+    vox_u16 headshot;
+    vox_u16 kill_streak;
+    vox_u16 multi_kill;
+    vox_u16 cave_in_scale;
+    vox_u16 blast_distance;
+    vox_u32 replay_value;
     if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
         !vox_digs_player_is_active(match, killer) ||
         !vox_digs_player_is_active(match, victim) || !match->alive[victim] ||
@@ -2153,6 +6105,72 @@ vox_result vox_digs_record_kill(vox_digs_match *match, vox_u16 killer,
     }
     if (match->scores[killer] < 65535U) {
         match->scores[killer]++;
+    }
+    /*
+     * Killing the miner who last killed you is a different thing from picking
+     * a fight, and the account should read it that way.
+     */
+    digs_contract_note(match, killer, victim,
+                       match->last_attacker[killer] == victim ?
+                       (vox_u16)VOX_DIGS_STIMULUS_REVENGE :
+                       (vox_u16)VOX_DIGS_STIMULUS_KILLED_THEM);
+    if (match->alive[killer]) {
+        vox_u32 healed = (vox_u32)match->health[killer] + DIGS_KILL_HEAL;
+        match->health[killer] = healed > (vox_u32)VOX_DIGS_MAX_HEALTH ?
+                                (vox_u16)VOX_DIGS_MAX_HEALTH :
+                                (vox_u16)healed;
+    }
+    /* A kill leaves the anatomy as bounded rigid segments in the
+     * authoritative pool.  Presentation gore remains separate; it cannot
+     * replace the body that collides, tumbles, and settles. */
+    digs_spawn_corpse_assembly(match, victim, killer);
+    (void)vox_fluid_add_at(
+        &match->fluids,
+        (vox_u16)(match->players[victim].position_x.value_q16 >> 16),
+        (vox_u16)(match->players[victim].position_y.value_q16 >> 16), 0U,
+        VOX_FLUID_BLOOD, 8192L, 37L << 16);
+    if (match->last_damage_part[victim] == VOX_DIGS_PART_HEAD) {
+        (void)vox_digs_award_note(match, killer,
+                                  VOX_DIGS_AWARD_HEADHUNTER, 200U);
+    }
+    headshot = match->last_damage_part[victim] == VOX_DIGS_PART_HEAD ?
+               1U : 0U;
+    digs_replay_kill_context(match, killer, victim, &kill_streak,
+                             &multi_kill, &cave_in_scale, &blast_distance);
+    replay_value = match->award_value[killer] > DIGS_REPLAY_AWARD_VALUE_CAP ?
+                   DIGS_REPLAY_AWARD_VALUE_CAP : match->award_value[killer];
+    replay_value += (vox_u32)kill_streak * DIGS_REPLAY_KILL_STREAK_VALUE;
+    replay_value += (vox_u32)multi_kill * DIGS_REPLAY_MULTI_KILL_VALUE;
+    replay_value += (vox_u32)cave_in_scale * DIGS_REPLAY_CAVE_IN_VALUE;
+    if (blast_distance != DIGS_REPLAY_NO_BLAST_DISTANCE &&
+        blast_distance <= DIGS_REPLAY_BLAST_MAX_DISTANCE_CELLS) {
+        replay_value += (vox_u32)(
+            DIGS_REPLAY_BLAST_MAX_DISTANCE_CELLS + 1U - blast_distance) *
+            DIGS_REPLAY_BLAST_PROXIMITY_VALUE;
+    }
+    if (headshot != 0U) replay_value += DIGS_REPLAY_HEADSHOT_VALUE;
+    if (replay_value > 65535U) replay_value = 65535U;
+    if (digs_replay_candidate_better(&match->replay, headshot,
+                                     kill_streak, multi_kill, cave_in_scale,
+                                     blast_distance,
+                                     (vox_u16)replay_value)) {
+        match->replay.active = 1U;
+        match->replay.killer = killer;
+        match->replay.victim = victim;
+        match->replay.headshot = headshot;
+        match->replay.kill_streak = kill_streak;
+        match->replay.multi_kill = multi_kill;
+        match->replay.award_value = (vox_u16)replay_value;
+        match->replay.cave_in_scale = cave_in_scale;
+        match->replay.blast_distance = blast_distance;
+        match->replay.selected_tick = match->tick;
+        match->replay.seed = match->rules.seed;
+        digs_emit_event(match, VOX_DIGS_EVENT_REPLAY_SELECT, killer, victim,
+                        match->last_damage_weapon[victim], VOX_MAT_BLOOD,
+                        match->players[victim].position_x.value_q16,
+                        match->players[victim].position_y.value_q16,
+                        match->replay.award_value,
+                        match->replay.headshot);
     }
     match->alive[victim] = 0U;
     match->health[victim] = 0U;
@@ -2186,6 +6204,7 @@ vox_result vox_digs_submit_input(vox_digs_match *match,
         !vox_digs_player_is_active(match, input->player) ||
         vox_digs_player_is_bot(match, input->player) ||
         !match->alive[input->player] ||
+        digs_player_extracted(match, input->player) ||
         (input->actions & (vox_u16)~VOX_DIGS_ACTION_MASK) != 0U ||
         input->aim_x >= VOX_WORLD_WIDTH ||
         input->aim_y >= VOX_WORLD_HEIGHT ||
@@ -2222,9 +6241,14 @@ vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
                              vox_u16 tool, vox_u32 x, vox_u32 y, vox_u32 z)
 {
     const vox_cell *target;
+    vox_u16 target_material;
+    vox_u16 detached_body_index;
+    vox_structure_cluster detached;
+    vox_result cluster_result;
     vox_result result;
     if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
         !vox_digs_player_is_active(match, player) || !match->alive[player] ||
+        digs_player_extracted(match, player) ||
         tool >= VOX_DIGS_TOOL_COUNT) {
         return VOX_ERR_INVALID;
     }
@@ -2232,12 +6256,34 @@ vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
     if (target == 0 || target->material == VOX_MAT_BEDROCK) {
         return VOX_ERR_INVALID;
     }
+    target_material = target->material;
+    cluster_result = VOX_ERR_INVALID;
+    if (digs_weapons[tool].blast_radius >= 3U &&
+        target_material != VOX_MAT_AIR) {
+        cluster_result = vox_cluster_extract(&match->world, x, y, z,
+                                             &detached);
+        if (cluster_result == VOX_OK) {
+            detached_body_index = digs_rigid_free_slot(match);
+            if (vox_cluster_spawn_debris(&detached, &match->ragdolls,
+                                         0L, -(2L << 16)) != VOX_OK) {
+                /* A full rigid pool cannot make terrain disappear.  Restore
+                 * it before the actual tool operation applies its own bounded
+                 * material damage. */
+                (void)vox_cluster_restore(&match->world, &detached, 0U);
+                cluster_result = VOX_ERR_CAPACITY;
+            } else {
+                digs_note_rigid_spawn(match, detached_body_index, player,
+                                      tool, detached.cells[0].material,
+                                      detached.count);
+            }
+        }
+    }
     if (tool == VOX_DIGS_TOOL_PICK) {
         result = vox_world_set(&match->world, x, y, z, VOX_MAT_AIR,
                                20L << 16);
     } else if (tool == VOX_DIGS_TOOL_BLAST_CHARGE) {
-        result = vox_world_blast(&match->world, x, y, z,
-                                 DIGS_SCALE(3U), 700L << 16);
+        result = digs_blast(match, x, y, z, DIGS_SCALE(3U),
+                            700L << 16, player, tool);
     } else if (tool == VOX_DIGS_TOOL_SMOKE_POT) {
         result = vox_world_set(&match->world, x, y, z, VOX_MAT_SMOKE,
                                180L << 16);
@@ -2248,28 +6294,72 @@ vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
         result = vox_world_set(&match->world, x, y, z, VOX_MAT_WATER,
                                20L << 16);
     } else if (tool == VOX_DIGS_TOOL_SLEDGE) {
-        result = vox_world_blast(&match->world, x, y, z,
-                                 DIGS_SCALE(2U), 80L << 16);
+        result = digs_blast(match, x, y, z, DIGS_SCALE(2U),
+                            80L << 16, player, tool);
     } else if (tool == VOX_DIGS_TOOL_NAIL_GUN) {
-        result = vox_world_blast(&match->world, x, y, z,
-                                 DIGS_SCALE(1U), 40L << 16);
+        result = digs_blast(match, x, y, z, DIGS_SCALE(1U),
+                            40L << 16, player, tool);
     } else if (tool == VOX_DIGS_TOOL_BOILER_SHOTGUN) {
-        result = vox_world_blast(&match->world, x, y, z,
-                                 DIGS_SCALE(2U), 180L << 16);
+        result = digs_blast(match, x, y, z, DIGS_SCALE(2U),
+                            180L << 16, player, tool);
     } else if (tool == VOX_DIGS_TOOL_CONCUSSION_GRENADE) {
-        result = vox_world_blast(&match->world, x, y, z,
-                                 DIGS_SCALE(5U), 400L << 16);
+        result = digs_blast(match, x, y, z, DIGS_SCALE(5U),
+                            400L << 16, player, tool);
     } else {
-        result = vox_world_blast(&match->world, x, y, z,
-                                 DIGS_SCALE(4U), 500L << 16);
+        result = digs_blast(match, x, y, z, DIGS_SCALE(4U),
+                            500L << 16, player, tool);
     }
     if (result != VOX_OK) {
         return result;
     }
+    (void)vox_structure_invalidate_with_cause(
+        &match->structure, x, y,
+        digs_weapons[tool].blast_radius > 0U ?
+        digs_weapons[tool].blast_radius + VOX_STRUCTURE_COHESION_CELLS :
+        VOX_STRUCTURE_COHESION_CELLS,
+        player, tool);
+    if (cluster_result == VOX_OK) {
+        digs_emit_event(match, VOX_DIGS_EVENT_CAVE_IN, player,
+                        VOX_DIGS_NO_PLAYER, tool, target_material,
+                        (vox_i32)(x << 16), (vox_i32)(y << 16),
+                        detached.count, detached.load_q8);
+        (void)vox_digs_award_note(match, player,
+                                  VOX_DIGS_AWARD_CAVE_IN_ARTIST,
+                                  detached.count);
+    }
+    if (tool == VOX_DIGS_TOOL_PICK && target_material != VOX_MAT_AIR) {
+        (void)vox_digs_award_note(match, player,
+                                  VOX_DIGS_AWARD_GRAVE_DIGGER, 50U);
+    }
+    if (tool == VOX_DIGS_TOOL_CINDER_FLASK) {
+        (void)vox_digs_award_note(match, player,
+                                  VOX_DIGS_AWARD_PYROMANIAC, 75U);
+    }
+    if (digs_weapons[tool].blast_radius > 0U) {
+        digs_spawn_blast_debris(match, x, y,
+                                digs_weapons[tool].blast_radius, 0U,
+                                player, tool);
+    }
+    if (tool == VOX_DIGS_TOOL_CINDER_FLASK ||
+        tool == VOX_DIGS_TOOL_PRESSURE_HOSE) {
+        vox_u16 fluid_material = tool == VOX_DIGS_TOOL_CINDER_FLASK ?
+                                 VOX_FLUID_LAVA : VOX_FLUID_WATER;
+        /* A fluid cell is one Q16 unit.  The old 700 << 8 request was
+         * larger than that bounded cell and was silently rejected, leaving
+         * Cinder Flask as a terrain-only effect.  Deposit a deterministic
+         * three-quarter cell here; the solver carries the rest through open
+         * neighbors on later ticks. */
+        vox_i32 fluid_volume = tool == VOX_DIGS_TOOL_CINDER_FLASK ?
+                               49152L : 20L << 8;
+        (void)vox_fluid_add_at(&match->fluids, (vox_u16)x, (vox_u16)y,
+                               (vox_u16)z, fluid_material, fluid_volume,
+                               tool == VOX_DIGS_TOOL_CINDER_FLASK ?
+                               700L << 16 : 20L << 16);
+    }
     match->selected_weapon[player] = tool;
     digs_end_spawn_shield(match, player);
     digs_emit_event(match, VOX_DIGS_EVENT_WEAPON_FIRE, player,
-                    VOX_DIGS_NO_PLAYER, tool, target->material,
+                    VOX_DIGS_NO_PLAYER, tool, target_material,
                     (vox_i32)(x << 16), (vox_i32)(y << 16),
                     digs_weapons[tool].damage,
                     (vox_u16)(digs_noise(match->rules.seed, match->tick,
@@ -2419,16 +6509,6 @@ static void digs_environment_defeat(vox_digs_match *match, vox_u16 victim)
                                          victim, 0xDEADU) & 15U));
 }
 
-static int digs_same_team(const vox_digs_match *match, vox_u16 first,
-                          vox_u16 second)
-{
-    if (match->rules.team_mode != VOX_DIGS_MODE_MINERS_VS_MACHINES) {
-        return 0;
-    }
-    return vox_digs_player_is_bot(match, first) ==
-           vox_digs_player_is_bot(match, second);
-}
-
 static vox_u16 digs_choose_hit_part(const vox_digs_match *match,
                                     vox_u16 attacker, vox_u16 victim,
                                     vox_u16 weapon, vox_u16 damage)
@@ -2517,6 +6597,10 @@ static void digs_sever_limb_chain(vox_digs_match *match, vox_u16 attacker,
                 (vox_u16)(54U + noise % 72U), victim,
                 (vox_u16)((candidate << 3) | gib));
         }
+        if (attacker != VOX_DIGS_NO_PLAYER && attacker != victim) {
+            digs_contract_note(match, attacker, victim,
+                               (vox_u16)VOX_DIGS_STIMULUS_LIMB_TAKEN);
+        }
         digs_emit_event(match, VOX_DIGS_EVENT_LIMB_SEVER, attacker, victim,
                         weapon, VOX_MAT_FLESH, wound_x_q16, wound_y_q16,
                         candidate, (vox_u16)(damage_flags & 15U));
@@ -2538,22 +6622,23 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
     vox_i32 wound_y_q16;
     if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
         !vox_digs_player_is_active(match, victim) ||
-        !match->alive[victim] || damage == 0U ||
+        !match->alive[victim] || digs_player_extracted(match, victim) ||
+        damage == 0U ||
         weapon >= VOX_DIGS_TOOL_COUNT ||
         (part != VOX_DIGS_NO_PART &&
          part >= VOX_DIGS_ANATOMY_PART_COUNT) ||
         (damage_flags & (vox_u16)~(VOX_DIGS_DAMAGE_BALLISTIC |
                                   VOX_DIGS_DAMAGE_BLUNT |
                                   VOX_DIGS_DAMAGE_EXPLOSIVE |
-                                  VOX_DIGS_DAMAGE_HEAT)) != 0U ||
+                                  VOX_DIGS_DAMAGE_HEAT |
+                                  VOX_DIGS_DAMAGE_DROWNING)) != 0U ||
         (attacker != VOX_DIGS_NO_PLAYER &&
          !vox_digs_player_is_active(match, attacker))) {
         return VOX_ERR_INVALID;
     }
-    if (attacker != VOX_DIGS_NO_PLAYER && attacker != victim &&
-        !match->rules.friendly_fire &&
-        digs_same_team(match, attacker, victim)) {
-        return VOX_OK;
+    if (attacker != VOX_DIGS_NO_PLAYER && attacker != victim) {
+        digs_contract_note(match, attacker, victim,
+                           (vox_u16)VOX_DIGS_STIMULUS_HURT_THEM);
     }
     if (match->spawn_shield_ticks[victim] > 0U) {
         digs_emit_event(match, VOX_DIGS_EVENT_SHIELD_BLOCK, attacker, victim,
@@ -2563,8 +6648,25 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
                         damage, 1U);
         return VOX_OK;
     }
+    if (match->dash_invulnerability[victim] > 0U) {
+        digs_emit_event(match, VOX_DIGS_EVENT_SHIELD_BLOCK, attacker, victim,
+                        weapon, VOX_MAT_METAL,
+                        match->players[victim].position_x.value_q16,
+                        match->players[victim].position_y.value_q16,
+                        damage, 2U);
+        return VOX_OK;
+    }
     if (part == VOX_DIGS_NO_PART) {
         part = digs_choose_hit_part(match, attacker, victim, weapon, damage);
+    }
+    if (part == VOX_DIGS_PART_HEAD) {
+        damage = 65535U;
+        fatal = 1U;
+        digs_emit_event(match, VOX_DIGS_EVENT_HEADSHOT, attacker, victim,
+                        weapon, VOX_MAT_BLOOD,
+                        match->players[victim].position_x.value_q16,
+                        match->players[victim].position_y.value_q16,
+                        damage, part);
     }
     if (vox_digs_anatomy_hurtbox(part, &wound_box) != VOX_OK) {
         return VOX_ERR_INVALID;
@@ -2622,6 +6724,12 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
                                     VOX_DIGS_PART_CAUTERIZED) &
                                    (vox_u16)~VOX_DIGS_PART_BLEEDING);
         anatomy->bleed_rate_q8 = 0U;
+    } else if ((damage_flags & VOX_DIGS_DAMAGE_DROWNING) != 0U) {
+        /* Water damage is suffocation, not an open wound. */
+        anatomy->flags = (vox_u16)(anatomy->flags &
+                                   (vox_u16)~VOX_DIGS_PART_BLEEDING);
+        anatomy->bleed_rate_q8 = 0U;
+        match->bleed_accumulator_q8[victim] = 0U;
     } else {
         vox_u16 bleed = (vox_u16)(damage / 10U + 1U);
         if (bleed > 16U) {
@@ -2640,8 +6748,8 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
     digs_emit_event(match, VOX_DIGS_EVENT_DAMAGE, attacker, victim,
                     weapon, VOX_MAT_BLOOD,
                     wound_x_q16, wound_y_q16,
-                    damage, (vox_u16)((part << 4) |
-                                      (damage_flags & 15U)));
+                    damage, (vox_u16)((part << 5) |
+                                      (damage_flags & 31U)));
     if (aggregate_damage < match->health[victim]) {
         match->health[victim] = (vox_u16)(match->health[victim] -
                                            aggregate_damage);
@@ -2932,9 +7040,10 @@ static vox_result digs_fire_melee(vox_digs_match *match, vox_u16 player,
     if (target_x > 0U && target_y > 0U &&
         target_x + 1U < VOX_WORLD_WIDTH &&
         target_y + 1U < VOX_WORLD_HEIGHT) {
-        (void)vox_world_blast(&match->world, target_x, target_y,
-                              VOX_WORLD_DEPTH - 1U,
-                              properties->blast_radius, 120L << 16);
+        (void)digs_blast(match, target_x, target_y,
+                         VOX_WORLD_DEPTH - 1U,
+                         properties->blast_radius, 120L << 16,
+                         player, weapon);
     }
     for (victim = 0U; victim < match->rules.player_count; ++victim) {
         vox_u16 part = VOX_DIGS_NO_PART;
@@ -3241,9 +7350,10 @@ static vox_result digs_fire_popper(vox_digs_match *match, vox_u16 player,
         }
         if (digs_projectile_hits_solid(&match->world, (vox_u32)x_cell,
                                        (vox_u32)y_cell)) {
-            (void)vox_world_blast(&match->world, (vox_u32)x_cell,
-                                  (vox_u32)y_cell, VOX_WORLD_DEPTH - 1U,
-                                  properties->blast_radius, 550L << 16);
+            (void)digs_blast(match, (vox_u32)x_cell, (vox_u32)y_cell,
+                             VOX_WORLD_DEPTH - 1U,
+                             properties->blast_radius, 550L << 16,
+                             player, VOX_DIGS_TOOL_POPPER);
             digs_damage_radius(match, player, (vox_u32)x_cell,
                                (vox_u32)y_cell, properties->blast_radius,
                                properties->damage, VOX_DIGS_TOOL_POPPER,
@@ -3261,9 +7371,9 @@ static vox_result digs_fire_popper(vox_digs_match *match, vox_u16 player,
                                      VOX_DIGS_TOOL_POPPER, part,
                                      properties->damage,
                                      VOX_DIGS_DAMAGE_BALLISTIC);
-            (void)vox_world_blast(&match->world, (vox_u32)x_cell,
-                                  (vox_u32)y_cell, VOX_WORLD_DEPTH - 1U,
-                                  1U, 550L << 16);
+            (void)digs_blast(match, (vox_u32)x_cell, (vox_u32)y_cell,
+                             VOX_WORLD_DEPTH - 1U, 1U, 550L << 16,
+                             player, VOX_DIGS_TOOL_POPPER);
             return VOX_OK;
         }
     }
@@ -3305,22 +7415,31 @@ static vox_result digs_fire_hot_rail(vox_digs_match *match, vox_u16 player,
                     cell->material == VOX_MAT_BEDROCK) {
                     continue;
                 }
-                if (cell->material == VOX_MAT_BIOMASS ||
-                    cell->material == VOX_MAT_COAL) {
-                    (void)vox_world_set(&match->world, (vox_u32)x_cell,
-                                        (vox_u32)y_cell, z, VOX_MAT_LAVA,
-                                        850L << 16);
-                } else {
-                    (void)vox_world_set(&match->world, (vox_u32)x_cell,
-                                        (vox_u32)y_cell, z,
-                                        cell->material, 850L << 16);
-                }
+                /*
+                 * Heat the bore, do not liquefy it.
+                 *
+                 * This used to convert coal and biomass straight to lava.
+                 * Tunnelling down through a seam therefore turned the
+                 * miner's own floor molten, they fell into the pool they
+                 * had just made, and lava contact killed them at twelve
+                 * health per tick -- attributed, confusingly, to the hot
+                 * rail itself.  That is the reported "dying in the tunnel
+                 * being made by the miner while making the tunnel".
+                 *
+                 * Coal and biomass are flammable, so heating them past
+                 * ignition still sets the tunnel alight through the normal
+                 * material reactions.  The tool keeps its scorched-earth
+                 * character and its tunnels stay walkable.
+                 */
+                (void)vox_world_set(&match->world, (vox_u32)x_cell,
+                                    (vox_u32)y_cell, z,
+                                    cell->material, 850L << 16);
             }
             if ((step & 7U) == 0U) {
-                (void)vox_world_blast(&match->world, (vox_u32)x_cell,
-                                      (vox_u32)y_cell,
-                                      VOX_WORLD_DEPTH - 1U, 1U,
-                                      800L << 16);
+                (void)digs_blast(match, (vox_u32)x_cell, (vox_u32)y_cell,
+                                 VOX_WORLD_DEPTH - 1U, 1U,
+                                 800L << 16, player,
+                                 VOX_DIGS_TOOL_HOT_RAIL);
             }
         }
         for (victim = 0U; victim < match->rules.player_count; ++victim) {
@@ -3363,9 +7482,9 @@ static vox_result digs_fire_bore_drill(vox_digs_match *match,
         }
         if (digs_projectile_hits_solid(&match->world, (vox_u32)source_x,
                                        (vox_u32)y_cell)) {
-            (void)vox_world_blast(&match->world, (vox_u32)source_x,
-                                  (vox_u32)y_cell, VOX_WORLD_DEPTH - 1U,
-                                  1U, 500L << 16);
+            (void)digs_blast(match, (vox_u32)source_x, (vox_u32)y_cell,
+                             VOX_WORLD_DEPTH - 1U, 1U, 500L << 16,
+                             player, VOX_DIGS_TOOL_BORE_DRILL);
         }
         if (match->players[player].velocity_y.value_q16 <= 0L) {
             continue;
@@ -3417,9 +7536,9 @@ static vox_result digs_fire_bolt_action(vox_digs_match *match,
         }
         if (digs_projectile_hits_solid(&match->world, (vox_u32)x_cell,
                                        (vox_u32)y_cell)) {
-            (void)vox_world_blast(&match->world, (vox_u32)x_cell,
-                                  (vox_u32)y_cell, VOX_WORLD_DEPTH - 1U,
-                                  1U, 900L << 16);
+            (void)digs_blast(match, (vox_u32)x_cell, (vox_u32)y_cell,
+                             VOX_WORLD_DEPTH - 1U, 1U, 900L << 16,
+                             player, VOX_DIGS_TOOL_BOLT_ACTION);
             bores++;
             if (bores >= 6U) {
                 break;
@@ -3453,7 +7572,8 @@ vox_result vox_digs_fire_weapon(vox_digs_match *match, vox_u16 player,
     int offset;
     if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
         !vox_digs_player_is_active(match, player) ||
-        !match->alive[player] || weapon >= VOX_DIGS_TOOL_COUNT ||
+        !match->alive[player] || digs_player_extracted(match, player) ||
+        weapon >= VOX_DIGS_TOOL_COUNT ||
         target_x >= VOX_WORLD_WIDTH || target_y >= VOX_WORLD_HEIGHT ||
         match->weapon_cooldown[player] != 0U ||
         (match->rules.weapon_mask & (vox_u16)(1U << weapon)) == 0U) {
@@ -3562,6 +7682,16 @@ static void digs_release_charged_weapon(vox_digs_match *match,
             match->weapon_cooldown[player] == 0U) {
             result = digs_fire_bolt_action(match, player, target_x, target_y);
         }
+    } else if (weapon == VOX_DIGS_TOOL_SMOKER) {
+        vox_u16 scale_q8 = (vox_u16)(128U +
+            ((vox_u32)charge * 256U) / DIGS_SMOKER_CHARGE_TICKS);
+        if (scale_q8 > 384U) {
+            scale_q8 = 384U;
+        }
+        if (match->weapon_cooldown[player] == 0U) {
+            result = digs_spawn_projectile(match, player, weapon, target_x,
+                                           target_y, scale_q8);
+        }
     } else if (weapon == VOX_DIGS_TOOL_FIRECRACKER) {
         vox_u16 scale_q8 = (vox_u16)(128U +
             ((vox_u32)charge * 256U) / DIGS_FIRECRACKER_CHARGE_TICKS);
@@ -3593,7 +7723,8 @@ static void digs_step_weapon_input(vox_digs_match *match, vox_u16 player)
 {
     vox_u16 actions = match->player_actions[player];
     vox_u16 weapon = match->selected_weapon[player];
-    if (!match->alive[player] || weapon >= VOX_DIGS_TOOL_COUNT) {
+    if (!match->alive[player] || digs_player_extracted(match, player) ||
+        weapon >= VOX_DIGS_TOOL_COUNT) {
         return;
     }
     if (weapon == VOX_DIGS_TOOL_RAIL_GUN) {
@@ -3631,7 +7762,8 @@ static void digs_step_weapon_input(vox_digs_match *match, vox_u16 player)
     }
     if (weapon == VOX_DIGS_TOOL_PULASKI ||
         weapon == VOX_DIGS_TOOL_BOLT_ACTION ||
-        weapon == VOX_DIGS_TOOL_FIRECRACKER) {
+        weapon == VOX_DIGS_TOOL_FIRECRACKER ||
+        weapon == VOX_DIGS_TOOL_SMOKER) {
         if ((actions & VOX_DIGS_ACTION_FIRE) != 0U) {
             if (!match->weapon_charging[player]) {
                 match->weapon_charging[player] = 1U;
@@ -3668,14 +7800,59 @@ static void digs_step_weapon_input(vox_digs_match *match, vox_u16 player)
 static int digs_ai_is_enemy(const vox_digs_match *match, vox_u16 player,
                             vox_u16 candidate)
 {
-    if (candidate == player || !match->alive[candidate]) {
-        return 0;
-    }
-    if (match->rules.team_mode == VOX_DIGS_MODE_MINERS_VS_MACHINES &&
-        digs_same_team(match, player, candidate)) {
+    if (candidate == player || !match->alive[candidate] ||
+        digs_player_extracted(match, candidate)) {
         return 0;
     }
     return 1;
+}
+
+
+/*
+ * How appealing a target is, as a multiplier on the distance to them.
+ *
+ * Below 100 they feel closer than they are and get picked over someone
+ * nearer; above 100 they feel further away.  This is the whole mechanism
+ * behind "a bunch of aggressive back and forths will create a hostile
+ * environment": who a miner shoots at stops being a question of geometry as
+ * soon as there is any history.
+ *
+ * Scaled by grudge, so RIVET -- who remembers -- swings much further on the
+ * same history than CINDER, who does not.
+ */
+static vox_u32 digs_ai_contract_pull(const vox_digs_match *match,
+                                     vox_u16 player, vox_u16 other,
+                                     vox_u16 grudge)
+{
+    static const vox_i32 pull[VOX_DIGS_TONE_COUNT] = {
+        -60,    /* FEUD     -- hunt them past anyone closer */
+        -30,    /* HOSTILE  */
+        -10,    /* NEEDLING */
+        0,      /* NEUTRAL  */
+        20,     /* WARY     */
+        60,     /* THAWING  */
+        150,    /* TRUCE    */
+        220     /* BONDED   */
+    };
+    const vox_digs_contract *contract = vox_digs_contract_get(match, player,
+                                                              other);
+    vox_i32 bias;
+    if (contract == 0 || contract->tone >= VOX_DIGS_TONE_COUNT) {
+        return 100U;
+    }
+    bias = (pull[contract->tone] * (vox_i32)grudge) / 255L;
+    return (vox_u32)(100L + bias);
+}
+
+/* Nobody shoots at somebody they have an arrangement with -- if there is
+ * anyone else to shoot at. */
+static int digs_ai_under_truce(const vox_digs_match *match, vox_u16 player,
+                               vox_u16 other)
+{
+    const vox_digs_contract *contract = vox_digs_contract_get(match, player,
+                                                              other);
+    return contract != 0 && (contract->tone == VOX_DIGS_TONE_TRUCE ||
+                             contract->tone == VOX_DIGS_TONE_BONDED);
 }
 
 static int digs_ai_line_of_sight(const vox_world *world,
@@ -3704,6 +7881,44 @@ static int digs_ai_line_of_sight(const vox_world *world,
         }
     }
     return 1;
+}
+
+/*
+ * Where the loudest recent explosion was, in cells, or -1 for silence.
+ * Unlike hearing a target this does not need line of sight or a live enemy --
+ * it is the sound of trouble, and it is what gives roaming a direction.
+ */
+static vox_i32 digs_ai_commotion_x(const vox_digs_match *match,
+                                   vox_u16 player, vox_i32 bot_x,
+                                   vox_i32 bot_y)
+{
+    vox_u16 slot;
+    vox_u32 newest_sequence = 0U;
+    vox_i32 found = -1L;
+    for (slot = 0U; slot < VOX_DIGS_MAX_EVENTS; ++slot) {
+        const vox_digs_event *event = &match->events[slot];
+        vox_i32 event_x;
+        vox_i32 event_y;
+        if (event->sequence == 0U || event->sequence <= newest_sequence ||
+            event->tick > match->tick ||
+            match->tick - event->tick > DIGS_AI_HEARING_TICKS) {
+            continue;
+        }
+        if (event->type != VOX_DIGS_EVENT_EXPLOSION) {
+            continue;
+        }
+        if (event->source == player) {
+            continue;
+        }
+        event_x = digs_q16_to_cell(event->position_x_q16);
+        event_y = digs_q16_to_cell(event->position_y_q16);
+        if (digs_abs_i32(event_x - bot_x) + digs_abs_i32(event_y - bot_y) <=
+            DIGS_AI_COMMOTION_CELLS) {
+            newest_sequence = event->sequence;
+            found = event_x;
+        }
+    }
+    return found;
 }
 
 static vox_u16 digs_ai_heard_target(const vox_digs_match *match,
@@ -3764,30 +7979,452 @@ static void digs_ai_set_mode(vox_digs_match *match, vox_u16 player,
                                                mode) & 15U));
 }
 
+/*
+ * Effective engagement band per tool, in cells.  These are the ranges each
+ * weapon is actually good at, read off its own properties: the hot rail
+ * traces 14 cells, the hammer reaches 10, the rail gun penetrates far enough
+ * to snipe, the lobbed explosives need room for their arc and their blast.
+ */
+typedef struct digs_weapon_band {
+    vox_u16 ideal_min;
+    vox_u16 ideal_max;
+} digs_weapon_band;
+
+static const digs_weapon_band digs_weapon_bands[VOX_DIGS_TOOL_COUNT] = {
+    {0U, 10U},    /* PULASKI      melee tap, or a thrown arc */
+    {4U, 40U},    /* POPPER       cheap hitscan chip damage */
+    {8U, 30U},    /* SMOKER       lobbed, wants room for the arc */
+    {0U, 14U},    /* HOT RAIL     DIGS_HOT_RAIL_RANGE_CELLS */
+    {2U, 18U},    /* HYDROSHOT    utility, no damage */
+    {0U, 10U},    /* GIANT HAMMER reach is DIGS_SCALE(5) */
+    {10U, 60U},   /* BOLT ACTION  charged precision shot */
+    {4U, 24U},    /* SCATTERBRAIN nine pellets, spreads with range */
+    {10U, 40U},   /* FIRECRACKER  blast radius 8, needs standoff */
+    /*
+     * The bore drill only damages while the wielder is falling onto its
+     * target, which the AI has no way to arrange, so it is weighted low
+     * everywhere and kept here as a digging tool rather than a duel option.
+     */
+    {0U, 8U},     /* BORING DRILL straight down, point blank */
+    {20U, 120U}   /* RAIL GUN     penetrating, the sniping tool */
+};
+
+/*
+ * How much each archetype likes each tool, 0 meaning "never by choice".
+ * This is the main thing that makes the three read as different opponents,
+ * so it is deliberately lopsided rather than balanced.
+ */
+static const vox_u8
+digs_archetype_weapon_weight[VOX_DIGS_ARCHETYPE_COUNT][VOX_DIGS_TOOL_COUNT] = {
+    /* RIVET -- the engineer: reach, penetration, and tunnels. */
+    { 40U,  90U,  30U, 170U,  20U,  35U, 200U,  60U,  45U,  60U, 255U},
+    /* CINDER -- the berserker: get close, hit hard. */
+    {200U,  70U,  25U,  60U,  15U, 255U, 110U, 230U,  55U,  40U,  50U},
+    /* FLAMEY -- the trickster: fire, smoke, and mischief. */
+    { 70U, 140U, 230U, 190U,  60U,  40U,  55U,  90U, 255U,  30U,  45U}
+};
+
+static const vox_digs_personality
+digs_archetype_personality[VOX_DIGS_ARCHETYPE_COUNT] = {
+    /*        aggr  patience  caution  grudge  social  reserved */
+    {  90U,     210U,    190U,   220U,     70U, 0U},  /* RIVET   */
+    { 245U,      40U,     45U,   120U,    200U, 0U},  /* CINDER  */
+    { 150U,     110U,    120U,    80U,    235U, 0U}   /* FLAMEY  */
+};
+
+static const char *digs_archetype_names[VOX_DIGS_ARCHETYPE_COUNT] = {
+    "RIVET", "CINDER", "FLAMEY"
+};
+
+const vox_digs_personality *vox_digs_personality_get(vox_u16 archetype)
+{
+    if (archetype >= VOX_DIGS_ARCHETYPE_COUNT) {
+        return 0;
+    }
+    return &digs_archetype_personality[archetype];
+}
+
+const char *vox_digs_archetype_name(vox_u16 archetype)
+{
+    if (archetype >= VOX_DIGS_ARCHETYPE_COUNT) {
+        return 0;
+    }
+    return digs_archetype_names[archetype];
+}
+
+/*
+ * A bot's identity is its ordinal among the bots, so the first bot in a match
+ * is always RIVET whichever slot it occupies.  bot_mask is already hashed, so
+ * this needs no extra authoritative state.
+ */
+vox_u16 vox_digs_bot_archetype(const vox_digs_match *match, vox_u16 player)
+{
+    vox_u16 below;
+    if (match == 0 || !vox_digs_player_is_bot(match, player)) {
+        return VOX_DIGS_ARCHETYPE_COUNT;
+    }
+    below = (vox_u16)(match->rules.bot_mask &
+                      (vox_u16)((1U << player) - 1U));
+    return (vox_u16)(digs_count_bits(below) % VOX_DIGS_ARCHETYPE_COUNT);
+}
+
+/*
+ * How much trouble is this miner standing in, and which way is out?
+ *
+ * Bots read no hazards at all before this: vox_digs_bot_think never looked at
+ * lava_surface_y, never sampled a material, and never checked how far it was
+ * to the floor.  They walked into lava and died there, and those deaths were
+ * the largest single cause of bots appearing to kill themselves -- every one
+ * of the twenty-three unattributed deaths in a four-match sample carried the
+ * lava damage tag, with no crush events at all.
+ *
+ * Returns 0 clear, 1 wary, 2 get out now, and writes a horizontal escape
+ * direction.  Caution scales how early a miner starts worrying, so RIVET backs
+ * off long before CINDER does.  Everything read here is either a scalar on the
+ * match or a bounded cell probe, so the cost does not scale with the world.
+ */
+/*
+ * How much appetite each archetype has for digging its way through rather
+ * than going around.  RIVET tunnels by nature, CINDER smashes whatever is
+ * directly in his way, FLAMEY would rather go around and leave something
+ * unpleasant behind.
+ */
+static const vox_u16
+digs_archetype_dig_appetite[VOX_DIGS_ARCHETYPE_COUNT] = {230U, 150U, 90U};
+
+/* Ticks pinned against terrain before this miner reaches for a tool. */
+static vox_u16 digs_ai_stuck_threshold(vox_u16 archetype)
+{
+    vox_u32 appetite = archetype < VOX_DIGS_ARCHETYPE_COUNT ?
+                       digs_archetype_dig_appetite[archetype] : 128U;
+    return (vox_u16)(DIGS_AI_STUCK_MIN_TICKS +
+                     ((255U - appetite) * DIGS_AI_STUCK_SPAN_TICKS) / 255U);
+}
+
+/*
+ * Can this tool open a horizontal hole without hurting the miner holding it?
+ *
+ * Breaching fires at rock two or three cells away, so blast radius matters
+ * more than damage.  The FIRECRACKER (radius 8, thrown on a fifty-tick fuse)
+ * and the GIANT HAMMER (radius 7 on a melee swing) both engulf the digger,
+ * and including them cost measurable self-inflicted damage in the soak.
+ * The RAILSHOT is excluded for the opposite reason -- it is too good at
+ * digging.  Soil costs it DIGS_RAIL_SOFT_COST (5) of a 180-energy shot, so
+ * one trigger pull bores some thirty-six cells: far past what cohesion holds
+ * up, and the miner walks into the tunnel it just undermined.  What is left
+ * cuts terrain at arm's length: the HOT RAIL that exists to tunnel, plus the
+ * POPPER and the PULASKI at radius 2.
+ *
+ * The bore drill is excluded despite being the obvious digging tool:
+ * digs_fire_bore_drill only ever cuts straight down, so a bot facing a wall
+ * would fire it into the floor forever.
+ *
+ * Every archetype keeps at least one of these -- RIVET the rails, CINDER the
+ * pulaski, FLAMEY the hot rail -- so nobody is left unable to dig.
+ */
+static int digs_ai_tool_breaches(vox_u16 weapon)
+{
+    return weapon == VOX_DIGS_TOOL_HOT_RAIL ||
+           weapon == VOX_DIGS_TOOL_POPPER ||
+           weapon == VOX_DIGS_TOOL_PULASKI;
+}
+
+/*
+ * Best breaching tool this arsenal allows, weighted by archetype taste so the
+ * three dig with the tools that suit them.  VOX_DIGS_TOOL_COUNT if none.
+ */
+static vox_u16 digs_ai_breach_tool(const vox_digs_match *match,
+                                   vox_u16 archetype)
+{
+    vox_u16 best = VOX_DIGS_TOOL_COUNT;
+    vox_u16 best_weight = 0U;
+    vox_u16 choice;
+    if (archetype >= VOX_DIGS_ARCHETYPE_COUNT) {
+        archetype = VOX_DIGS_ARCHETYPE_ENGINEER;
+    }
+    for (choice = 0U; choice < VOX_DIGS_TOOL_COUNT; ++choice) {
+        vox_u16 weight;
+        if ((match->rules.weapon_mask & (vox_u16)(1U << choice)) == 0U ||
+            !digs_ai_tool_breaches(choice)) {
+            continue;
+        }
+        weight = digs_archetype_weapon_weight[archetype][choice];
+        if (best == VOX_DIGS_TOOL_COUNT || weight > best_weight) {
+            best = choice;
+            best_weight = weight;
+        }
+    }
+    return best;
+}
+
+/*
+ * Should a bot hold FIRE this tick for the weapon it has selected?
+ *
+ * Charge weapons fire on *release*, so a miner that holds the trigger down
+ * forever -- which is exactly what boring through rock wants to do -- charges
+ * to maximum and never actually shoots.  Dropping FIRE for the one tick after
+ * the charge tops out is what pulls the trigger.
+ */
+static int digs_ai_hold_fire(const vox_digs_match *match, vox_u16 player)
+{
+    vox_u16 weapon = match->selected_weapon[player];
+    if (weapon >= VOX_DIGS_TOOL_COUNT) {
+        return 0;
+    }
+    if (weapon == VOX_DIGS_TOOL_RAIL_GUN) {
+        return !match->rail_charging[player] ||
+               match->rail_charge_ticks[player] < DIGS_RAIL_MAX_CHARGE_TICKS;
+    }
+    if (weapon == VOX_DIGS_TOOL_PULASKI ||
+        weapon == VOX_DIGS_TOOL_BOLT_ACTION ||
+        weapon == VOX_DIGS_TOOL_FIRECRACKER ||
+        weapon == VOX_DIGS_TOOL_SMOKER) {
+        return !match->weapon_charging[player] ||
+               match->weapon_charge_ticks[player] <
+               digs_weapons[weapon].charge_ticks;
+    }
+    return 1;   /* uncharged tools fire on the press */
+}
+
+/*
+ * Find the wall ahead at body height: the distance in cells to the first solid
+ * column within reach, with *thickness set to how many solid columns follow
+ * it.  Returns 0 when nothing solid is in reach, meaning there is no wall to
+ * breach and the miner should simply keep walking.
+ *
+ * Reporting the face separately from the thickness is what lets the shot be
+ * aimed past the far side.  Measuring thickness alone found "open one cell
+ * ahead" and aimed there, so a miner standing in the mouth of its own hole
+ * fired into the air it had already cleared.
+ *
+ * Bounded by DIGS_AI_BREACH_MAX_CELLS columns times DIGS_AI_BREACH_PROBE_ROWS
+ * rows, so the cost is a named constant and not a function of world size.
+ */
+static vox_u16 digs_ai_wall_ahead(const vox_digs_match *match,
+                                  vox_i32 bot_x, vox_i32 bot_y,
+                                  vox_i16 direction, vox_u16 *thickness)
+{
+    vox_i32 step = direction > 0 ? 1L : -1L;
+    vox_u16 depth;
+    vox_u16 face = 0U;
+    *thickness = (vox_u16)(DIGS_AI_BREACH_MAX_CELLS + 1U);
+    for (depth = 1U; depth <= DIGS_AI_BREACH_MAX_CELLS; ++depth) {
+        vox_i32 sample_x = bot_x + (vox_i32)depth * step;
+        vox_u16 row;
+        int blocked = 0;
+        if (sample_x < 0L || sample_x >= (vox_i32)VOX_WORLD_WIDTH) {
+            return 0U;
+        }
+        for (row = 0U; row < DIGS_AI_BREACH_PROBE_ROWS; ++row) {
+            vox_i32 sample_y = bot_y - (vox_i32)row;
+            if (sample_y < 0L || sample_y >= (vox_i32)VOX_WORLD_HEIGHT) {
+                continue;
+            }
+            if (digs_cell_is_solid(&match->world, (vox_u32)sample_x,
+                                   (vox_u32)sample_y)) {
+                blocked = 1;
+            }
+        }
+        if (blocked) {
+            if (face == 0U) {
+                face = depth;
+            }
+        } else if (face != 0U) {
+            *thickness = (vox_u16)(depth - face);
+            return face;
+        }
+    }
+    return face;    /* solid to the probe limit: thickness stays over budget */
+}
+
+/*
+ * Health at or below which this miner disengages.  Aggression scales it, so
+ * the same code makes CINDER reckless and RIVET careful.
+ */
+static vox_u16 digs_ai_retreat_threshold(const vox_digs_personality *personality)
+{
+    vox_u32 aggression = personality != 0 ? personality->aggression : 128U;
+    return (vox_u16)(DIGS_AI_RETREAT_HEALTH_MIN +
+                     ((255U - aggression) * DIGS_AI_RETREAT_HEALTH_SPAN) /
+                     255U);
+}
+
+static vox_u16 digs_ai_min_dwell(vox_u16 mode)
+{
+    if (mode == VOX_DIGS_AI_RETREATING) return DIGS_AI_DWELL_RETREATING;
+    if (mode == VOX_DIGS_AI_ATTACKING) return DIGS_AI_DWELL_ATTACKING;
+    if (mode == VOX_DIGS_AI_SEARCHING) return DIGS_AI_DWELL_SEARCHING;
+    return DIGS_AI_DWELL_ROAMING;
+}
+
+/*
+ * How alert a mode is.  Becoming MORE alert is always urgent -- a miner that
+ * hears gunfire or sees an enemy must react on the spot -- so only becoming
+ * LESS alert waits on a dwell timer.  That is the direction where flicker
+ * looks wrong: losing sight for a moment should not reset the hunt, and
+ * giving up should look like a decision rather than a twitch.
+ */
+static vox_u16 digs_ai_alertness(vox_u16 mode)
+{
+    if (mode == VOX_DIGS_AI_ATTACKING) {
+        return 3U;
+    }
+    if (mode == VOX_DIGS_AI_RETREATING) {
+        return 2U;
+    }
+    if (mode == VOX_DIGS_AI_SEARCHING) {
+        return 1U;
+    }
+    return 0U;
+}
+
+static int digs_ai_mode_change_allowed(const vox_digs_ai_state *state,
+                                       vox_u16 want)
+{
+    /* Withdrawing is a survival response and never waits. */
+    if (want == VOX_DIGS_AI_RETREATING) {
+        return 1;
+    }
+    if (digs_ai_alertness(want) > digs_ai_alertness(state->mode)) {
+        return 1;
+    }
+    return state->state_ticks >= digs_ai_min_dwell(state->mode);
+}
+
+/*
+ * Ticks a bot waits before deliberating again.  Returns the value to STORE in
+ * decision_ticks, which is one less than the true period -- see the constants.
+ */
+static vox_u16 digs_ai_decision_delay(const vox_digs_personality *personality)
+{
+    vox_u32 period = DIGS_AI_PERIOD_MIN_TICKS;
+    if (personality != 0) {
+        period += ((vox_u32)personality->patience *
+                   DIGS_AI_PERIOD_SPAN_TICKS) / 255U;
+    }
+    if (period < 1U) {
+        period = 1U;
+    }
+    return (vox_u16)(period - 1U);
+}
+
+static vox_u16 digs_ai_hazard(const vox_digs_match *match, vox_u16 player,
+                              vox_u16 caution, vox_i16 *escape_x)
+{
+    vox_i32 bot_x = digs_q16_to_cell(match->players[player].position_x.value_q16);
+    vox_i32 bot_y = digs_q16_to_cell(match->players[player].position_y.value_q16 +
+                                     match->players[player].half_height_q16);
+    vox_i32 margin = (vox_i32)DIGS_AI_HAZARD_BASE_MARGIN +
+                     (vox_i32)((vox_u32)caution * DIGS_AI_HAZARD_CAUTION_SPAN /
+                               255U);
+    vox_i32 probe;
+    vox_u16 level = 0U;
+    vox_i32 left_clear = 0;
+    vox_i32 right_clear = 0;
+    *escape_x = 0;
+    /* The rising basin is an exact line, so no sampling is needed for it. */
+    if (bot_y + margin >= (vox_i32)match->lava_surface_y) {
+        level = bot_y + (margin / 2L) >= (vox_i32)match->lava_surface_y ? 2U : 1U;
+    }
+    /* Pooled or tool-made lava has to be looked for. */
+    for (probe = -margin; probe <= margin; ++probe) {
+        vox_i32 sample_x = bot_x + probe;
+        vox_i32 sample_y;
+        if (sample_x < 0L || sample_x >= (vox_i32)VOX_WORLD_WIDTH) {
+            continue;
+        }
+        for (sample_y = bot_y; sample_y <= bot_y + 2L; ++sample_y) {
+            const vox_cell *cell;
+            if (sample_y < 0L || sample_y >= (vox_i32)VOX_WORLD_HEIGHT) {
+                continue;
+            }
+            cell = vox_world_cell(&match->world, (vox_u32)sample_x,
+                                  (vox_u32)sample_y, VOX_WORLD_DEPTH - 1U);
+            if (cell == 0 || cell->material != VOX_MAT_LAVA) {
+                continue;
+            }
+            if (probe == 0L) {
+                level = 2U;
+            } else if (level < 1U) {
+                level = 1U;
+            }
+            if (probe < 0L) {
+                left_clear = 1;
+            } else if (probe > 0L) {
+                right_clear = 1;
+            }
+        }
+    }
+    if (level != 0U) {
+        /* Run from the side that has lava; ties break away from the basin. */
+        if (left_clear && !right_clear) {
+            *escape_x = 1;
+        } else if (right_clear && !left_clear) {
+            *escape_x = -1;
+        } else {
+            *escape_x = bot_x < (vox_i32)(VOX_WORLD_WIDTH / 2U) ? 1 : -1;
+        }
+    }
+    return level;
+}
+
+/*
+ * Score every tool the arsenal allows and take the best.
+ *
+ * This replaced flat distance bands that handed every bot the same weapon at
+ * the same range.  Score is the archetype's taste for the tool scaled by how
+ * well its band covers the current distance, so preference decides between
+ * comparable options while range still rules out the absurd ones.  A small
+ * deterministic jitter keeps two bots of the same archetype from moving in
+ * lockstep.
+ */
 static vox_u16 digs_ai_weapon(const vox_digs_match *match, vox_u16 player,
                               vox_u32 distance)
 {
-    vox_u16 preferred;
-    vox_u16 attempt;
-    if (distance <= DIGS_SCALE(3U)) {
-        preferred = (digs_noise(match->rules.seed, match->tick, player,
-                                11U) & 1U) ?
-                    VOX_DIGS_TOOL_SLEDGE : VOX_DIGS_TOOL_PICK;
-    } else if (distance <= DIGS_SCALE(14U)) {
-        preferred = VOX_DIGS_TOOL_NAIL_GUN;
-    } else if (distance <= DIGS_SCALE(26U)) {
-        preferred = VOX_DIGS_TOOL_BOILER_SHOTGUN;
-    } else {
-        preferred = VOX_DIGS_TOOL_RAIL_GUN;
+    vox_u16 archetype = vox_digs_bot_archetype(match, player);
+    vox_u16 best = VOX_DIGS_TOOL_COUNT;
+    vox_u32 best_score = 0U;
+    vox_u16 choice;
+    if (archetype >= VOX_DIGS_ARCHETYPE_COUNT) {
+        archetype = VOX_DIGS_ARCHETYPE_ENGINEER;
     }
-    for (attempt = 0U; attempt < VOX_DIGS_TOOL_COUNT; ++attempt) {
-        vox_u16 choice = (vox_u16)((preferred + attempt) %
-                                    VOX_DIGS_TOOL_COUNT);
-        if (match->rules.weapon_mask & (vox_u16)(1U << choice)) {
-            return choice;
+    for (choice = 0U; choice < VOX_DIGS_TOOL_COUNT; ++choice) {
+        const digs_weapon_band *band = &digs_weapon_bands[choice];
+        vox_u32 fit;
+        vox_u32 score;
+        if ((match->rules.weapon_mask & (vox_u16)(1U << choice)) == 0U) {
+            continue;
+        }
+        if (distance < band->ideal_min) {
+            vox_u32 under = band->ideal_min - distance;
+            fit = under >= 16U ? 1U : (16U - under) * 16U;
+        } else if (distance > band->ideal_max) {
+            vox_u32 over = distance - band->ideal_max;
+            fit = over >= 16U ? 1U : (16U - over) * 16U;
+        } else {
+            fit = 256U;
+        }
+        score = (vox_u32)digs_archetype_weapon_weight[archetype][choice] * fit;
+        /* Break ties without ever overturning a real preference. */
+        score += digs_noise(match->rules.seed, match->tick, player,
+                            (vox_u32)choice) % 97U;
+        if (best == VOX_DIGS_TOOL_COUNT || score > best_score) {
+            best = choice;
+            best_score = score;
         }
     }
-    return VOX_DIGS_TOOL_PICK;
+    if (best == VOX_DIGS_TOOL_COUNT) {
+        /* weapon_mask is validated non-zero, so this cannot normally
+         * happen; fall back to the lowest legal tool rather than to a
+         * hardcoded one the arsenal might not contain. */
+        for (choice = 0U; choice < VOX_DIGS_TOOL_COUNT; ++choice) {
+            if (match->rules.weapon_mask & (vox_u16)(1U << choice)) {
+                return choice;
+            }
+        }
+        return VOX_DIGS_TOOL_PICK;
+    }
+    return best;
 }
 
 vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
@@ -3795,6 +8432,7 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     vox_digs_ai_state *state;
     vox_u16 target = VOX_DIGS_NO_PLAYER;
     vox_u16 candidate;
+    vox_u16 pass;
     vox_u32 nearest = 0xffffffffU;
     vox_i32 bot_x;
     vox_i32 bot_y;
@@ -3803,43 +8441,212 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     vox_u16 actions = 0U;
     vox_i16 move_x = 0;
     vox_u16 visible = 0U;
+    vox_u16 hazard;
+    vox_i16 escape_x = 0;
+    vox_u16 archetype;
+    int breaching = 0;
+    const vox_digs_personality *personality;
     if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
         !vox_digs_player_is_bot(match, player) || !match->alive[player]) {
         return VOX_ERR_INVALID;
     }
     state = &match->bots[player];
+    if (digs_player_extracted(match, player)) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_EXTRACTION;
+        state->extraction_ticks++;
+        match->player_actions[player] = 0U;
+        match->move_x_q15[player] = 0;
+        match->move_y_q15[player] = 0;
+        return VOX_OK;
+    }
+    if (match->dropship.phase == VOX_DIGS_DROPSHIP_PHASE_LAUNCH &&
+        (match->dropship.launched_mask & (vox_u16)(1U << player)) == 0U &&
+        ((match->tick + (vox_u32)player * 31U) %
+         (90U + (vox_u32)vox_digs_bot_archetype(match, player) * 30U)) == 0U) {
+        (void)vox_digs_dropship_launch(match, player);
+    }
     state->state_ticks++;
     if (state->memory_ticks > 0U) {
         state->memory_ticks--;
+    }
+    if (state->retreat_lock_ticks > 0U) {
+        state->retreat_lock_ticks--;
+    }
+    /*
+     * Being pinned is measured per tick, not per deliberation.  Counting it
+     * on the decision cadence meant RIVET needed fifteen deliberations --
+     * nearly two hundred ticks -- to notice a wall, and any single airborne
+     * tick in between reset the count, so in practice it never noticed at all.
+     */
+    if (state->breach_lock_ticks > 0U) {
+        state->breach_lock_ticks--;
+    }
+    if ((match->players[player].flags & VOX_PHYSICS_BODY_BLOCKED_X) != 0U) {
+        if (state->stuck_ticks < 65535U) {
+            state->stuck_ticks++;
+        }
+    } else if (state->stuck_ticks > 0U) {
+        state->stuck_ticks--;
+    }
+    /*
+     * The urge to say something unprompted: a clock that always runs down,
+     * and a dice roll when it lands.
+     *
+     * This replaced a metronome -- a fixed window every 240 ticks per bot --
+     * which is why the mine used to sound like a scheduled broadcast.  The
+     * interval is long and jittered and the roll is scaled by sociability,
+     * so nothing about it is regular and one of them is plainly chattier
+     * than the others.  It lives in the reflex because the deliberation
+     * throttle returns early, and a clock that only ticks when a bot happens
+     * to be thinking is not a clock.
+     */
+    if (match->speech_urge_ticks[player] > 0U) {
+        match->speech_urge_ticks[player]--;
+    } else {
+        vox_u32 spin = digs_noise(match->rules.seed, match->tick, player,
+                                  0xC1A7U);
+        if (digs_speech_roll(match, player,
+                             digs_speech_chattiness(match, player),
+                             0xBA4BU)) {
+            vox_u16 remark = (vox_u16)VOX_DIGS_STIMULUS_IDLE;
+            vox_u16 about = VOX_DIGS_NO_PLAYER;
+            vox_i32 feet = digs_q16_to_cell(
+                match->players[player].position_y.value_q16);
+            if (match->buried_ticks[player] > 0U) {
+                remark = (vox_u16)VOX_DIGS_STIMULUS_BURIED;
+            } else if (feet + 8L >= (vox_i32)match->lava_surface_y) {
+                remark = (vox_u16)VOX_DIGS_STIMULUS_LAVA_CLOSE;
+            } else if (state->target != VOX_DIGS_NO_PLAYER &&
+                       state->memory_ticks > 0U) {
+                remark = (vox_u16)VOX_DIGS_STIMULUS_SPOTTED;
+                about = state->target;
+            }
+            digs_speech_set(match, player, about, remark);
+        }
+        match->speech_urge_ticks[player] =
+            (vox_u16)(DIGS_SPEECH_URGE_MIN +
+                      (spin % DIGS_SPEECH_URGE_SPAN));
+    }
+    archetype = vox_digs_bot_archetype(match, player);
+    /*
+     * Drifted traits, not the archetype table.  A bot twenty matches in
+     * should not still be running its factory settings -- that is what makes
+     * "no longer the same bot the player met at the beginning" true rather
+     * than merely claimed.
+     */
+    personality = digs_player_traits(match, player);
+    if (personality == 0) {
+        personality = vox_digs_personality_get(VOX_DIGS_ARCHETYPE_ENGINEER);
+    }
+    /*
+     * Reflex pass -- runs every tick, ahead of the decision throttle.
+     *
+     * Hazard used to be read inside the throttled path, so a patient miner
+     * only noticed lava when it next deliberated.  Once cadence became
+     * personality-driven that got measurably worse: RIVET deliberates every
+     * thirteen ticks, and lava deals twelve damage per tick, so he could take
+     * more than a full health bar of damage before looking down.  Making the
+     * cadence expressive therefore required making survival exempt from it.
+     *
+     * The probe is small -- about 2 * margin + 1 columns at one depth -- so
+     * paying it every tick for three bots is far cheaper than the deliberation
+     * it guards.
+     */
+    hazard = digs_ai_hazard(match, player, personality->caution, &escape_x);
+    /* Survival states are refreshed before the decision throttle.  The rest
+     * of the tunnel state is selected below, after this tick has actually
+     * found (or failed to find) a target; using last tick's target here made
+     * FLAMEY's visible/ambush branch permanently read as a blind trap. */
+    if ((match->dropship.extracted_mask & (vox_u16)(1U << player)) != 0U) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_EXTRACTION;
+    } else if (match->buried_ticks[player] > 0U) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_RECOVERY;
+    } else if (hazard >= DIGS_AI_HAZARD_CRITICAL) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_DROWNING;
+    } else if (hazard != 0U && escape_x != 0) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_ESCAPE;
+    }
+    state->tunnel_safety_q8 = hazard >= 2U ? 0U :
+                              (hazard == 1U ? 128U : 255U);
+    state->collapse_risk_q8 = state->breach_ticks > 0U ?
+                              (vox_u16)((state->breach_ticks > 255U) ?
+                                        255U : state->breach_ticks) : 0U;
+    if (hazard >= DIGS_AI_HAZARD_CRITICAL && escape_x != 0) {
+        vox_u16 reflex = (vox_u16)(escape_x > 0 ? VOX_DIGS_ACTION_RIGHT :
+                                                  VOX_DIGS_ACTION_LEFT);
+        reflex = (vox_u16)(reflex | VOX_DIGS_ACTION_JUMP);
+        if (match->steam_q16[player] > DIGS_AI_HAZARD_STEAM_RESERVE) {
+            reflex = (vox_u16)(reflex | VOX_DIGS_ACTION_STEAM);
+        }
+        match->player_actions[player] = reflex;
+        match->move_x_q15[player] = escape_x > 0 ? 32767 : -32767;
+        match->move_y_q15[player] = 0;
+        /*
+         * Still age the throttle, so escaping does not also buy a free
+         * deliberation the moment the miner is clear.
+         */
+        if (state->decision_ticks > 0U) {
+            state->decision_ticks--;
+        }
+        return VOX_OK;
     }
     if (state->decision_ticks > 0U) {
         state->decision_ticks--;
         return VOX_OK;
     }
-    state->decision_ticks = DIGS_AI_DECISION_TICKS;
+    state->decision_ticks = digs_ai_decision_delay(personality);
+    hazard = digs_ai_hazard(match, player, personality->caution, &escape_x);
     bot_x = digs_q16_to_cell(match->players[player].position_x.value_q16);
     bot_y = digs_q16_to_cell(match->players[player].position_y.value_q16);
-    for (candidate = 0U; candidate < match->rules.player_count; ++candidate) {
-        vox_i32 other_x;
-        vox_i32 other_y;
-        vox_u32 distance;
-        if (!digs_ai_is_enemy(match, player, candidate)) {
-            continue;
-        }
-        other_x = digs_q16_to_cell(
-            match->players[candidate].position_x.value_q16);
-        other_y = digs_q16_to_cell(
-            match->players[candidate].position_y.value_q16);
-        distance = digs_abs_i32(other_x - bot_x) +
-                   digs_abs_i32(other_y - bot_y);
-        if (distance < nearest && distance <= 84U &&
-            digs_ai_line_of_sight(&match->world, bot_x, bot_y,
-                                  other_x, other_y)) {
-            nearest = distance;
-            target = candidate;
+    /*
+     * Two passes, because a truce has to be able to lose.  The first ignores
+     * anyone this miner has an arrangement with; only if that finds nobody
+     * does the second consider them, so a truce holds right up until the
+     * moment it is the only thing left in the mine.
+     */
+    for (pass = 0U; pass < 2U && target == VOX_DIGS_NO_PLAYER; ++pass) {
+        nearest = 0xFFFFFFFFUL;
+        for (candidate = 0U; candidate < match->rules.player_count;
+             ++candidate) {
+            vox_i32 other_x;
+            vox_i32 other_y;
+            vox_u32 distance;
+            vox_u32 weighted;
+            if (!digs_ai_is_enemy(match, player, candidate)) {
+                continue;
+            }
+            if (pass == 0U &&
+                digs_ai_under_truce(match, player, candidate)) {
+                continue;
+            }
+            other_x = digs_q16_to_cell(
+                match->players[candidate].position_x.value_q16);
+            other_y = digs_q16_to_cell(
+                match->players[candidate].position_y.value_q16);
+            distance = digs_abs_i32(other_x - bot_x) +
+                       digs_abs_i32(other_y - bot_y);
+            if (distance > 84U ||
+                !digs_ai_line_of_sight(&match->world, bot_x, bot_y,
+                                       other_x, other_y)) {
+                continue;
+            }
+            /* History decides who, sight and range decide whether. */
+            weighted = (distance *
+                        digs_ai_contract_pull(match, player, candidate,
+                                              personality->grudge)) / 100U;
+            if (weighted < nearest) {
+                nearest = weighted;
+                target = candidate;
+            }
         }
     }
     if (target != VOX_DIGS_NO_PLAYER) {
+        const vox_digs_contract *seen = vox_digs_contract_get(match, player,
+                                                              target);
+        if (seen != 0 && !seen->met) {
+            digs_contract_note(match, player, target,
+                               (vox_u16)VOX_DIGS_STIMULUS_FIRST_MEETING);
+        }
         visible = 1U;
         state->target = target;
         state->memory_ticks = DIGS_AI_MEMORY_TICKS;
@@ -3861,27 +8668,77 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
             state->target = VOX_DIGS_NO_PLAYER;
         }
     }
-    if (match->health[player] <= DIGS_AI_RETREAT_HEALTH &&
-        target != VOX_DIGS_NO_PLAYER) {
-        digs_ai_set_mode(match, player, VOX_DIGS_AI_RETREATING);
-    } else if (visible) {
-        digs_ai_set_mode(match, player, VOX_DIGS_AI_ATTACKING);
-    } else if (target != VOX_DIGS_NO_PLAYER) {
-        digs_ai_set_mode(match, player, VOX_DIGS_AI_SEARCHING);
-    } else {
-        digs_ai_set_mode(match, player, VOX_DIGS_AI_ROAMING);
+    {
+        vox_u16 want;
+        vox_u16 threshold = digs_ai_retreat_threshold(personality);
+        int may_retreat = state->retreat_lock_ticks == 0U &&
+                          target != VOX_DIGS_NO_PLAYER;
+        /* Once withdrawing, stay withdrawn until the retreat times out. */
+        int still_retreating = state->mode == VOX_DIGS_AI_RETREATING &&
+                               state->state_ticks < DIGS_AI_RETREAT_MAX_TICKS &&
+                               target != VOX_DIGS_NO_PLAYER;
+        if (still_retreating ||
+            (may_retreat && match->health[player] <= threshold)) {
+            want = VOX_DIGS_AI_RETREATING;
+        } else if (visible) {
+            want = VOX_DIGS_AI_ATTACKING;
+        } else if (target != VOX_DIGS_NO_PLAYER) {
+            want = VOX_DIGS_AI_SEARCHING;
+        } else {
+            want = VOX_DIGS_AI_ROAMING;
+        }
+        if (want != state->mode &&
+            digs_ai_mode_change_allowed(state, want)) {
+            if (state->mode == VOX_DIGS_AI_RETREATING) {
+                /* Earned a breather; now it has to commit to fighting. */
+                state->retreat_lock_ticks = DIGS_AI_RETREAT_LOCK_TICKS;
+            }
+            digs_ai_set_mode(match, player, want);
+        }
     }
     goal_x = digs_q16_to_cell(state->last_seen_x_q16);
     goal_y = digs_q16_to_cell(state->last_seen_y_q16);
     if (state->mode == VOX_DIGS_AI_ROAMING) {
-        if ((match->players[player].flags & VOX_PHYSICS_BODY_BLOCKED_X) ||
-            state->state_ticks > 240U) {
-            state->roam_direction = (vox_i16)-state->roam_direction;
-            state->state_ticks = 0U;
+        /*
+         * Roam toward somewhere, not merely away from a wall.
+         *
+         * This used to walk until BLOCKED_X and reverse, which trapped bots
+         * in whatever pocket of the map they spawned in: measured over 3600
+         * ticks they spent 70-79% of a match roaming and 1-2% attacking,
+         * because they simply never found each other. A destination is chosen
+         * from the loudest recent explosion when there is one -- trouble is
+         * worth walking toward -- and otherwise from a deterministic sweep
+         * across the arena so separate pockets still eventually meet.
+         */
+        vox_i32 commotion;
+        if (state->roam_goal_ticks > 0U) {
+            state->roam_goal_ticks--;
         }
-        move_x = state->roam_direction > 0 ? 24575 : -24575;
-        goal_x = bot_x + (state->roam_direction > 0 ? 16L : -16L);
+        commotion = digs_ai_commotion_x(match, player, bot_x, bot_y);
+        if (commotion >= 0L) {
+            state->roam_goal_x = (vox_u16)commotion;
+            state->roam_goal_ticks = DIGS_AI_ROAM_GOAL_TICKS;
+        } else if (state->roam_goal_ticks == 0U ||
+                   digs_abs_i32((vox_i32)state->roam_goal_x - bot_x) <=
+                       DIGS_AI_ROAM_ARRIVE_CELLS) {
+            /*
+             * No trouble to walk toward, so sweep. The salt keeps the three
+             * bots from picking the same spot, and the destination is a
+             * genuine map position rather than a few cells ahead of the nose.
+             */
+            vox_u32 pick = digs_noise(match->rules.seed, match->tick, player,
+                                      0x5EEDU) % (vox_u32)VOX_WORLD_WIDTH;
+            state->roam_goal_x = (vox_u16)pick;
+            state->roam_goal_ticks = DIGS_AI_ROAM_GOAL_TICKS;
+        }
+        goal_x = (vox_i32)state->roam_goal_x;
         goal_y = bot_y - 8L;
+        if (goal_x + (vox_i32)DIGS_AI_ROAM_ARRIVE_CELLS < bot_x) {
+            state->roam_direction = -1;
+        } else if (goal_x > bot_x + (vox_i32)DIGS_AI_ROAM_ARRIVE_CELLS) {
+            state->roam_direction = 1;
+        }
+        move_x = state->roam_direction > 0 ? 32767 : -32767;
     } else if (state->mode == VOX_DIGS_AI_RETREATING) {
         move_x = goal_x < bot_x ? 32767 : -32767;
     } else if (goal_x + 2L < bot_x) {
@@ -3891,6 +8748,132 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     }
     if (state->mode == VOX_DIGS_AI_ATTACKING && nearest < 10U) {
         move_x = goal_x < bot_x ? 24575 : -24575;
+    }
+    /*
+     * Dig through what cannot be walked around.
+     *
+     * Roaming now aims at a real destination, which exposed the next problem:
+     * a bot that wants to be somewhere on the far side of a ridge walks into
+     * it and stays there. Being pinned against terrain that stands between
+     * the miner and its goal accrues stuck_ticks; past an archetype-scaled
+     * threshold it stops walking, points a tool at the obstruction, and bores.
+     *
+     * The bore is refused if the wall is thicker than the structural rule
+     * will hold open, because that tunnel collapses on the miner digging it.
+     * In that case the miner keeps walking and the wall stays a wall -- going
+     * around is still the fallback, and stuck_ticks is capped so it does not
+     * spend the match trying.
+     */
+    {
+        /*
+         * Breaching is a commitment, not a per-deliberation vote.
+         *
+         * The first cut of this reached for a tool only while the probe
+         * agreed, and re-ran the probe every deliberation.  A miner jitters
+         * by a cell as it settles, which moves the three probed rows, which
+         * flipped the reading between "one cell of rock" and "solid past the
+         * probe limit" -- and the too-thick branch zeroed stuck_ticks, so it
+         * forgot it was stuck and started over.  The rail needs seventy-two
+         * ticks of held FIRE to charge and never got past a handful.
+         *
+         * So the probe decides only whether to *start*.  After that the miner
+         * keeps cutting until it is through, or until DIGS_AI_BREACH_GIVEUP
+         * ticks say this rock has won and walking is the better idea.
+         */
+        vox_u16 tool = digs_ai_breach_tool(match, archetype);
+        int committed = state->breach_ticks > 0U;
+        int may_start = state->breach_lock_ticks == 0U &&
+                        state->stuck_ticks >=
+                        digs_ai_stuck_threshold(archetype);
+        if (state->breach_ticks >= DIGS_AI_BREACH_GIVEUP_TICKS) {
+            state->breach_ticks = 0U;
+            state->stuck_ticks = 0U;
+            state->breach_lock_ticks = DIGS_AI_BREACH_LOCK_TICKS;
+        } else if ((committed || may_start) && tool < VOX_DIGS_TOOL_COUNT &&
+                   hazard == 0U &&
+                   digs_abs_i32(goal_x - bot_x) >
+                   (vox_i32)DIGS_AI_ROAM_ARRIVE_CELLS) {
+            vox_i16 heading = goal_x < bot_x ? (vox_i16)-1 : (vox_i16)1;
+            vox_u16 thickness = 0U;
+            vox_u16 face = digs_ai_wall_ahead(match, bot_x, bot_y, heading,
+                                              &thickness);
+            if (face == 0U) {
+                /* Nothing solid ahead: through it, or never walled in. */
+                if (committed) {
+                    state->breach_lock_ticks = DIGS_AI_BREACH_LOCK_TICKS;
+                }
+                state->breach_ticks = 0U;
+                state->stuck_ticks = 0U;
+            } else if (!committed && thickness > DIGS_AI_BREACH_MAX_CELLS) {
+                /*
+                 * Too thick to start on.  Bore it and the tunnel caves in on
+                 * the miner digging it, so walk instead and let the wall win.
+                 */
+                state->stuck_ticks = 0U;
+            } else {
+                /*
+                 * Aim one cell past the far side so the shot cuts the whole
+                 * wall rather than stopping inside it, and alternate between
+                 * the feet row and the one above so the hole ends up tall
+                 * enough to walk into.  Cutting only at bot_y left a
+                 * knee-high slot the miner could see through and not enter.
+                 */
+                vox_u16 span = thickness > DIGS_AI_BREACH_MAX_CELLS ?
+                               DIGS_AI_BREACH_MAX_CELLS : thickness;
+                vox_i32 reach = (vox_i32)face + (vox_i32)span;
+                vox_i32 aim_cell_x = bot_x + (vox_i32)heading * reach;
+                vox_i32 aim_cell_y = bot_y -
+                                     (vox_i32)((match->tick >> 4) & 1UL);
+                if (aim_cell_x < 0L) {
+                    aim_cell_x = 0L;
+                }
+                if (aim_cell_x >= (vox_i32)VOX_WORLD_WIDTH) {
+                    aim_cell_x = (vox_i32)VOX_WORLD_WIDTH - 1L;
+                }
+                if (aim_cell_y < 0L) {
+                    aim_cell_y = 0L;
+                }
+                match->selected_weapon[player] = tool;
+                match->aim_x[player] = (vox_u16)aim_cell_x;
+                match->aim_y[player] = (vox_u16)aim_cell_y;
+                if (digs_ai_hold_fire(match, player)) {
+                    actions = (vox_u16)(actions | VOX_DIGS_ACTION_FIRE);
+                }
+                /*
+                 * Stop shoving only once actually against the rock; while the
+                 * face is still cells away, walk into the hole just cut.
+                 */
+                if (face <= 1U) {
+                    move_x = 0;
+                }
+                breaching = 1;
+                if (state->breach_ticks < 65535U) {
+                    state->breach_ticks++;
+                }
+            }
+        } else if (committed) {
+            /* Lost the reason to dig -- a hazard, or the goal moved. */
+            state->breach_ticks = 0U;
+        }
+    }
+    /*
+     * Nothing is worth standing in lava for.  This overrides the combat and
+     * roaming goals entirely, because a bot that keeps walking at its target
+     * through a magma pool is the "killing themselves randomly" the lead
+     * reported -- and it should be personality, not pathfinding, that decides
+     * a miner dies.
+     */
+    if (hazard != 0U && escape_x != 0) {
+        move_x = escape_x > 0 ? 32767 : -32767;
+        goal_x = bot_x + (escape_x > 0 ? 12L : -12L);
+        if (hazard >= 2U) {
+            /* Climb out: jump, and burn steam if there is any left. */
+            actions = (vox_u16)(actions | VOX_DIGS_ACTION_JUMP);
+            if (match->steam_q16[player] > 4096U) {
+                actions = (vox_u16)(actions | VOX_DIGS_ACTION_STEAM);
+            }
+            goal_y = bot_y - 12L;
+        }
     }
     if ((match->players[player].flags & VOX_PHYSICS_BODY_BLOCKED_X) ||
         ((match->tick + (vox_u32)player * 31U) % 181U) == 0U) {
@@ -3920,32 +8903,78 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
         match->aim_x[player] = (vox_u16)goal_x;
         match->aim_y[player] = (vox_u16)goal_y;
     }
-    if (visible && match->rail_charging[player] &&
+    if (breaching) {
+        /* Aim, weapon and FIRE are already set by the bore. */
+    } else if (visible && match->rail_charging[player] &&
         match->selected_weapon[player] == VOX_DIGS_TOOL_RAIL_GUN) {
         if (match->rail_charge_ticks[player] < DIGS_RAIL_MAX_CHARGE_TICKS) {
             actions = (vox_u16)(actions | VOX_DIGS_ACTION_FIRE);
         }
+    } else if (match->weapon_charging[player] &&
+               match->weapon_charge_ticks[player] <
+                   digs_weapons[match->selected_weapon[player]].charge_ticks) {
+        /*
+         * See a charge through instead of dropping it at the next decision.
+         *
+         * A bot only holds fire for one eight-tick decision window, so it
+         * reached a charge of eight and released.  The Bolt Action needs
+         * thirty before digs_release_charged_weapon will fire it at all --
+         * and it is the weapon bots picked for mid range, so they simply
+         * never shot.  The Firecracker and Smoker did fire, but always at
+         * near-minimum power.  The rail gun escaped this only because it has
+         * its own re-hold immediately above; this generalises that to every
+         * charge weapon.
+         *
+         * Deliberately no weapon re-selection on this branch: switching
+         * mid-charge would move the target the charge is being measured
+         * against.
+         */
+        actions = (vox_u16)(actions | VOX_DIGS_ACTION_FIRE);
     } else if (match->weapon_cooldown[player] == 0U && visible &&
                ((match->tick + (vox_u32)player * 17U) % 24U) <
-                   DIGS_AI_DECISION_TICKS) {
+                   DIGS_AI_FIRE_WINDOW_TICKS) {
         match->selected_weapon[player] =
             digs_ai_weapon(match, player, nearest);
         actions = (vox_u16)(actions | VOX_DIGS_ACTION_FIRE);
     }
+    if ((state->mode == VOX_DIGS_AI_RETREATING || hazard >= 2U) &&
+        match->dash_cooldown[player] == 0U &&
+        ((match->tick + (vox_u32)player * 13U) % 37U) == 0U) {
+        /* Bots use the same burst and invulnerability path as players. */
+        actions = (vox_u16)(actions | VOX_DIGS_ACTION_DASH);
+    }
+    /* This is deliberately after target acquisition and breach planning. A
+     * tunnel state is an observable account of the decision actually made,
+     * not a speculative label from the preceding tick. */
+    if ((match->dropship.extracted_mask & (vox_u16)(1U << player)) != 0U) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_EXTRACTION;
+    } else if (match->buried_ticks[player] > 0U) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_RECOVERY;
+    } else if (hazard >= DIGS_AI_HAZARD_CRITICAL) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_DROWNING;
+    } else if (hazard != 0U && escape_x != 0) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_ESCAPE;
+    } else if (state->breach_ticks > 128U) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_COLLAPSE_RISK;
+    } else if (breaching || state->breach_ticks > 0U) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_EXCAVATING;
+    } else if (state->stuck_ticks >= digs_ai_stuck_threshold(archetype)) {
+        state->tunnel_state = VOX_DIGS_TUNNEL_PLANNING;
+    } else if (target != VOX_DIGS_NO_PLAYER &&
+               archetype == VOX_DIGS_ARCHETYPE_TRICKSTER) {
+        state->tunnel_state = visible ? VOX_DIGS_TUNNEL_AMBUSH :
+                              VOX_DIGS_TUNNEL_TRAP;
+    } else if (target != VOX_DIGS_NO_PLAYER && !visible &&
+               archetype == VOX_DIGS_ARCHETYPE_ENGINEER) {
+        /* RIVET keeps an acquired destination and plans a safe route rather
+         * than turning into an aimless roamer when sight drops. */
+        state->tunnel_state = VOX_DIGS_TUNNEL_PLANNING;
+    } else {
+        state->tunnel_state = VOX_DIGS_TUNNEL_NONE;
+    }
     match->player_actions[player] = actions;
     match->move_x_q15[player] = move_x;
     match->move_y_q15[player] = 0;
-    if (((match->tick + (vox_u32)player * 43U) % 240U) <
-        DIGS_AI_DECISION_TICKS) {
-        digs_emit_event(match, VOX_DIGS_EVENT_AI_BARK, player, target,
-                        match->selected_weapon[player], VOX_MAT_SMOKE,
-                        match->players[player].position_x.value_q16,
-                        match->players[player].position_y.value_q16,
-                        state->mode,
-                        (vox_u16)(digs_noise(match->rules.seed,
-                                             match->tick, player,
-                                             0xBA4BU) & 7U));
-    }
     match->state_hash = vox_digs_hash(match);
     return VOX_OK;
 }
@@ -3995,6 +9024,18 @@ static void digs_deposit_projectile(vox_digs_match *match,
                                     projectile->material,
                                     projectile->material == VOX_MAT_LAVA ?
                                     750L << 16 : 80L << 16);
+                if (projectile->material == VOX_MAT_LAVA ||
+                    projectile->material == VOX_MAT_WATER) {
+                    (void)vox_fluid_add_at(
+                        &match->fluids, (vox_u16)sample_x,
+                        (vox_u16)sample_y, (vox_u16)z,
+                        projectile->material == VOX_MAT_LAVA ?
+                        VOX_FLUID_LAVA : VOX_FLUID_WATER,
+                        projectile->material == VOX_MAT_LAVA ?
+                        16384L : 8192L,
+                        projectile->material == VOX_MAT_LAVA ?
+                        700L << 16 : 20L << 16);
+                }
             }
         }
     }
@@ -4062,9 +9103,9 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
         projectile.blast_radius > 0U) {
         vox_u16 lobe;
         vox_u16 lobe_count = (vox_u16)(2U + explosion_noise % 4U);
-        (void)vox_world_blast(&match->world, x, y,
-                              VOX_WORLD_DEPTH - 1U,
-                              terrain_radius, 700L << 16);
+        (void)digs_blast(match, x, y, VOX_WORLD_DEPTH - 1U,
+                         terrain_radius, 700L << 16,
+                         projectile.owner, projectile.weapon);
         for (lobe = 0U; lobe < lobe_count; ++lobe) {
             vox_u32 noise = digs_noise(explosion_noise, lobe, x, y);
             vox_i32 offset_x = (vox_i32)(noise %
@@ -4078,10 +9119,11 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
             if (lobe_x > 0 && lobe_y > 0 &&
                 lobe_x < (vox_i32)VOX_WORLD_WIDTH &&
                 lobe_y < (vox_i32)VOX_WORLD_HEIGHT) {
-                (void)vox_world_blast(&match->world, (vox_u32)lobe_x,
-                                      (vox_u32)lobe_y,
-                                      VOX_WORLD_DEPTH - 1U,
-                                      lobe_radius, 700L << 16);
+                (void)digs_blast(match, (vox_u32)lobe_x,
+                                 (vox_u32)lobe_y,
+                                 VOX_WORLD_DEPTH - 1U,
+                                 lobe_radius, 700L << 16,
+                                 projectile.owner, projectile.weapon);
             }
         }
         digs_damage_radius(match, projectile.owner, x, y,
@@ -4114,9 +9156,9 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
                                  projectile.damage, damage_flags);
     } else if (projectile.blast_radius > 0U &&
                projectile.weapon == VOX_DIGS_TOOL_BOILER_SHOTGUN) {
-        (void)vox_world_blast(&match->world, x, y,
-                              VOX_WORLD_DEPTH - 1U,
-                              DIGS_SCALE(1U), 100L << 16);
+        (void)digs_blast(match, x, y, VOX_WORLD_DEPTH - 1U,
+                         DIGS_SCALE(1U), 100L << 16,
+                         projectile.owner, projectile.weapon);
     }
     if (properties->flags & VOX_DIGS_WEAPON_DEPOSIT) {
         digs_deposit_projectile(match, &projectile, x, y);
@@ -4261,12 +9303,12 @@ static void digs_step_projectiles(vox_digs_match *match)
                     /* A charged Pulaski shaves a small, noisy notch into a
                      * wall before it turns around.  It is intentionally not
                      * an explosion: the axe stays in flight and returns. */
-                    (void)vox_world_blast(&match->world,
-                                          (vox_u32)x_cell,
-                                          (vox_u32)y_cell,
-                                          VOX_WORLD_DEPTH - 1U,
-                                          projectile->blast_radius,
-                                          360L << 16);
+                    (void)digs_blast(match, (vox_u32)x_cell,
+                                     (vox_u32)y_cell,
+                                     VOX_WORLD_DEPTH - 1U,
+                                     projectile->blast_radius,
+                                     360L << 16, projectile->owner,
+                                     projectile->weapon);
                     digs_spawn_effect_variant(match, VOX_MAT_METAL,
                         projectile->position_x_q16,
                         projectile->position_y_q16,
@@ -4300,24 +9342,43 @@ static void digs_step_projectiles(vox_digs_match *match)
                                            projectile->position_y_q16,
                                            &hit_part)) {
                     if (projectile->weapon == VOX_DIGS_TOOL_SMOKER) {
-                        /* The canister is utility first: a direct body
-                         * strike is only a tiny bump, then it ricochets
-                         * instead of vanishing before it can lay smoke. */
+                        /*
+                         * One solid blow, then the canister is spent.
+                         *
+                         * This used to rewind the canister to its previous
+                         * position and reverse its velocity on every body
+                         * overlap.  Rewinding put it back inside the miner,
+                         * so it struck again next tick, and the damping
+                         * converged it to a dead stop while still embedded:
+                         * a single throw pinned itself to its victim and
+                         * dealt its one damage roughly ninety times over the
+                         * fuse, spraying an event per tick.  That is the
+                         * reported "bounces too much and causes a bunch of
+                         * noise/damage".
+                         *
+                         * Now a direct hit lands once and hurts properly,
+                         * then zeroes its own damage as a spent marker.  A
+                         * spent canister passes through bodies without
+                         * interacting, so it drops and rolls away down the
+                         * landscape while it lays smoke, exactly as asked.
+                         *
+                         * DIGS_SMOKER_DIRECT_DAMAGE stays below the smallest
+                         * vital part -- the head at 45 -- so a direct hit can
+                         * never kill a miner who was at full health, though
+                         * it can still take an arm off.
+                         */
                         if (projectile->damage > 0U) {
                             (void)vox_digs_apply_hit(match,
                                 projectile->owner, player,
                                 projectile->weapon, hit_part,
                                 projectile->damage,
                                 VOX_DIGS_DAMAGE_BLUNT);
+                            projectile->damage = 0U;
+                            projectile->velocity_x_q16 /= 4L;
+                            projectile->velocity_y_q16 =
+                                DIGS_SMOKER_SETTLE_FALL_Q16;
+                            bounced = 1;
                         }
-                        projectile->position_x_q16 = previous_x_q16;
-                        projectile->position_y_q16 = previous_y_q16;
-                        projectile->velocity_x_q16 =
-                            -(projectile->velocity_x_q16 * 3L / 5L);
-                        projectile->velocity_y_q16 =
-                            -(projectile->velocity_y_q16 * 2L / 5L) -
-                            4096L;
-                        bounced = 1;
                         break;
                     }
                     if (projectile->weapon == VOX_DIGS_TOOL_PULASKI) {
@@ -4535,7 +9596,7 @@ static void digs_step_bleeding(vox_digs_match *match)
         vox_u16 total_rate = 0U;
         vox_u16 damage;
         vox_u32 accumulated;
-        if (!match->alive[player]) {
+        if (!match->alive[player] || digs_player_extracted(match, player)) {
             continue;
         }
         for (part = 0U; part < VOX_DIGS_ANATOMY_PART_COUNT; ++part) {
@@ -4577,6 +9638,22 @@ static void digs_step_bleeding(vox_digs_match *match)
             match->bleed_accumulator_q8[player] % 256U);
         if (damage > 0U) {
             vox_u16 drops = damage > 8U ? 8U : damage;
+            vox_i32 blood_x = match->players[player].position_x.value_q16 /
+                              65536L;
+            vox_i32 blood_y = match->players[player].position_y.value_q16 /
+                              65536L;
+            if (blood_x >= 0L && blood_y >= 0L &&
+                blood_x < (vox_i32)VOX_WORLD_WIDTH &&
+                blood_y < (vox_i32)VOX_WORLD_HEIGHT) {
+                /* The visible droplets are bounded presentation.  This
+                 * smaller deposit is the authoritative pool that can later
+                 * run, mix with water, or be sampled by movement. */
+                (void)vox_fluid_add_at(
+                    &match->fluids, (vox_u16)blood_x, (vox_u16)blood_y,
+                    (vox_u16)(match->tick % VOX_WORLD_DEPTH),
+                    VOX_FLUID_BLOOD,
+                    (vox_i32)drops * 1024L, 37L << 16);
+            }
             for (part = 0U; part < drops; ++part) {
                 vox_u32 noise = digs_noise(match->rules.seed,
                                            match->tick, player,
@@ -4649,20 +9726,11 @@ static void digs_update_lava(vox_digs_match *match)
         (match->lava_level_q16 *
          (DIGS_LAVA_BASIN_TOP - DIGS_SCALE(3U)) / 65535U));
     while (match->lava_surface_y > desired_surface) {
-        vox_u32 x;
-        vox_u32 z;
         match->lava_surface_y--;
-        for (x = 0U; x < VOX_WORLD_WIDTH; ++x) {
-            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-                const vox_cell *cell = vox_world_cell(
-                    &match->world, x, match->lava_surface_y, z);
-                if (cell != 0 && cell->material != VOX_MAT_BEDROCK) {
-                    (void)vox_world_set(&match->world, x,
-                                        match->lava_surface_y, z,
-                                        VOX_MAT_LAVA, 750L << 16);
-                }
-            }
-        }
+        (void)vox_world_set_layer_quiet_except(&match->world,
+                                               match->lava_surface_y,
+                                               VOX_MAT_LAVA, 750L << 16,
+                                               VOX_MAT_BEDROCK);
     }
 }
 
@@ -4674,7 +9742,7 @@ static void digs_apply_lava_hazards(vox_digs_match *match)
         vox_i32 x_cell;
         int touching_lava = 0;
         vox_u32 z;
-        if (!match->alive[player]) {
+        if (!match->alive[player] || digs_player_extracted(match, player)) {
             continue;
         }
         foot_y = digs_q16_to_cell(
@@ -4694,6 +9762,15 @@ static void digs_apply_lava_hazards(vox_digs_match *match)
                     touching_lava = 1;
                     break;
                 }
+                {
+                    const vox_fluid_cell *fluid = vox_fluid_cell_get_at(
+                        &match->fluids, (vox_u16)x_cell, (vox_u16)foot_y,
+                        (vox_u16)z);
+                    if (fluid != 0 && fluid->material == VOX_FLUID_LAVA) {
+                        touching_lava = 1;
+                        break;
+                    }
+                }
             }
         }
         if (touching_lava) {
@@ -4711,6 +9788,60 @@ static void digs_apply_lava_hazards(vox_digs_match *match)
     }
 }
 
+static void digs_apply_fluid_hazards(vox_digs_match *match)
+{
+    vox_u16 player;
+    for (player = 0U; player < match->rules.player_count; ++player) {
+        vox_i32 center_x;
+        vox_i32 center_y;
+        vox_i32 feet_y;
+        vox_u16 z;
+        int submerged = 0;
+        if (!match->alive[player] || digs_player_extracted(match, player)) {
+            continue;
+        }
+        center_x = digs_q16_to_cell(
+            match->players[player].position_x.value_q16);
+        center_y = digs_q16_to_cell(
+            match->players[player].position_y.value_q16);
+        feet_y = digs_q16_to_cell(
+            match->players[player].position_y.value_q16 +
+            match->players[player].half_height_q16);
+        if (center_x < 0L || center_x >= (vox_i32)VOX_WORLD_WIDTH) {
+            continue;
+        }
+        if (center_y < 0L) center_y = 0L;
+        if (feet_y >= (vox_i32)VOX_WORLD_HEIGHT) {
+            feet_y = (vox_i32)VOX_WORLD_HEIGHT - 1L;
+        }
+        for (z = 0U; z < VOX_FLUID_GRID_DEPTH; ++z) {
+            const vox_fluid_cell *center = vox_fluid_cell_get_at(
+                &match->fluids, (vox_u16)center_x, (vox_u16)center_y, z);
+            const vox_fluid_cell *feet = vox_fluid_cell_get_at(
+                &match->fluids, (vox_u16)center_x, (vox_u16)feet_y, z);
+            if ((center != 0 && center->material == VOX_FLUID_WATER &&
+                 center->volume_q16 >= 32768L) ||
+                (feet != 0 && feet->material == VOX_FLUID_WATER &&
+                 feet->volume_q16 >= 32768L)) {
+                submerged = 1;
+                break;
+            }
+        }
+        if (!submerged) continue;
+        if ((match->tick % 30U) == (vox_u32)player) {
+            digs_emit_event(match, VOX_DIGS_EVENT_DROWN, VOX_DIGS_NO_PLAYER,
+                            player, VOX_DIGS_TOOL_HYDROSHOT, VOX_MAT_WATER,
+                            match->players[player].position_x.value_q16,
+                            match->players[player].position_y.value_q16,
+                            3U, 0U);
+        }
+        (void)vox_digs_apply_hit(match, VOX_DIGS_NO_PLAYER, player,
+                                 VOX_DIGS_TOOL_HYDROSHOT,
+                                 VOX_DIGS_PART_TORSO, 3U,
+                                 VOX_DIGS_DAMAGE_DROWNING);
+    }
+}
+
 vox_u32 vox_digs_hash(const vox_digs_match *match)
 {
     vox_u32 hash = 2166136261U;
@@ -4724,11 +9855,9 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
     hash = digs_hash_mix(hash, match->rules.lava_start_tick);
     hash = digs_hash_mix(hash, (vox_u32)match->rules.player_count);
     hash = digs_hash_mix(hash, (vox_u32)match->rules.bot_mask);
-    hash = digs_hash_mix(hash, (vox_u32)match->rules.team_mode);
     hash = digs_hash_mix(hash, (vox_u32)match->rules.map_style);
     hash = digs_hash_mix(hash, (vox_u32)match->rules.weapon_mask);
     hash = digs_hash_mix(hash, (vox_u32)match->rules.fx_budget);
-    hash = digs_hash_mix(hash, (vox_u32)match->rules.friendly_fire);
     hash = digs_hash_mix(hash, (vox_u32)match->rules.respawn_mode);
     hash = digs_hash_mix(hash,
                          (vox_u32)match->rules.respawn_delay_ticks);
@@ -4738,7 +9867,15 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
     hash = digs_hash_mix(hash, (vox_u32)match->result_reason);
     hash = digs_hash_mix(hash, (vox_u32)match->result_draw);
     hash = digs_hash_mix(hash, (vox_u32)match->winner_player);
-    hash = digs_hash_mix(hash, (vox_u32)match->winner_team);
+    hash = digs_hash_mix(hash, (vox_u32)match->speech_floor_ticks);
+    hash = digs_hash_mix(hash, (vox_u32)match->speech_answer_ticks);
+    hash = digs_hash_mix(hash, (vox_u32)match->speech_dry_ticks);
+    hash = digs_hash_mix(hash,
+                         (vox_u32)match->speech_exchange_lines);
+    hash = digs_hash_mix(hash, (vox_u32)match->speech_last_line);
+    hash = digs_hash_mix(hash,
+                         (vox_u32)(vox_u16)match->speech_exchange_heat);
+    hash = digs_hash_mix(hash, match->memory.memory_hash);
     hash = digs_hash_mix(hash, match->lava_level_q16);
     hash = digs_hash_mix(hash, (vox_u32)match->lava_surface_y);
     hash = digs_hash_mix(hash, (vox_u32)match->projectile_count);
@@ -4746,6 +9883,34 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
     hash = digs_hash_mix(hash, (vox_u32)match->effect_cursor);
     hash = digs_hash_mix(hash, match->terrain_hash);
     hash = digs_hash_mix(hash, vox_world_hash(&match->world));
+    hash = digs_hash_mix(hash, vox_fluid_hash(&match->fluids));
+    hash = digs_hash_mix(hash, vox_rigid_hash(&match->ragdolls));
+    hash = digs_hash_mix(hash, vox_structure_hash(&match->structure));
+    for (i = 0U; i < VOX_RIGID_MAX_BODIES; ++i) {
+        hash = digs_hash_mix(hash, (vox_u32)match->rigid_source[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->rigid_weapon[i]);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->rigid_impact_cooldown[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->rigid_material[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->rigid_loose_cells[i]);
+    }
+    hash = digs_hash_mix(hash, match->rigid_settle_discarded);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.position_x_q16);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.position_y_q16);
+    hash = digs_hash_mix(hash,
+                         (vox_u32)match->dropship.previous_position_x_q16);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.velocity_x_q16);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.phase);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.route_ticks);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.launched_mask);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.extracted_mask);
+    hash = digs_hash_mix(hash, (vox_u32)match->dropship.alarmed);
+    hash = digs_hash_mix(hash,
+                         (vox_u32)match->dropship.collision_cooldown);
+    for (i = 0U; i < VOX_DIGS_MAX_SLOTS; ++i) {
+        hash = digs_hash_mix(hash, (vox_u32)match->awards[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->award_value[i]);
+    }
     hash = digs_hash_mix(hash, (vox_u32)match->physics_config.gravity_q16);
     hash = digs_hash_mix(hash, (vox_u32)match->physics_config.max_speed_q16);
     hash = digs_hash_mix(hash, (vox_u32)match->physics_config.max_step_q16);
@@ -4772,6 +9937,8 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
         hash = digs_hash_mix(hash, (vox_u32)match->coyote_ticks[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->jump_buffer_ticks[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->jump_hold_ticks[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->dash_cooldown[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->dash_invulnerability[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->steam_q16[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->weapon_cooldown[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->selected_weapon[i]);
@@ -4788,6 +9955,25 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
         hash = digs_hash_mix(hash,
                              (vox_u32)match->bleed_accumulator_q8[i]);
         hash = digs_hash_mix(hash, (vox_u32)match->clot_ticks[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->buried_ticks[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->speech_stimulus[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->speech_subject[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->speech_delay[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->speech_cooldown[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->speech_urge_ticks[i]);
+        hash = digs_hash_mix(hash, (vox_u32)match->speech_audience[i]);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->speech_self_stimulus[i]);
+        hash = digs_hash_mix(hash, match->speech_self_tick[i]);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->speech_recent_cursor[i]);
+        {
+            vox_u16 slot;
+            for (slot = 0U; slot < VOX_DIGS_SPEAKER_RECENT; ++slot) {
+                hash = digs_hash_mix(hash,
+                                     (vox_u32)match->speech_recent[i][slot]);
+            }
+        }
         hash = digs_hash_mix(hash,
                              (vox_u32)match->players[i].position_x.value_q16);
         hash = digs_hash_mix(hash,
@@ -4811,6 +9997,10 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
         hash = digs_hash_mix(hash, (vox_u32)match->ropes[i].point_count);
         hash = digs_hash_mix(hash, (vox_u32)match->ropes[i].target_player);
         hash = digs_hash_mix(hash, (vox_u32)match->ropes[i].flags);
+        hash = digs_hash_mix(hash, (vox_u32)match->ropes[i].target_x);
+        hash = digs_hash_mix(hash, (vox_u32)match->ropes[i].target_y);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->ropes[i].retarget_cursor);
         hash = digs_hash_mix(hash, (vox_u32)match->ropes[i].hook_x_q16);
         hash = digs_hash_mix(hash, (vox_u32)match->ropes[i].hook_y_q16);
         hash = digs_hash_mix(hash,
@@ -4842,9 +10032,22 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
                              (vox_u32)(vox_i32)match->bots[i].roam_direction);
         hash = digs_hash_mix(hash, (vox_u32)match->bots[i].decision_ticks);
         hash = digs_hash_mix(hash,
+                             (vox_u32)match->bots[i].retreat_lock_ticks);
+        hash = digs_hash_mix(hash, (vox_u32)match->bots[i].roam_goal_x);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->bots[i].roam_goal_ticks);
+        hash = digs_hash_mix(hash, (vox_u32)match->bots[i].stuck_ticks);
+        hash = digs_hash_mix(hash,
+                             (vox_u32)match->bots[i].breach_lock_ticks);
+        hash = digs_hash_mix(hash, (vox_u32)match->bots[i].breach_ticks);
+        hash = digs_hash_mix(hash,
                              (vox_u32)match->bots[i].last_seen_x_q16);
         hash = digs_hash_mix(hash,
                              (vox_u32)match->bots[i].last_seen_y_q16);
+        hash = digs_hash_mix(hash, (vox_u32)match->bots[i].tunnel_state);
+        hash = digs_hash_mix(hash, (vox_u32)match->bots[i].tunnel_safety_q8);
+        hash = digs_hash_mix(hash, (vox_u32)match->bots[i].collapse_risk_q8);
+        hash = digs_hash_mix(hash, (vox_u32)match->bots[i].extraction_ticks);
         {
             vox_u16 part;
             for (part = 0U; part < VOX_DIGS_ANATOMY_PART_COUNT; ++part) {
@@ -4856,6 +10059,25 @@ vox_u32 vox_digs_hash(const vox_digs_match *match)
                 hash = digs_hash_mix(hash,
                                      (vox_u32)anatomy->bleed_rate_q8);
             }
+        }
+    }
+    for (i = 0U; i < VOX_DIGS_MAX_PAIRS; ++i) {
+        const vox_digs_contract *contract = &match->contracts[i];
+        vox_u16 recent;
+        hash = digs_hash_mix(hash, (vox_u32)contract->tone);
+        hash = digs_hash_mix(hash, (vox_u32)(vox_u16)contract->valence);
+        hash = digs_hash_mix(hash, (vox_u32)contract->tone_ticks);
+        hash = digs_hash_mix(hash, (vox_u32)contract->quiet_ticks);
+        hash = digs_hash_mix(hash, (vox_u32)contract->last_speaker);
+        hash = digs_hash_mix(hash, (vox_u32)contract->exchanges);
+        hash = digs_hash_mix(hash, (vox_u32)contract->met);
+        hash = digs_hash_mix(hash, (vox_u32)contract->recent_cursor);
+        hash = digs_hash_mix(hash, (vox_u32)contract->last_stimulus);
+        hash = digs_hash_mix(hash, (vox_u32)contract->last_actor);
+        hash = digs_hash_mix(hash, contract->last_stimulus_tick);
+        for (recent = 0U; recent < VOX_DIGS_RECENT_LINES; ++recent) {
+            hash = digs_hash_mix(hash,
+                                 (vox_u32)contract->recent_lines[recent]);
         }
     }
     for (i = 0U; i < VOX_DIGS_MAX_PROJECTILES; ++i) {

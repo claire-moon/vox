@@ -1,15 +1,36 @@
 cmake_minimum_required(VERSION 3.16)
-project(vox VERSION 0.0.3 LANGUAGES C CXX)
 
-# The portable scalar oracle is compiled as ISO C90 (the C89 language profile)
-# and the body sidecar as ISO C++98.  Keep compiler extensions off globally so
-# every target, including small tools and tests, exercises the same boundary.
+# The version lives in one file and is read from it here, before project().
+# Packaging and CI read the same file through tools/vox-version.sh, and
+# tools/vox-version-check.sh fails if any product surface disagrees.  The
+# previous release had the number written out by hand in twenty-odd places.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" VOX_VERSION_FILE)
+string(STRIP "${VOX_VERSION_FILE}" VOX_VERSION_FILE)
+if (NOT VOX_VERSION_FILE MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    message(FATAL_ERROR
+        "VERSION must hold a bare MAJOR.MINOR.PATCH, got '${VOX_VERSION_FILE}'")
+endif()
+
+project(vox VERSION ${VOX_VERSION_FILE} LANGUAGES C)
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/engine/include/vox/vox_version.h.in"
+    "${CMAKE_BINARY_DIR}/include/vox/vox_version.h"
+    @ONLY
+)
+
+# v0.0.4 is ISO C only: every first-party translation unit is compiled as
+# ISO C90 (the C89 language profile).  Keep compiler extensions off globally
+# so every target, including small tools and tests, exercises that boundary.
 set(CMAKE_C_STANDARD 90)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
-set(CMAKE_CXX_STANDARD 98)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    # Wpedantic diagnoses extensions; pedantic-errors makes the C89 boundary
+    # an actual gate even when a compiler classifies an extension as benign.
+    add_compile_options($<$<COMPILE_LANGUAGE:C>:-pedantic-errors>)
+endif()
 
 option(VOX_BUILD_TESTS "Build deterministic VOX tests" ON)
 option(VOX_BUILD_SDL2_DEMO "Build the playable SDL2 DIGS demo" OFF)
@@ -32,10 +53,9 @@ if (VOX_BUILD_WIN32_LEGACY_DEMO)
         message(FATAL_ERROR
             "VOX_BUILD_WIN32_LEGACY_DEMO requires a 32-bit PE32 toolchain")
     endif()
-    if (NOT MINGW OR NOT CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
-        NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    if (NOT MINGW OR NOT CMAKE_C_COMPILER_ID STREQUAL "GNU")
         message(FATAL_ERROR
-            "VOX_BUILD_WIN32_LEGACY_DEMO requires the i686 MinGW GNU C/C++ toolchain")
+            "VOX_BUILD_WIN32_LEGACY_DEMO requires the i686 MinGW GNU C toolchain")
     endif()
     set(VOX_BUILD_LEGACY_PROFILE ON)
 endif()
@@ -88,73 +108,19 @@ if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     )
 endif()
 
-# Lua 5.1.5 remains under its upstream MIT license.  The build intentionally
-# excludes the standalone interpreters and the io/os/package/debug libraries;
-# VOX exposes only its deterministic catalog sandbox through vox_script.
-add_library(lua51 STATIC
-    third_party/lua-5.1.5/src/lapi.c
-    third_party/lua-5.1.5/src/lcode.c
-    third_party/lua-5.1.5/src/ldebug.c
-    third_party/lua-5.1.5/src/ldo.c
-    third_party/lua-5.1.5/src/ldump.c
-    third_party/lua-5.1.5/src/lfunc.c
-    third_party/lua-5.1.5/src/lgc.c
-    third_party/lua-5.1.5/src/llex.c
-    third_party/lua-5.1.5/src/lmem.c
-    third_party/lua-5.1.5/src/lobject.c
-    third_party/lua-5.1.5/src/lopcodes.c
-    third_party/lua-5.1.5/src/lparser.c
-    third_party/lua-5.1.5/src/lstate.c
-    third_party/lua-5.1.5/src/lstring.c
-    third_party/lua-5.1.5/src/ltable.c
-    third_party/lua-5.1.5/src/ltm.c
-    third_party/lua-5.1.5/src/lundump.c
-    third_party/lua-5.1.5/src/lvm.c
-    third_party/lua-5.1.5/src/lzio.c
-    third_party/lua-5.1.5/src/lauxlib.c
-    third_party/lua-5.1.5/src/lbaselib.c
-    third_party/lua-5.1.5/src/ltablib.c
-    third_party/lua-5.1.5/src/lstrlib.c
-    third_party/lua-5.1.5/src/lmathlib.c
-)
-target_include_directories(lua51 PUBLIC third_party/lua-5.1.5/src)
-target_compile_definitions(lua51 PRIVATE LUA_ANSI=1)
-set_property(TARGET lua51 PROPERTY C_STANDARD 90)
-set_property(TARGET lua51 PROPERTY C_STANDARD_REQUIRED ON)
-if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-    # Preserve upstream 5.1.5 source byte-for-byte; modern diagnostics in that
-    # third-party code are not made project errors.
-    target_compile_options(lua51 PRIVATE -w)
-endif()
-if (NOT MSVC)
-    target_link_libraries(lua51 PUBLIC m)
-endif()
-
-add_library(vox_script STATIC
-    engine/c89/vox_script.c
-)
-target_include_directories(vox_script PUBLIC engine/include)
-target_include_directories(vox_script PRIVATE third_party/lua-5.1.5/src)
-target_link_libraries(vox_script PUBLIC lua51)
-set_property(TARGET vox_script PROPERTY C_STANDARD 90)
-set_property(TARGET vox_script PROPERTY C_STANDARD_REQUIRED ON)
-if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(vox_script PRIVATE
-        -Wall -Wextra -Wpedantic -Werror)
-endif()
 if (VOX_BUILD_NASM_ACCEL)
     target_sources(vox_accel PRIVATE engine/nasm/vox_fnv1a_x86_64.asm)
     target_compile_definitions(vox_accel PRIVATE VOX_HAVE_NASM_FNV1A=1)
 endif()
 
 add_library(vox_physics STATIC
-    engine/cpp98/vox_physics.cpp
+    engine/c89/vox_physics.c
 )
 target_include_directories(vox_physics PUBLIC engine/include)
-set_property(TARGET vox_physics PROPERTY CXX_STANDARD 98)
-set_property(TARGET vox_physics PROPERTY CXX_STANDARD_REQUIRED ON)
-if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(vox_physics PRIVATE -Wall -Wextra -Wpedantic -Werror -fno-exceptions -fno-rtti)
+set_property(TARGET vox_physics PROPERTY C_STANDARD 90)
+set_property(TARGET vox_physics PROPERTY C_STANDARD_REQUIRED ON)
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(vox_physics PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
 add_library(vox_kernel STATIC
@@ -167,13 +133,48 @@ if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vox_kernel PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
+add_library(vox_fluid STATIC
+    engine/c89/vox_fluid.c
+)
+target_include_directories(vox_fluid PUBLIC engine/include)
+target_link_libraries(vox_fluid PUBLIC vox_kernel)
+set_property(TARGET vox_fluid PROPERTY C_STANDARD 90)
+set_property(TARGET vox_fluid PROPERTY C_STANDARD_REQUIRED ON)
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(vox_fluid PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+add_library(vox_rigid STATIC
+    engine/c89/vox_rigid.c
+)
+target_include_directories(vox_rigid PUBLIC engine/include)
+target_link_libraries(vox_rigid PUBLIC vox_fluid)
+set_property(TARGET vox_rigid PROPERTY C_STANDARD 90)
+set_property(TARGET vox_rigid PROPERTY C_STANDARD_REQUIRED ON)
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(vox_rigid PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+add_library(vox_cluster STATIC
+    engine/c89/vox_cluster.c
+)
+target_include_directories(vox_cluster PUBLIC engine/include)
+target_link_libraries(vox_cluster PUBLIC vox_rigid)
+set_property(TARGET vox_cluster PROPERTY C_STANDARD 90)
+set_property(TARGET vox_cluster PROPERTY C_STANDARD_REQUIRED ON)
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(vox_cluster PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
 target_link_libraries(vox_physics PUBLIC vox_kernel)
 
 add_library(digs_game STATIC
     games/digs/digs_game.c
+    games/digs/digs_lines.c
 )
-target_link_libraries(digs_game PUBLIC vox_kernel vox_physics)
-target_include_directories(digs_game PUBLIC engine/include)
+target_link_libraries(digs_game PUBLIC vox_kernel vox_physics vox_fluid vox_rigid
+                      vox_cluster)
+target_include_directories(digs_game PUBLIC engine/include games/digs)
 set_property(TARGET digs_game PROPERTY C_STANDARD 90)
 set_property(TARGET digs_game PROPERTY C_STANDARD_REQUIRED ON)
 if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
@@ -224,11 +225,6 @@ if (VOX_BUILD_LEGACY_PROFILE)
             -march=i386 -mno-sse -mno-sse2 -mfpmath=387
         )
     endif()
-    if (CMAKE_SIZEOF_VOID_P EQUAL 4 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-        set(VOX_LEGACY_CXX_CPU_OPTIONS
-            -march=i386 -mno-sse -mno-sse2 -mfpmath=387
-        )
-    endif()
 
     # The WinMM host owns its own i386-safe synth object.  Reusing vox_audio
     # here would make it too easy for a future desktop compiler default to
@@ -260,28 +256,76 @@ if (VOX_BUILD_LEGACY_PROFILE)
     endif()
 
     add_library(vox_legacy_physics STATIC
-        engine/cpp98/vox_physics.cpp
+        engine/c89/vox_physics.c
     )
     target_include_directories(vox_legacy_physics PUBLIC engine/include)
     target_compile_definitions(vox_legacy_physics PUBLIC
         ${VOX_LEGACY_WORLD_DEFINITIONS})
     target_link_libraries(vox_legacy_physics PUBLIC vox_legacy_kernel)
-    set_property(TARGET vox_legacy_physics PROPERTY CXX_STANDARD 98)
-    set_property(TARGET vox_legacy_physics PROPERTY CXX_STANDARD_REQUIRED ON)
-    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set_property(TARGET vox_legacy_physics PROPERTY C_STANDARD 90)
+    set_property(TARGET vox_legacy_physics PROPERTY C_STANDARD_REQUIRED ON)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(vox_legacy_physics PRIVATE
-            -Wall -Wextra -Wpedantic -Werror -fno-exceptions -fno-rtti
-            ${VOX_LEGACY_CXX_CPU_OPTIONS})
+            -Wall -Wextra -Wpedantic -Werror
+            ${VOX_LEGACY_C_CPU_OPTIONS})
+    endif()
+
+    add_library(vox_legacy_fluid STATIC
+        engine/c89/vox_fluid.c
+    )
+    target_include_directories(vox_legacy_fluid PUBLIC engine/include)
+    target_compile_definitions(vox_legacy_fluid PUBLIC
+        ${VOX_LEGACY_WORLD_DEFINITIONS})
+    target_link_libraries(vox_legacy_fluid PUBLIC vox_legacy_kernel)
+    set_property(TARGET vox_legacy_fluid PROPERTY C_STANDARD 90)
+    set_property(TARGET vox_legacy_fluid PROPERTY C_STANDARD_REQUIRED ON)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(vox_legacy_fluid PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            ${VOX_LEGACY_C_CPU_OPTIONS})
+    endif()
+
+    add_library(vox_legacy_rigid STATIC
+        engine/c89/vox_rigid.c
+    )
+    target_include_directories(vox_legacy_rigid PUBLIC engine/include)
+    target_compile_definitions(vox_legacy_rigid PUBLIC
+        ${VOX_LEGACY_WORLD_DEFINITIONS})
+    target_link_libraries(vox_legacy_rigid PUBLIC vox_legacy_fluid)
+    set_property(TARGET vox_legacy_rigid PROPERTY C_STANDARD 90)
+    set_property(TARGET vox_legacy_rigid PROPERTY C_STANDARD_REQUIRED ON)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(vox_legacy_rigid PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            ${VOX_LEGACY_C_CPU_OPTIONS})
+    endif()
+
+    add_library(vox_legacy_cluster STATIC
+        engine/c89/vox_cluster.c
+    )
+    target_include_directories(vox_legacy_cluster PUBLIC engine/include)
+    target_compile_definitions(vox_legacy_cluster PUBLIC
+        ${VOX_LEGACY_WORLD_DEFINITIONS})
+    target_link_libraries(vox_legacy_cluster PUBLIC
+        vox_legacy_kernel vox_legacy_rigid)
+    set_property(TARGET vox_legacy_cluster PROPERTY C_STANDARD 90)
+    set_property(TARGET vox_legacy_cluster PROPERTY C_STANDARD_REQUIRED ON)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(vox_legacy_cluster PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            ${VOX_LEGACY_C_CPU_OPTIONS})
     endif()
 
     add_library(digs_legacy_game STATIC
         games/digs/digs_game.c
+        games/digs/digs_lines.c
     )
     target_include_directories(digs_legacy_game PUBLIC engine/include)
     target_compile_definitions(digs_legacy_game PUBLIC
         ${VOX_LEGACY_WORLD_DEFINITIONS})
     target_link_libraries(digs_legacy_game PUBLIC
-        vox_legacy_kernel vox_legacy_physics)
+        vox_legacy_kernel vox_legacy_physics vox_legacy_fluid
+        vox_legacy_rigid vox_legacy_cluster)
     set_property(TARGET digs_legacy_game PROPERTY C_STANDARD 90)
     set_property(TARGET digs_legacy_game PROPERTY C_STANDARD_REQUIRED ON)
     if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
@@ -314,6 +358,7 @@ if (VOX_BUILD_WIN32_LEGACY_DEMO)
     target_include_directories(digs_win32_legacy PRIVATE
         engine/include
         ports/sdl2
+        "${CMAKE_BINARY_DIR}/include"
     )
     target_compile_definitions(digs_win32_legacy PRIVATE
         ${VOX_LEGACY_WORLD_DEFINITIONS}
@@ -333,13 +378,12 @@ if (VOX_BUILD_WIN32_LEGACY_DEMO)
     set_property(TARGET digs_win32_legacy PROPERTY C_STANDARD 90)
     set_property(TARGET digs_win32_legacy PROPERTY C_STANDARD_REQUIRED ON)
     set_property(TARGET digs_win32_legacy PROPERTY C_EXTENSIONS OFF)
-    set_property(TARGET digs_win32_legacy PROPERTY LINKER_LANGUAGE CXX)
     if (CMAKE_C_COMPILER_ID MATCHES "GNU")
         target_compile_options(digs_win32_legacy PRIVATE
             -Wall -Wextra -Wpedantic -Werror
             ${VOX_LEGACY_C_CPU_OPTIONS})
         target_link_options(digs_win32_legacy PRIVATE
-            -static -static-libgcc -static-libstdc++
+            -static -static-libgcc
             -Wl,--subsystem,windows
             -Wl,--major-os-version,4
             -Wl,--minor-os-version,0
@@ -358,7 +402,6 @@ endif()
 add_executable(digs_headless tools/digs_headless.c)
 target_link_libraries(digs_headless PRIVATE digs_game)
 target_include_directories(digs_headless PRIVATE engine/include)
-set_property(TARGET digs_headless PROPERTY LINKER_LANGUAGE CXX)
 if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(digs_headless PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
@@ -372,37 +415,27 @@ if (VOX_BUILD_LEGACY_PROFILE)
     target_include_directories(digs_legacy_headless PRIVATE engine/include)
     target_compile_definitions(digs_legacy_headless PRIVATE
         ${VOX_LEGACY_WORLD_DEFINITIONS})
-    set_property(TARGET digs_legacy_headless PROPERTY LINKER_LANGUAGE CXX)
     if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(digs_legacy_headless PRIVATE
             -Wall -Wextra -Wpedantic -Werror)
     endif()
 endif()
 
-add_executable(digs_script tools/digs_script.c)
-target_link_libraries(digs_script PRIVATE vox_script)
-target_include_directories(digs_script PRIVATE engine/include)
-set_property(TARGET digs_script PROPERTY C_STANDARD 90)
-set_property(TARGET digs_script PROPERTY C_STANDARD_REQUIRED ON)
+add_executable(vox_bench tools/vox_bench.c)
+target_link_libraries(vox_bench PRIVATE digs_game)
+target_include_directories(vox_bench PRIVATE engine/include)
+set_target_properties(vox_bench PROPERTIES
+    C_STANDARD 90
+    C_STANDARD_REQUIRED ON
+)
 if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(digs_script PRIVATE
-        -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(vox_bench PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
-file(COPY games/digs/scripts DESTINATION "${CMAKE_BINARY_DIR}/share/digs")
-file(COPY games/digs/catalog DESTINATION "${CMAKE_BINARY_DIR}/share/digs")
-file(COPY games/digs/icons DESTINATION "${CMAKE_BINARY_DIR}/share/digs")
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/share/digs/controllers")
-configure_file(
-    "${CMAKE_SOURCE_DIR}/third_party/SDL_GameControllerDB/gamecontrollerdb.txt"
-    "${CMAKE_BINARY_DIR}/share/digs/controllers/gamecontrollerdb.txt"
-    COPYONLY
-)
 
 add_executable(vox_render_demo tools/vox_render_demo.c)
 target_link_libraries(vox_render_demo PRIVATE digs_game vox_software)
 target_include_directories(vox_render_demo PRIVATE engine/include)
-set_property(TARGET vox_render_demo PROPERTY LINKER_LANGUAGE CXX)
 if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vox_render_demo PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
@@ -411,19 +444,39 @@ if (VOX_BUILD_SDL2_DEMO)
     find_package(SDL2 2.0.10 CONFIG REQUIRED)
     add_executable(digs_demo
         ports/sdl2/digs_sdl2.c
+        ports/sdl2/digs_chronicle.c
         ports/sdl2/vox_sdl_ui.c
     )
-    target_link_libraries(digs_demo PRIVATE digs_game digs_miner_art vox_audio vox_script SDL2::SDL2)
-    target_include_directories(digs_demo PRIVATE engine/include ports/sdl2)
+    target_link_libraries(digs_demo PRIVATE digs_game digs_miner_art vox_audio SDL2::SDL2)
+    target_include_directories(digs_demo PRIVATE engine/include ports/sdl2
+        games/digs "${CMAKE_BINARY_DIR}/include")
     target_compile_definitions(digs_demo PRIVATE SDL_MAIN_HANDLED)
+    # The chronicle is meant to be unrepeatable, so a released build has no
+    # way to erase it.  Refining the feature needs one, so debug builds get
+    # --chronicle-reset and --chronicle-dump and nothing else does.
+    option(VOX_DEBUG_CHRONICLE
+        "Expose --chronicle-reset and --chronicle-dump" OFF)
+    if (VOX_DEBUG_CHRONICLE OR CMAKE_BUILD_TYPE STREQUAL "Debug")
+        target_compile_definitions(digs_demo PRIVATE DIGS_CHRONICLE_DEBUG)
+    endif()
     set_property(TARGET digs_demo PROPERTY C_STANDARD 90)
     set_property(TARGET digs_demo PROPERTY C_STANDARD_REQUIRED ON)
     set_property(TARGET digs_demo PROPERTY C_EXTENSIONS OFF)
-    set_property(TARGET digs_demo PROPERTY LINKER_LANGUAGE CXX)
     if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(digs_demo PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
 endif()
+
+# SDL2's built-in controller database covers mainstream pads, so the 600 KB
+# community database is no longer installed -- it is larger than the whole
+# game.  Create the drop-in location and explain it, so a player with unusual
+# hardware knows exactly where the file goes.
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/share/digs/controllers")
+configure_file(
+    "${CMAKE_SOURCE_DIR}/packaging/linux/controllers-README.txt"
+    "${CMAKE_BINARY_DIR}/share/digs/controllers/README.txt"
+    COPYONLY
+)
 
 if (VOX_BUILD_TESTS)
     enable_testing()
@@ -437,18 +490,6 @@ if (VOX_BUILD_TESTS)
             -Wall -Wextra -Wpedantic -Werror)
     endif()
     add_test(NAME vox_audio_determinism COMMAND vox_audio_test)
-    add_executable(vox_script_test tests/headless/vox_script_test.c)
-    target_link_libraries(vox_script_test PRIVATE vox_script)
-    target_include_directories(vox_script_test PRIVATE engine/include)
-    set_property(TARGET vox_script_test PROPERTY C_STANDARD 90)
-    set_property(TARGET vox_script_test PROPERTY C_STANDARD_REQUIRED ON)
-    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(vox_script_test PRIVATE
-            -Wall -Wextra -Wpedantic -Werror)
-    endif()
-    add_test(NAME vox_script_determinism COMMAND vox_script_test)
-    set_tests_properties(vox_script_determinism PROPERTIES
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
     add_executable(vox_accel_test tests/headless/vox_accel_test.c)
     target_link_libraries(vox_accel_test PRIVATE vox_accel)
     target_include_directories(vox_accel_test PRIVATE engine/include)
@@ -462,13 +503,51 @@ if (VOX_BUILD_TESTS)
     target_link_libraries(vox_kernel_test PRIVATE vox_kernel)
     target_include_directories(vox_kernel_test PRIVATE engine/include)
     add_test(NAME vox_kernel_determinism COMMAND vox_kernel_test)
-    add_executable(vox_physics_test tests/headless/vox_physics_test.cpp)
+    add_executable(vox_fluid_test tests/headless/vox_fluid_test.c)
+    target_link_libraries(vox_fluid_test PRIVATE vox_fluid)
+    target_include_directories(vox_fluid_test PRIVATE engine/include)
+    set_property(TARGET vox_fluid_test PROPERTY C_STANDARD 90)
+    set_property(TARGET vox_fluid_test PROPERTY C_STANDARD_REQUIRED ON)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(vox_fluid_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME vox_fluid_conservation COMMAND vox_fluid_test)
+    add_executable(vox_rigid_test tests/headless/vox_rigid_test.c)
+    target_link_libraries(vox_rigid_test PRIVATE vox_rigid vox_kernel)
+    target_include_directories(vox_rigid_test PRIVATE engine/include)
+    set_property(TARGET vox_rigid_test PROPERTY C_STANDARD 90)
+    set_property(TARGET vox_rigid_test PROPERTY C_STANDARD_REQUIRED ON)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(vox_rigid_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME vox_rigid_determinism COMMAND vox_rigid_test)
+    add_executable(vox_cluster_test tests/headless/vox_cluster_test.c)
+    target_link_libraries(vox_cluster_test PRIVATE vox_cluster vox_rigid vox_kernel)
+    target_include_directories(vox_cluster_test PRIVATE engine/include)
+    set_property(TARGET vox_cluster_test PROPERTY C_STANDARD 90)
+    set_property(TARGET vox_cluster_test PROPERTY C_STANDARD_REQUIRED ON)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(vox_cluster_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME vox_cluster_collapse COMMAND vox_cluster_test)
+    add_executable(vox_v005_gameplay_test
+        tests/headless/vox_v005_gameplay_test.c)
+    target_link_libraries(vox_v005_gameplay_test PRIVATE digs_game)
+    target_include_directories(vox_v005_gameplay_test PRIVATE engine/include)
+    set_property(TARGET vox_v005_gameplay_test PROPERTY C_STANDARD 90)
+    set_property(TARGET vox_v005_gameplay_test PROPERTY C_STANDARD_REQUIRED ON)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(vox_v005_gameplay_test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME vox_v005_gameplay COMMAND vox_v005_gameplay_test)
+    add_executable(vox_physics_test tests/headless/vox_physics_test.c)
     target_link_libraries(vox_physics_test PRIVATE vox_physics vox_kernel)
     target_include_directories(vox_physics_test PRIVATE engine/include)
-    set_property(TARGET vox_physics_test PROPERTY CXX_STANDARD 98)
-    set_property(TARGET vox_physics_test PROPERTY CXX_STANDARD_REQUIRED ON)
-    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(vox_physics_test PRIVATE -Wall -Wextra -Wpedantic -Werror -fno-exceptions -fno-rtti)
+    set_property(TARGET vox_physics_test PROPERTY C_STANDARD 90)
+    set_property(TARGET vox_physics_test PROPERTY C_STANDARD_REQUIRED ON)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(vox_physics_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
     add_test(NAME vox_physics_determinism COMMAND vox_physics_test)
     add_executable(vox_physics_c_abi_test tests/headless/vox_physics_c_abi_test.c)
@@ -476,7 +555,6 @@ if (VOX_BUILD_TESTS)
     target_include_directories(vox_physics_c_abi_test PRIVATE engine/include)
     set_property(TARGET vox_physics_c_abi_test PROPERTY C_STANDARD 90)
     set_property(TARGET vox_physics_c_abi_test PROPERTY C_STANDARD_REQUIRED ON)
-    set_property(TARGET vox_physics_c_abi_test PROPERTY LINKER_LANGUAGE CXX)
     if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(vox_physics_c_abi_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
@@ -484,7 +562,6 @@ if (VOX_BUILD_TESTS)
     add_executable(vox_game_test tests/headless/vox_game_test.c)
     target_link_libraries(vox_game_test PRIVATE digs_game)
     target_include_directories(vox_game_test PRIVATE engine/include)
-    set_property(TARGET vox_game_test PROPERTY LINKER_LANGUAGE CXX)
     add_test(NAME digs_match_determinism COMMAND vox_game_test)
     add_executable(vox_software_test tests/headless/vox_software_test.c)
     target_link_libraries(vox_software_test PRIVATE vox_software)
@@ -518,10 +595,42 @@ if (VOX_BUILD_TESTS)
         add_test(NAME digs_settings_migration
             COMMAND digs_demo --settings-self-test
                     ${CMAKE_CURRENT_BINARY_DIR}/digs-settings-self-test.cfg)
+        add_test(NAME digs_dropship_start
+            COMMAND digs_demo --dropship-start-self-test)
+        add_test(NAME digs_menu_screens
+            COMMAND digs_demo --menu-self-test)
+        add_test(NAME digs_chronicle_persistence
+            COMMAND digs_demo --chronicle-self-test
+                    ${CMAKE_CURRENT_BINARY_DIR}/digs-chronicle-self-test.dat)
+        # Memory that survives a single process is a variable, not memory.
+        # This drives the save layer across real process boundaries, so it
+        # needs a shell rather than one COMMAND.
+        if (UNIX)
+            add_test(NAME digs_memory_across_sessions
+                COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/vox-session-evidence.sh
+                        $<TARGET_FILE:digs_demo>)
+        endif()
         add_test(NAME digs_camera_bounds
             COMMAND digs_demo --camera-self-test)
+        add_test(NAME digs_replay_presentation
+            COMMAND digs_demo --replay-self-test)
+        add_test(NAME digs_rigid_overlay
+            COMMAND digs_demo --rigid-overlay-self-test)
+        add_test(NAME digs_particle_overlay
+            COMMAND digs_demo --particle-overlay-self-test)
         add_test(NAME digs_fixed_step_debt
             COMMAND digs_demo --fixed-step-self-test)
+        # v0.0.4 budgets the shipped payload (digs_demo plus the staged
+        # share/ tree) at 1440 KiB.  The gate only fails past that hard
+        # ceiling; the target and warning lines are advisory so the diet
+        # can be measured phase by phase without blocking the build.
+        if (UNIX)
+            add_test(NAME digs_size_budget
+                COMMAND ${CMAKE_COMMAND} -E env
+                        VOX_SIZE_REPORT=${CMAKE_CURRENT_BINARY_DIR}/size-report.txt
+                        ${CMAKE_CURRENT_SOURCE_DIR}/tools/vox-size-report.sh
+                        ${CMAKE_CURRENT_BINARY_DIR})
+        endif()
     endif()
     add_test(NAME vox_headless_scenario COMMAND vox_headless)
     add_test(NAME digs_headless_scenario COMMAND digs_headless)
