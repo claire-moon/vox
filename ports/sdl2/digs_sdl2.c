@@ -116,6 +116,7 @@ typedef enum demo_screen {
     DEMO_RESULTS = 5,
     DEMO_INBOX = 6,
     DEMO_LOG = 7,
+    DEMO_REPLAY = 8,
     DEMO_CONTROLS = 9,
     DEMO_INPUT_OPTIONS = 11,
     DEMO_CUSTOMIZE = 12,
@@ -407,6 +408,8 @@ typedef struct demo_app {
     vox_u16 replay_playing;
     vox_u16 replay_frame_hold_ticks;
     vox_u16 replay_hold_ticks;
+    vox_u16 structure_strain;
+    vox_u16 structure_strain_ttl;
 } demo_app;
 
 static vox_u8 demo_pixels[DEMO_WIDTH * DEMO_HEIGHT * VOX_SOFTWARE_RGB_BYTES];
@@ -5111,9 +5114,11 @@ static void demo_draw_debug(demo_app *app)
             (unsigned int)demo_match.lava_surface_y,
             (unsigned long)demo_match.state_hash);
     vox_ui_text(&demo_ui, 7, 178, 1, text, DEMO_VGA_LIGHT_CYAN);
-    sprintf(text, "CELLS %lu AWAKE %lu TARGET %lu,%lu MAT %u",
+    sprintf(text, "CELLS %lu AWAKE %lu STRAIN %u TARGET %lu,%lu MAT %u",
             (unsigned long)demo_match.world.occupied_cells,
             (unsigned long)demo_match.world.awake_cells,
+            (unsigned int)(app->structure_strain_ttl != 0U ?
+                           app->structure_strain : 0U),
             (unsigned long)world_x, (unsigned long)world_y,
             cell == 0 ? 0U : (unsigned int)cell->material);
     vox_ui_text(&demo_ui, 7, 187, 1, text, DEMO_VGA_LIGHT_GRAY);
@@ -5489,8 +5494,10 @@ static void demo_draw_play(demo_app *app)
         demo_draw_crosshair(app, 0, app->mouse_x, app->mouse_y);
     }
     demo_draw_world_feedback(app);
-    demo_draw_hud(app);
-    demo_draw_notifications(app);
+    if (app->screen != DEMO_REPLAY) {
+        demo_draw_hud(app);
+        demo_draw_notifications(app);
+    }
     demo_draw_debug(app);
     if (app->screen == DEMO_PAUSE) {
         demo_dark_panel(88, 65, 144, 70);
@@ -5590,6 +5597,19 @@ static void demo_draw_results(demo_app *app)
                        "ENTER RETURNS TO TITLE", DEMO_VGA_YELLOW);
 }
 
+static void demo_draw_replay(demo_app *app)
+{
+    char line[64];
+    demo_draw_play(app);
+    demo_dark_panel(75, 5, 170, 24);
+    vox_ui_text_center_shadow(&demo_ui, 160, 9, 1, "BEST KILL REPLAY",
+                              DEMO_VGA_YELLOW);
+    sprintf(line, "TAPE %u/%u",
+            (unsigned int)demo_match.replay.play_cursor,
+            (unsigned int)demo_match.replay.frame_count);
+    vox_ui_text_center(&demo_ui, 160, 18, 1, line, DEMO_VGA_LIGHT_CYAN);
+}
+
 static void demo_render(demo_app *app)
 {
     /* A screen never inherits another screen's scroll position. */
@@ -5622,6 +5642,8 @@ static void demo_render(demo_app *app)
         demo_draw_controls(app);
     } else if (app->screen == DEMO_INPUT_OPTIONS) {
         demo_draw_input_options(app);
+    } else if (app->screen == DEMO_REPLAY) {
+        demo_draw_replay(app);
     } else if (app->screen == DEMO_RESULTS) {
         demo_draw_results(app);
     } else {
@@ -5809,6 +5831,8 @@ static int demo_start_match(demo_app *app, int foundry)
     app->replay_playing = 0U;
     app->replay_frame_hold_ticks = 0U;
     app->replay_hold_ticks = 0U;
+    app->structure_strain = 0U;
+    app->structure_strain_ttl = 0U;
     app->scene_valid = 0;
     app->global_bark_tick = 0U;
     memset(app->banners, 0, sizeof(app->banners));
@@ -6572,13 +6596,13 @@ static void demo_register_kill(demo_app *app,
     int target_local = event->target < (vox_u16)app->local_players;
     if (event->source < demo_match.rules.player_count &&
         event->source != event->target) {
-        sprintf(line, "%s > %s", demo_player_name(app, event->source),
+        sprintf(line, "%s FIRED %s", demo_player_name(app, event->source),
                 demo_player_name(app, event->target));
     } else if (event->target < demo_match.rules.player_count) {
-        sprintf(line, "%s LOST TO THE MINE",
+        sprintf(line, "%s CLOCKED OUT!",
                 demo_player_name(app, event->target));
     } else {
-        strcpy(line, "THE MINE CLAIMED ANOTHER");
+        strcpy(line, "CLOCKED OUT!");
     }
     demo_add_killfeed(app, line);
     if (event->target < DEMO_LOCAL_MAX) {
@@ -6598,11 +6622,11 @@ static void demo_register_kill(demo_app *app,
         app->last_kill_tick[source] = event->tick;
         ++app->spree_count[source];
         if (target_local) {
-            sprintf(line, "%s KILLED %s",
+            sprintf(line, "%s FIRED %s",
                     demo_player_name(app, event->source),
                     demo_player_name(app, event->target));
         } else {
-            sprintf(line, "YOU KILLED %s",
+            sprintf(line, "YOU FIRED %s",
                     demo_player_name(app, event->target));
         }
         demo_set_banner(app, line, 0);
@@ -6621,10 +6645,10 @@ static void demo_register_kill(demo_app *app,
     } else if (target_local) {
         if (event->source < demo_match.rules.player_count &&
             event->source != event->target) {
-            sprintf(line, "KILLED BY %s",
+            sprintf(line, "FIRED BY %s",
                     demo_player_name(app, event->source));
         } else {
-            strcpy(line, "THE MINE GOT YOU");
+            strcpy(line, "YOU CLOCKED OUT!");
         }
         demo_set_banner(app, line, 0);
     }
@@ -6789,9 +6813,11 @@ static void demo_process_events(demo_app *app)
         } else if (event->type == VOX_DIGS_EVENT_STRUCTURE_STRAIN) {
             demo_audio_emit(app, VOX_AUDIO_PRESET_HIT,
                             event->variant, pan);
-            if (demo_event_is_local(app, event)) {
-                demo_set_banner(app, "CRACKING...", 0);
-            }
+            /* Structural strain is useful instrumentation, but a normal
+             * narrow tunnel must not read as a cave-in warning.  Retain it
+             * exclusively for F1's debug pane. */
+            app->structure_strain = event->magnitude;
+            app->structure_strain_ttl = 90U;
         } else if (event->type == VOX_DIGS_EVENT_CAVE_IN) {
             demo_audio_emit(app, VOX_AUDIO_PRESET_EXPLOSION,
                             event->variant, pan);
@@ -6964,6 +6990,7 @@ static void demo_tick_presentation(demo_app *app)
         if (app->banners[slot].ttl > 0U) --app->banners[slot].ttl;
     }
     if (app->death_camera_hold > 0U) --app->death_camera_hold;
+    if (app->structure_strain_ttl > 0U) --app->structure_strain_ttl;
     demo_update_ambience(app);
 }
 
@@ -6996,6 +7023,13 @@ static void demo_tick_results(demo_app *app)
 
 static void demo_tick(demo_app *app)
 {
+    if (app->screen == DEMO_REPLAY) {
+        demo_tick_results(app);
+        if (!app->replay_playing && demo_match.replay.active == 0U) {
+            app->screen = DEMO_RESULTS;
+        }
+        return;
+    }
     if (app->screen == DEMO_RESULTS) {
         demo_tick_results(app);
         return;
@@ -7021,7 +7055,8 @@ static void demo_tick(demo_app *app)
     demo_haptics_tick(app);
     demo_tick_presentation(app);
     if (demo_match.phase == VOX_DIGS_RESULTS) {
-        app->screen = DEMO_RESULTS;
+        app->screen = demo_match.replay.active != 0U ?
+                      DEMO_REPLAY : DEMO_RESULTS;
     }
 }
 
@@ -8659,8 +8694,8 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench,
          * baseline, not a wall-clock performance claim. */
         } else if (ticks == 600U &&
                    (fired != 20U || explosions != 16U || crushes != 0U ||
-                    max_effects != 1009U || max_awake != 3873U ||
-                    demo_match.state_hash != (vox_u32)0x91A34D75UL)) {
+                    max_effects != 994U || max_awake != 3873U ||
+                    demo_match.state_hash != (vox_u32)0xD4E9C882UL)) {
             fprintf(stderr,
                     "load self-test: canonical 600-tick activity/hash "
                     "mismatch\n");
@@ -9694,9 +9729,9 @@ static int demo_camera_self_test(void)
     return 0;
 }
 
-/* Exercise the result-only replay controls without a display.  The ledger is
- * intentionally outside vox_digs_hash, so pacing or reframing it must never
- * change the match the replay is describing. */
+/* Exercise the dedicated replay-view controls without a display.  The ledger
+ * is intentionally outside vox_digs_hash, so pacing or reframing it must
+ * never change the match the replay is describing. */
 static int demo_replay_presentation_self_test(void)
 {
     demo_app app;
@@ -9731,25 +9766,32 @@ static int demo_replay_presentation_self_test(void)
     demo_match.replay.frames[1].tick = 124U;
     demo_match.replay.frames[1].player_x_q16[0] = 204L << 16;
     demo_match.replay.frames[1].player_x_q16[1] = 216L << 16;
+    app.screen = DEMO_REPLAY;
     hash_before = vox_digs_hash(&demo_match);
-    demo_tick_results(&app);
+    demo_tick(&app);
     if (app.replay_playing == 0U || app.replay_frame_valid == 0U ||
         app.replay_frame_hold_ticks != DEMO_REPLAY_FRAME_HOLD_TICKS ||
-        demo_match.replay.play_cursor != 1U) return 2;
+        demo_match.replay.play_cursor != 1U || app.screen != DEMO_REPLAY)
+        return 2;
     demo_update_replay_camera(&app);
     if (app.camera_world_x < 180.0 || app.camera_world_x > 240.0 ||
         app.camera_scale < 3.0) return 3;
     for (tick = 0U; tick < DEMO_REPLAY_FRAME_HOLD_TICKS; ++tick) {
-        demo_tick_results(&app);
+        demo_tick(&app);
         if (demo_match.replay.play_cursor != 1U) return 4;
     }
-    demo_tick_results(&app);
+    demo_tick(&app);
     if (demo_match.replay.play_cursor != 2U ||
         demo_match.replay.active != 0U || app.replay_hold_ticks != 30U) {
         return 5;
     }
     hash_after = vox_digs_hash(&demo_match);
     if (hash_after != hash_before) return 6;
+    for (tick = 0U; tick <= 30U; ++tick) {
+        demo_tick(&app);
+    }
+    if (app.screen != DEMO_RESULTS || app.replay_playing != 0U ||
+        app.replay_frame_valid != 0U) return 7;
     printf("DIGS replay presentation self-test passed hold=%u zoom=%.2f\n",
            (unsigned int)DEMO_REPLAY_FRAME_HOLD_TICKS, app.camera_scale);
     return 0;

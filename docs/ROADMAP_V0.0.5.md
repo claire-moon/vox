@@ -62,6 +62,12 @@ The following decisions are locked for v0.0.5:
   CTest tests including the long deterministic match gate, focused
   fluid/rigid/cluster/gameplay tests, and SDL settings/chronicle/haptic
   self-tests. Those are source/build gates, not a substitute for human QA.
+- Feedback hardening keeps jointed corpse segments out of their own contact
+  pairs, so they settle rather than jittering as suspended organs.  Blood and
+  flesh effects now have a short, heavy ballistic pass: blood deposits into
+  the authoritative fluid world on impact and neither material remains a
+  long-lived airborne cloud.  `CRACKING...` is debug-only; ordinary play
+  reserves its alert text for an actual `CAVE-IN!`.
 
 Still open before calling v0.0.5 complete: complete connected-volume
 support/load analysis beyond the bounded cascade fragments, the recorded
@@ -163,7 +169,7 @@ Each weapon has specific notes in `v004changes.txt`. Summarised:
 | PULASKI | Cut through terrain and miners like butter; bigger spinning-axe graphic; nasty deaths |
 | POPPER | Semi-auto explosive-bullet pistol; poor damage, tears terrain; 3–4 shots pop a limb; good for digging |
 | SMOKER | Trail of smoke; explosion obscures the battlefield; higher cooldown; stop bouncing after a direct hit; thud/clink sounds; chargeable throw |
-| HOT RAIL | Fix the tunnel-digging self-kill; click = fire bullet (low damage, high burn), hold = tunnel |
+| HOT RAIL | Click = low-damage, high-burn bullet; hold = safe tunnel bore that heats but never leaves lava under its user |
 | HYDROSHOT | Subtle kickback usable as extra steampack fuel; much more water; drowning |
 | GIANT FUCKING HAMMER | Red Faction Guerrilla scale; throws soil in every direction; tumbles landscapes |
 | BOLT ACTION | R8-style revolver; hold one second, powerful shot, knockback, smoke puff; visible hot-steel bolt that impales and severs |
@@ -174,6 +180,12 @@ Each weapon has specific notes in `v004changes.txt`. Summarised:
 
 Plus: **muzzle flashes for all projectile weapons**, each a small particle
 explosion with smoke wisps and a light flash on the shooter.
+
+The first mechanics tranche implements the HOT RAIL split above.  Its public
+single-fire API and a tap now stop at the first solid target and scorch it;
+only continuous fire enters the bounded excavation path.  The headless gate
+proves the tap leaves the seam intact, the hold opens it, and neither path
+creates lava in the bore.
 
 ### A6. Red Faction-style cluster collapse
 

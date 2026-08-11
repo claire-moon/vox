@@ -4147,14 +4147,48 @@ static int test_hot_rail_bore_leaves_no_lava(void)
         vox_digs_match_step(&match) != VOX_OK) {
         return 3;
     }
-    /* The seam must be scorched, never molten. */
+    /* A tap is an incendiary shot, not a tunnel edit. */
+    for (y = center_y - 2L; y <= center_y + 2L; ++y) {
+        for (x = center_x + 2L; x <= center_x + 8L; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                const vox_cell *cell = vox_world_cell(&match.world,
+                    (vox_u32)x, (vox_u32)y, z);
+                if (cell == 0 || cell->material != VOX_MAT_COAL) {
+                    return 4;
+                }
+            }
+        }
+    }
+    for (x = 0L; x < 8L; ++x) {
+        if (vox_digs_submit_input(&match, &input) != VOX_OK ||
+            vox_digs_match_step(&match) != VOX_OK) {
+            return 5;
+        }
+    }
+    /* Holding after the tap follows the dedicated safe bore path. */
+    {
+        int found_open = 0;
+        for (y = center_y - 2L; y <= center_y + 2L; ++y) {
+            for (x = center_x + 2L; x <= center_x + 8L; ++x) {
+                for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                    const vox_cell *cell = vox_world_cell(&match.world,
+                        (vox_u32)x, (vox_u32)y, z);
+                    if (cell != 0 && cell->material == VOX_MAT_AIR) {
+                        found_open = 1;
+                    }
+                }
+            }
+        }
+        if (!found_open) return 6;
+    }
+    /* The seam may be scorched or open, but must never become lava. */
     for (y = center_y - 2L; y <= center_y + 2L; ++y) {
         for (x = center_x + 2L; x <= center_x + 8L; ++x) {
             for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
                 const vox_cell *cell = vox_world_cell(&match.world,
                     (vox_u32)x, (vox_u32)y, z);
                 if (cell != 0 && cell->material == VOX_MAT_LAVA) {
-                    return 4;
+                    return 7;
                 }
             }
         }

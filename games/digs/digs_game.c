@@ -95,6 +95,8 @@
 #define DIGS_RAIL_STONE_COST 72U
 #define DIGS_RAIL_RECOIL_Q16 98304L
 #define DIGS_PROJECTILE_GRAVITY_Q16 6144L
+#define DIGS_GORE_GRAVITY_Q16 6144L
+#define DIGS_GORE_TERMINAL_FALL_Q16 (3L << 16)
 #define DIGS_PULASKI_CHARGE_TICKS 60U
 #define DIGS_PULASKI_RETURN_TICKS 24U
 #define DIGS_BOLT_CHARGE_TICKS 30U
@@ -4999,9 +5001,9 @@ static void digs_spawn_death_gore(vox_digs_match *match, vox_u16 victim,
             vox_i32 wound_x = x_q16 + box.offset_x_q16;
             vox_i32 wound_y = y_q16 + box.offset_y_q16;
             digs_spawn_effect_variant(match, VOX_MAT_FLESH, wound_x, wound_y,
-                direction_x * (24576L + (vox_i32)(noise % 5U) * 4096L),
-                -12288L - (vox_i32)((noise >> 8) % 9U) * 4096L,
-                (vox_u16)(54U + noise % 48U), victim, part);
+                direction_x * (16384L + (vox_i32)(noise % 5U) * 2048L),
+                -8192L - (vox_i32)((noise >> 8) % 5U) * 2048L,
+                (vox_u16)(18U + noise % 24U), victim, part);
             digs_emit_event(match, VOX_DIGS_EVENT_LIMB_SEVER, killer,
                             victim, weapon, VOX_MAT_FLESH, wound_x, wound_y,
                             part, (vox_u16)(noise & 15U));
@@ -5028,11 +5030,11 @@ static void digs_spawn_death_gore(vox_digs_match *match, vox_u16 victim,
         vox_i32 velocity_x = direction_x * (8192L +
                              (vox_i32)(noise % 9U) * 4096L) +
                              ((vox_i32)((noise >> 4) % 5U) - 2L) * 2048L;
-        vox_i32 velocity_y = -8192L -
-            (vox_i32)((noise >> 7) % 18U) * 4608L;
+        vox_i32 velocity_y = -4096L -
+            (vox_i32)((noise >> 7) % 8U) * 2048L;
         digs_spawn_effect_variant(match, VOX_MAT_BLOOD, x_q16, y_q16,
                                   velocity_x, velocity_y,
-                                  (vox_u16)(38U + noise % 90U), victim,
+                                  (vox_u16)(22U + noise % 34U), victim,
                                   (vox_u16)(noise & 31U));
     }
 }
@@ -6849,9 +6851,9 @@ static void digs_sever_limb_chain(vox_digs_match *match, vox_u16 attacker,
             digs_spawn_effect_variant(match, VOX_MAT_FLESH,
                 wound_x_q16 + ((vox_i32)(noise % 7U) - 3L) * 4096L,
                 wound_y_q16 + ((vox_i32)((noise >> 5) % 5U) - 2L) * 4096L,
-                ((vox_i32)((noise >> 9) % 17U) - 8L) * 6144L,
-                -12288L - (vox_i32)((noise >> 15) % 10U) * 4096L,
-                (vox_u16)(54U + noise % 72U), victim,
+                ((vox_i32)((noise >> 9) % 17U) - 8L) * 4096L,
+                -8192L - (vox_i32)((noise >> 15) % 5U) * 2048L,
+                (vox_u16)(18U + noise % 24U), victim,
                 (vox_u16)((candidate << 3) | gib));
         }
         if (attacker != VOX_DIGS_NO_PLAYER && attacker != victim) {
@@ -6970,11 +6972,11 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
         vox_i32 spread_x = impact_direction_x *
             (8192L + (vox_i32)(noise % 9U) * 4096L) +
             ((vox_i32)((noise >> 4) % 5U) - 2L) * 2048L;
-        vox_i32 spread_y = -10240L -
-            (vox_i32)((noise >> 8) % 13U) * 4096L;
+        vox_i32 spread_y = -4096L -
+            (vox_i32)((noise >> 8) % 6U) * 2048L;
         digs_spawn_effect_variant(match, VOX_MAT_BLOOD,
             wound_x_q16, wound_y_q16,
-            spread_x, spread_y, (vox_u16)(34U + noise % 60U), victim,
+            spread_x, spread_y, (vox_u16)(20U + noise % 30U), victim,
             (vox_u16)((part << 4) | (noise & 15U)));
     }
     {
@@ -7663,8 +7665,12 @@ static vox_result digs_fire_popper(vox_digs_match *match, vox_u16 player,
     return VOX_OK;
 }
 
+/* A tap is a low-damage, high-heat sidearm shot.  Only a held fire action
+ * reaches the tunnel branch, so a quick click can never accidentally cut a
+ * player into their own hot-rail bore. */
 static vox_result digs_fire_hot_rail(vox_digs_match *match, vox_u16 player,
-                                     vox_u32 target_x, vox_u32 target_y)
+                                     vox_u32 target_x, vox_u32 target_y,
+                                     int tunnel)
 {
     const vox_digs_weapon_properties *properties =
         &digs_weapons[VOX_DIGS_TOOL_HOT_RAIL];
@@ -7721,6 +7727,9 @@ static vox_result digs_fire_hot_rail(vox_digs_match *match, vox_u16 player,
                 (void)vox_world_set(&match->world, (vox_u32)x_cell,
                                     (vox_u32)y_cell, z,
                                     cell->material, 850L << 16);
+            }
+            if (!tunnel) {
+                break;
             }
             if ((step & 7U) == 0U) {
                 (void)digs_blast(match, (vox_u32)x_cell, (vox_u32)y_cell,
@@ -7888,7 +7897,7 @@ vox_result vox_digs_fire_weapon(vox_digs_match *match, vox_u16 player,
     } else if (weapon == VOX_DIGS_TOOL_POPPER) {
         result = digs_fire_popper(match, player, target_x, target_y);
     } else if (weapon == VOX_DIGS_TOOL_HOT_RAIL) {
-        result = digs_fire_hot_rail(match, player, target_x, target_y);
+        result = digs_fire_hot_rail(match, player, target_x, target_y, 0);
     } else if (weapon == VOX_DIGS_TOOL_BORE_DRILL) {
         result = digs_fire_bore_drill(match, player);
     } else if (weapon == VOX_DIGS_TOOL_BOLT_ACTION) {
@@ -8053,6 +8062,26 @@ static void digs_step_weapon_input(vox_digs_match *match, vox_u16 player)
             }
         } else if (match->rail_charging[player]) {
             digs_release_rail(match, player);
+        }
+        return;
+    }
+    if (weapon == VOX_DIGS_TOOL_HOT_RAIL) {
+        if ((actions & VOX_DIGS_ACTION_FIRE) != 0U &&
+            match->weapon_cooldown[player] == 0U) {
+            if ((match->previous_actions[player] & VOX_DIGS_ACTION_FIRE) ==
+                0U) {
+                (void)vox_digs_fire_weapon(match, player, weapon,
+                                           match->aim_x[player],
+                                           match->aim_y[player]);
+            } else if (digs_fire_hot_rail(match, player,
+                                          match->aim_x[player],
+                                          match->aim_y[player], 1) == VOX_OK) {
+                digs_commit_weapon_fire(match, player, weapon,
+                                        match->aim_x[player],
+                                        match->aim_y[player],
+                                        digs_weapons[weapon].damage,
+                                        (vox_u16)(match->tick & 31U));
+            }
         }
         return;
     }
@@ -9815,7 +9844,13 @@ static void digs_step_effects(vox_digs_match *match)
         if (!effect->active) {
             continue;
         }
-        if (effect->material != VOX_MAT_SMOKE) {
+        if (effect->material == VOX_MAT_BLOOD ||
+            effect->material == VOX_MAT_FLESH) {
+            effect->velocity_y_q16 += DIGS_GORE_GRAVITY_Q16;
+            if (effect->velocity_y_q16 > DIGS_GORE_TERMINAL_FALL_Q16) {
+                effect->velocity_y_q16 = DIGS_GORE_TERMINAL_FALL_Q16;
+            }
+        } else if (effect->material != VOX_MAT_SMOKE) {
             effect->velocity_y_q16 += 2048L;
         }
         previous_x = effect->position_x_q16;

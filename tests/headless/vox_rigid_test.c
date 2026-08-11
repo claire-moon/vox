@@ -29,6 +29,7 @@ int main(void)
     vox_rigid_world wet_world;
     vox_rigid_world wall_world;
     vox_rigid_world ceiling_world;
+    vox_rigid_world jointed_world;
     vox_fluid_world fluids;
     vox_u16 a;
     vox_u16 b;
@@ -144,6 +145,26 @@ int main(void)
         ceiling_world.bodies[a].velocity_y_q16 <= 0L) {
         fprintf(stderr, "rigid swept ceiling contact failed\n");
         return 16;
+    }
+    /* Adjacent anatomy segments are constrained by a joint, not pushed apart
+     * by a second self-contact solver.  This prevents corpse segments from
+     * jittering indefinitely and looking like suspended organs. */
+    vox_rigid_init(&jointed_world);
+    if (vox_rigid_spawn(&jointed_world, &a, 100L << 16, 3L << 16,
+                        32768L, 32768L, 65536L,
+                        VOX_RIGID_BODY_CORPSE) != VOX_OK ||
+        vox_rigid_spawn(&jointed_world, &b, 100L << 16, 3L << 16,
+                        32768L, 32768L, 65536L,
+                        VOX_RIGID_BODY_CORPSE) != VOX_OK ||
+        vox_rigid_joint_add(&jointed_world, &joint, a, b, 0L,
+                            -32768L, 32768L) != VOX_OK ||
+        vox_rigid_step(&jointed_world, &terrain, 4096L) != VOX_OK ||
+        jointed_world.bodies[a].position_x_q16 !=
+        jointed_world.bodies[b].position_x_q16 ||
+        jointed_world.bodies[a].position_y_q16 !=
+        jointed_world.bodies[b].position_y_q16) {
+        fprintf(stderr, "jointed corpse self-contact exclusion failed\n");
+        return 17;
     }
     printf("rigid body gravity, joints, angular state and determinism passed\n");
     return 0;

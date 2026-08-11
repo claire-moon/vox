@@ -114,6 +114,17 @@ int main(void)
             (vox_u16)(match.players[1].position_x.value_q16 >> 16),
             (vox_u16)(match.players[1].position_y.value_q16 >> 16), 0U) == 0 ||
         !saw_event(&match, VOX_DIGS_EVENT_HEADSHOT)) return 3;
+    /* Gore is a short ballistic presentation of a real blood deposit, not a
+     * cloud of long-lived floating organ pixels. */
+    for (i = 0U; i < match.rules.fx_budget; ++i) {
+        const vox_digs_effect *effect = &match.effects[i];
+        if (!effect->active ||
+            (effect->material != VOX_MAT_BLOOD &&
+             effect->material != VOX_MAT_FLESH)) {
+            continue;
+        }
+        if (effect->ttl_ticks > 55U) return 90;
+    }
     if (vox_world_set(&match.world, 100U, 100U, 0U, VOX_MAT_METAL,
                       20L << 16) != VOX_OK ||
         vox_world_set_fixture(&match.world, 100U, 100U, 0U, 1U) != VOX_OK) {
