@@ -4166,6 +4166,25 @@ static void demo_voxelize_rigid_bodies(void)
     }
 }
 
+/* Fluids are authoritative volumes, but the software renderer owns their
+ * visible top layer.  Without this bridge blood pooled correctly in the
+ * simulation yet vanished beneath the terrain image. */
+static void demo_voxelize_fluids(void)
+{
+    vox_u16 index;
+    for (index = 0U; index < demo_match.fluids.active_cells; ++index) {
+        const vox_fluid_cell *fluid = &demo_match.fluids.cells[index];
+        vox_u16 material = VOX_MAT_AIR;
+        if (fluid->active == 0U || fluid->volume_q16 <= 0L) continue;
+        if (fluid->material == VOX_FLUID_WATER) material = VOX_MAT_WATER;
+        else if (fluid->material == VOX_FLUID_LAVA) material = VOX_MAT_LAVA;
+        else if (fluid->material == VOX_FLUID_BLOOD) material = VOX_MAT_BLOOD;
+        if (material != VOX_MAT_AIR) {
+            demo_render_voxel((int)fluid->x, (int)fluid->y, material);
+        }
+    }
+}
+
 static void demo_build_render_world(demo_app *app)
 {
     vox_u16 player;
@@ -4174,6 +4193,7 @@ static void demo_build_render_world(demo_app *app)
      * Give that exact boundary a top-layer voxel horizon so bedrock or deep
      * terrain cannot visually hide the rising hazard. */
     demo_voxelize_lava_horizon();
+    demo_voxelize_fluids();
     demo_voxelize_rigid_bodies();
     demo_voxelize_dropship();
     for (player = 0U; player < VOX_DIGS_MAX_SLOTS; ++player) {
@@ -5600,7 +5620,49 @@ static void demo_draw_results(demo_app *app)
 static void demo_draw_replay(demo_app *app)
 {
     char line[64];
+    int player;
+    int replay_applied = 0;
+    vox_i32 saved_x[VOX_DIGS_MAX_SLOTS];
+    vox_i32 saved_y[VOX_DIGS_MAX_SLOTS];
+    vox_i32 saved_previous_x[VOX_DIGS_MAX_SLOTS];
+    vox_i32 saved_previous_y[VOX_DIGS_MAX_SLOTS];
+    vox_u16 saved_alive[VOX_DIGS_MAX_SLOTS];
+    vox_u16 saved_health[VOX_DIGS_MAX_SLOTS];
+    /* The replay world is already reconstructed before rendering.  Apply the
+     * matching captured miner pose for this draw only; the live result state
+     * remains untouched after the frame is presented. */
+    if (app->replay_frame_valid) {
+        for (player = 0; player < (int)VOX_DIGS_MAX_SLOTS; ++player) {
+            saved_x[player] = demo_match.players[player].position_x.value_q16;
+            saved_y[player] = demo_match.players[player].position_y.value_q16;
+            saved_previous_x[player] = app->previous_player_x[player];
+            saved_previous_y[player] = app->previous_player_y[player];
+            saved_alive[player] = demo_match.alive[player];
+            saved_health[player] = demo_match.health[player];
+            demo_match.players[player].position_x.value_q16 =
+                app->replay_frame.player_x_q16[player];
+            demo_match.players[player].position_y.value_q16 =
+                app->replay_frame.player_y_q16[player];
+            demo_match.alive[player] = app->replay_frame.player_alive[player];
+            demo_match.health[player] = app->replay_frame.player_health[player];
+            app->previous_player_x[player] =
+                app->replay_frame.player_x_q16[player];
+            app->previous_player_y[player] =
+                app->replay_frame.player_y_q16[player];
+        }
+        replay_applied = 1;
+    }
     demo_draw_play(app);
+    if (replay_applied) {
+        for (player = 0; player < (int)VOX_DIGS_MAX_SLOTS; ++player) {
+            demo_match.players[player].position_x.value_q16 = saved_x[player];
+            demo_match.players[player].position_y.value_q16 = saved_y[player];
+            demo_match.alive[player] = saved_alive[player];
+            demo_match.health[player] = saved_health[player];
+            app->previous_player_x[player] = saved_previous_x[player];
+            app->previous_player_y[player] = saved_previous_y[player];
+        }
+    }
     demo_dark_panel(75, 5, 170, 24);
     vox_ui_text_center_shadow(&demo_ui, 160, 9, 1, "BEST KILL REPLAY",
                               DEMO_VGA_YELLOW);

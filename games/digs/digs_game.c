@@ -9897,6 +9897,14 @@ static void digs_step_effects(vox_digs_match *match)
         if (effect->ttl_ticks > 0U) {
             effect->ttl_ticks--;
         }
+        /* A short, dense blood burst often spends its entire visual life in
+         * open air.  Its last valid cell is still a real splash location:
+         * feed it to the same persistent-fluid path used for terrain hits so
+         * blood pools rather than silently disappearing with the particle. */
+        if (effect->ttl_ticks == 0U && !terrain_hit && !outside) {
+            digs_deposit_effect_impact(match, effect, x_cell, y_cell,
+                                       x_cell, y_cell);
+        }
         if (terrain_hit || outside || effect->ttl_ticks == 0U) {
             effect->active = 0U;
             if (match->effect_count > 0U) {
