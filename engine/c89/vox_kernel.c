@@ -939,6 +939,48 @@ vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
     return VOX_OK;
 }
 
+vox_result vox_world_set_fixture(vox_world *world, vox_u32 x, vox_u32 y,
+                                 vox_u32 z, vox_u16 fixture)
+{
+    vox_u32 cell_index;
+    vox_cell *cell;
+    vox_chunk *chunk;
+    if (world == 0 || !vox_in_bounds(x, y, z)) {
+        return VOX_ERR_INVALID;
+    }
+    cell_index = vox_index(x, y, z);
+    cell = &world->cells[cell_index];
+    chunk = &world->chunks[vox_chunk_index(x, y)];
+    if (fixture != 0U && cell->material != VOX_MAT_METAL) {
+        return VOX_ERR_INVALID;
+    }
+    if (((cell->flags & VOX_CELL_FIXTURE) != 0U) == (fixture != 0U)) {
+        return VOX_OK;
+    }
+    vox_toggle_cell_signature(chunk, cell_index, cell);
+    if (fixture != 0U) {
+        cell->flags = (vox_u16)(cell->flags | VOX_CELL_FIXTURE);
+    } else {
+        cell->flags = (vox_u16)(cell->flags &
+                                (vox_u16)~VOX_CELL_FIXTURE);
+    }
+    vox_toggle_cell_signature(chunk, cell_index, cell);
+    vox_mark_dirty(chunk);
+    return VOX_OK;
+}
+
+int vox_world_is_fixture(const vox_world *world, vox_u32 x, vox_u32 y,
+                         vox_u32 z)
+{
+    const vox_cell *cell;
+    if (world == 0 || !vox_in_bounds(x, y, z)) {
+        return 0;
+    }
+    cell = &world->cells[vox_index(x, y, z)];
+    return cell->material == VOX_MAT_METAL &&
+           (cell->flags & VOX_CELL_FIXTURE) != 0U;
+}
+
 static vox_result vox_world_set_layer_except_internal(
     vox_world *world, vox_u32 y, vox_u16 material, vox_i32 temperature_q16,
     vox_u16 skip_material, int wake)

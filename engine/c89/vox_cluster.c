@@ -56,12 +56,47 @@ static vox_u16 structure_chunk_index(vox_u32 chunk_x, vox_u32 chunk_y)
     return (vox_u16)(chunk_y * VOX_WORLD_CHUNKS_X + chunk_x);
 }
 
+/*
+ * Direct digging is the common case, so it must not rescan a complete
+ * 16x16x10 support chunk for every single chip in otherwise sound ground.
+ * Strain still records every cut in canonical state.  We wake a safe chunk
+ * when it crosses one of the meaningful structural bands; once analysis has
+ * found any unsupported material, every further disturbance is evaluated
+ * immediately.  Explosions always bypass this amortisation.
+ */
+static int structure_low_impulse_needs_scan(
+    const vox_structure_chunk_state *chunk, vox_u16 old_strain,
+    vox_u16 new_strain)
+{
+    if (chunk->collapse_risk_q8 != 0U) return 1;
+    if (old_strain < 96U && new_strain >= 96U) return 1;
+    if (old_strain < 160U && new_strain >= 160U) return 1;
+    if (old_strain < 224U && new_strain >= 224U) return 1;
+    return 0;
+}
+
 static void structure_mark_chunk(vox_structure_state *state, vox_u16 index,
                                  vox_u16 source, vox_u16 weapon,
-                                 vox_u16 arm_collapse)
+                                 vox_u16 arm_collapse,
+                                 vox_u16 impulse_q8)
 {
     vox_structure_chunk_state *chunk = &state->chunks[index];
+    vox_u16 queue_scan = 1U;
     if (arm_collapse != 0U) {
+        vox_u32 strain = (vox_u32)chunk->strain_q8 + impulse_q8;
+        vox_u16 old_strain = chunk->strain_q8;
+        chunk->strain_q8 = strain > 255U ? 255U : (vox_u16)strain;
+        if (old_strain < 96U && chunk->strain_q8 >= 96U) {
+            chunk->warning_pending = 1U;
+        }
+        if (impulse_q8 < 96U &&
+            !structure_low_impulse_needs_scan(chunk, old_strain,
+                                               chunk->strain_q8)) {
+            queue_scan = 0U;
+        }
+        if (queue_scan == 0U) {
+            return;
+        }
         chunk->collapse_armed = 1U;
         chunk->source = source;
         chunk->weapon = weapon;
@@ -75,6 +110,15 @@ static void structure_mark_chunk(vox_structure_state *state, vox_u16 index,
                     VOX_STRUCTURE_FRONTIER_CAPACITY] = index;
     state->frontier_count++;
     chunk->dirty = 1U;
+}
+
+static vox_u16 structure_collapse_roll(const vox_structure_state *state,
+                                       vox_u16 index)
+{
+    vox_u32 value = state->tick * 1103515245U + 12345U;
+    value ^= (vox_u32)index * 2654435761U;
+    value ^= (vox_u32)state->cascade_count * 2246822519U;
+    return (vox_u16)(value & 255U);
 }
 
 static void structure_queue_collapse(vox_structure_state *state,
@@ -370,6 +414,8 @@ void vox_structure_init(vox_structure_state *state)
         state->chunks[i].load_q8 = 0U;
         state->chunks[i].dirty = 1U;
         state->chunks[i].collapse_risk_q8 = 0U;
+        state->chunks[i].strain_q8 = 0U;
+        state->chunks[i].warning_pending = 0U;
         state->chunks[i].collapse_armed = 0U;
         state->chunks[i].collapse_pending = 0U;
         state->chunks[i].source = VOX_STRUCTURE_NO_SOURCE;
@@ -400,6 +446,17 @@ vox_result vox_structure_invalidate_with_cause(vox_structure_state *state,
                                                vox_u16 source,
                                                vox_u16 weapon)
 {
+    return vox_structure_invalidate_with_impulse(
+        state, x, y, radius, source, weapon, 32U);
+}
+
+vox_result vox_structure_invalidate_with_impulse(vox_structure_state *state,
+                                                 vox_u32 x, vox_u32 y,
+                                                 vox_u32 radius,
+                                                 vox_u16 source,
+                                                 vox_u16 weapon,
+                                                 vox_u16 impulse_q8)
+{
     vox_i32 min_x;
     vox_i32 max_x;
     vox_i32 min_y;
@@ -427,7 +484,8 @@ vox_result vox_structure_invalidate_with_cause(vox_structure_state *state,
              chunk_x <= max_x / (vox_i32)VOX_CHUNK_WIDTH; ++chunk_x) {
             vox_u16 index = structure_chunk_index((vox_u32)chunk_x,
                                                    (vox_u32)chunk_y);
-            structure_mark_chunk(state, index, source, weapon, 1U);
+            structure_mark_chunk(state, index, source, weapon, 1U,
+                                 impulse_q8);
         }
     }
     return VOX_OK;
@@ -501,9 +559,26 @@ vox_result vox_structure_step(vox_structure_state *state,
             state->cascade_count++;
         }
         if (collapse_armed != 0U && candidate_found != 0U) {
-            structure_queue_collapse(state, index, candidate_x, candidate_y,
-                                     candidate_z,
-                                     state->chunks[index].collapse_risk_q8);
+            vox_u16 strain = state->chunks[index].strain_q8;
+            vox_u16 risk = state->chunks[index].collapse_risk_q8;
+            vox_u16 chance = 0U;
+            if (strain >= 160U) {
+                vox_u32 value = (vox_u32)(strain - 160U) * 3U + risk / 2U;
+                chance = value > 255U ? 255U : (vox_u16)value;
+            }
+            if (strain >= 224U ||
+                (chance != 0U && structure_collapse_roll(state, index) <
+                 chance)) {
+                structure_queue_collapse(state, index, candidate_x,
+                                         candidate_y, candidate_z,
+                                         risk);
+                state->chunks[index].strain_q8 = 0U;
+            }
+        } else if (state->chunks[index].strain_q8 > 0U) {
+            /* Stable terrain slowly loses old stress on subsequent bounded
+             * evaluations, so a single harmless chip cannot doom a tunnel
+             * forever. */
+            state->chunks[index].strain_q8--;
         }
         state->chunks[index].collapse_armed = 0U;
         state->frontier_cursor = index;
@@ -576,6 +651,8 @@ vox_u32 vox_structure_hash(const vox_structure_state *state)
         hash = structure_hash_mix(hash, state->chunks[i].load_q8);
         hash = structure_hash_mix(hash, state->chunks[i].dirty);
         hash = structure_hash_mix(hash, state->chunks[i].collapse_risk_q8);
+        hash = structure_hash_mix(hash, state->chunks[i].strain_q8);
+        hash = structure_hash_mix(hash, state->chunks[i].warning_pending);
         hash = structure_hash_mix(hash, state->chunks[i].collapse_armed);
         hash = structure_hash_mix(hash, state->chunks[i].collapse_pending);
         hash = structure_hash_mix(hash, state->chunks[i].source);

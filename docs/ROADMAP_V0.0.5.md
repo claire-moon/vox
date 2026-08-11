@@ -55,16 +55,20 @@ The following decisions are locked for v0.0.5:
   Water, lava, and blood share the persistent fluid path; corpses and detached
   debris share the rigid pool; and headshots, kill healing, cave-ins, grapple
   targeting, and dropship events are hashed through the match state where
-  appropriate.
+  appropriate. Authored fixtures are explicitly tagged rather than inferred
+  from ordinary metal, so only FIRECRACKER/POPPER explosive fractures may
+  turn them into non-anchor scrap.
 - The current implementation increment is covered by strict C90 builds, 31
   CTest tests including the long deterministic match gate, focused
   fluid/rigid/cluster/gameplay tests, and SDL settings/chronicle/haptic
   self-tests. Those are source/build gates, not a substitute for human QA.
 
 Still open before calling v0.0.5 complete: complete connected-volume
-support/load analysis beyond the bounded cascade fragments, large-world fluid
-capacity/performance qualification, and the remaining palette/animation art
-pass. An exact imported
+support/load analysis beyond the bounded cascade fragments, the recorded
+named-machine p99 result from `digs_demo --performance-stress-self-test`, and
+the remaining palette/animation art pass. The reproducible counterpart is
+`tools/vox-destruction-stress.sh`, which runs 18,000 fixed ticks of four-miner
+destruction and compares only canonical work counters. An exact imported
 DOOM palette is additionally blocked until its asset provenance is approved
 under the repository policy. Payload/performance qualification after all
 changes and the manual scenarios listed below also remain required.
@@ -177,12 +181,18 @@ explosion with smoke wisps and a light flash on the shooter.
   in, or kill by blowing a chunk out of a ceiling. Voxel *groups* carry their
   own state so clusters behave as clusters. Craters should pool debris rather
   than leaving Worms-style circles.
-- **Today:** blasts invalidate a hashed, match-owned chunk support/load frontier,
-  extract bounded six-neighbour clusters, emit cave-in awards/events, and hand
-  detached material to rigid debris. Detached bodies settle up to sixteen loose
-  cells of their recorded material and hash any explicit remainder. A
-  cross-chunk regression proves a wide roof proceeds as multiple fragments;
-  whole-world extraction and large-cascade presentation remain open.
+- **Today:** direct cuts add low, hashed strain and are amortised across
+  structural thresholds; a sound chunk can therefore support a normal narrow
+  tunnel without repeatedly scanning or collapsing it. Blasts cross the
+  critical threshold immediately. Once a chunk is actually unsafe, every new
+  disturbance evaluates it, warnings precede the physical result, and only a
+  detached group of sixteen or more cells produces the `CAVE-IN!` banner.
+  Detached material becomes bounded rigid debris, so only actual debris or a
+  trap can hurt a miner. Oversized fragments deliberately re-arm their edge
+  frontier at blast strength, preserving a deterministic cross-map cascade
+  without escalating small collapses into a whole-world scan. Detached bodies
+  settle up to sixteen loose cells of their recorded material and hash any
+  explicit remainder.
 
 ---
 
@@ -228,7 +238,8 @@ explosion with smoke wisps and a light flash on the shooter.
   clouds; no sun but a small white moon on the top layer; a puppet-theatre feel
   where the world unfurls behind the action.
 - **Today:** the SDL2 port has a restrained air-only fog bias and a
-  seed-derived white moon. The prior parallax silhouettes and per-cell cloud
+  seed-derived white moon placed below the HUD-safe top strip. The prior
+  parallax silhouettes and per-cell cloud
   dither are deliberately deferred: at the target resolution they competed
   with terrain and made the new physical debris read as visual noise. This is
   a compatible fallback, not a claim that the requested full raymarched
@@ -296,8 +307,8 @@ A self-contained feature, and the most novel thing in the release.
   while an intentionally intersecting launched miner is still splattered. Its
   default core state is departed until the host calls `vox_digs_dropship_begin`,
   so ground-based deterministic tools do not acquire an invisible ship. Its
-  deep announcer says `FIRE TO
-  LAUNCH!`, and the lava alarm delivers `PILOT: LAVA RISING. EXTRACT NOW!`
+  deep announcer opens each route with `OVER AND OUT!`, and the lava alarm
+  delivers `PILOT: LAVA RISING. EXTRACT NOW!`
   through the same bark/audio path. Physical acceptance remains open.
 
 ---
@@ -341,9 +352,14 @@ implemented authored contextual bark corpus, not a selectable persona system.
 
 - **Asked for:** a Worms-style slow-motion replay of the match's best kill,
   chosen by killstreak / most kills in one shot / similar. Post-game awards
-  ("Pyromaniac", "Grave Digger"). **These feed back into the bark and memory
-  systems** so bots remember what you won and what they won, and rivalries or
-  favour form from it.
+  feed back into the bark and memory systems so bots remember what you won and
+  what they won, and rivalries or favour form from it.
+- **Locked diction:** `FIREBRAND!`, `REAPER!`, `HOTSHOT!`, `MOLERAT!`, and
+  `SKYJOCKEY!` replace the earlier displayed names. `MOLERAT!` is behavioral:
+  it is awarded only after successful direct use of PULASKI, HOT RAIL, GIANT
+  HAMMER, or BORING DRILL for more than half a finite match, or 7,200 ticks in
+  an unlimited one. Count at most once per tick; misses, explosions, combat,
+  and cave-in collateral never count.
 - **Note:** E4 is the natural bridge between v0.0.4's memory system and
   v0.0.5's spectacle. It is listed last but it is the item most likely to make
   the memory system *feel* present, which is the open question v0.0.4 left.

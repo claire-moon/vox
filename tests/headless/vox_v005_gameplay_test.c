@@ -115,7 +115,18 @@ int main(void)
             (vox_u16)(match.players[1].position_y.value_q16 >> 16), 0U) == 0 ||
         !saw_event(&match, VOX_DIGS_EVENT_HEADSHOT)) return 3;
     if (vox_world_set(&match.world, 100U, 100U, 0U, VOX_MAT_METAL,
-                      20L << 16) != VOX_OK) return 4;
+                      20L << 16) != VOX_OK ||
+        vox_world_set_fixture(&match.world, 100U, 100U, 0U, 1U) != VOX_OK) {
+        return 4;
+    }
+    /* Direct tools may strike a fixture, but only a qualifying explosive
+     * removes its anchor capability.  In particular, the Pulaski must not
+     * turn into an invisible radial fixture shockwave. */
+    if (vox_digs_use_tool(&match, 0U, VOX_DIGS_TOOL_PULASKI,
+                          100U, 100U, 0U) != VOX_OK ||
+        !vox_world_is_fixture(&match.world, 100U, 100U, 0U) ||
+        !saw_event(&match, VOX_DIGS_EVENT_WEAPON_FIRE) ||
+        saw_event(&match, VOX_DIGS_EVENT_FIXTURE_BREAK)) return 30;
     if (vox_digs_use_tool(&match, 0U, VOX_DIGS_TOOL_FIRECRACKER,
                           100U, 100U, 0U) != VOX_OK) {
         fprintf(stderr, "fixture blast failed\n");
@@ -156,8 +167,12 @@ int main(void)
                       VOX_MAT_STONE, 0L) != VOX_OK ||
         vox_world_set(&fixture_match.world, 101U, 100U, 0U,
                       VOX_MAT_METAL, 0L) != VOX_OK ||
+        vox_world_set_fixture(&fixture_match.world, 101U, 100U, 0U,
+                              1U) != VOX_OK ||
         vox_world_set(&fixture_match.world, 103U, 100U, 0U,
                       VOX_MAT_METAL, 0L) != VOX_OK ||
+        vox_world_set_fixture(&fixture_match.world, 103U, 100U, 0U,
+                              1U) != VOX_OK ||
         vox_digs_use_tool(&fixture_match, 0U,
                           VOX_DIGS_TOOL_FIRECRACKER,
                           96U, 100U, 0U) != VOX_OK) {
@@ -202,6 +217,8 @@ int main(void)
                       VOX_MAT_STONE, 0L) != VOX_OK ||
         vox_world_set(&fixture_match.world, 111U, 100U, 0U,
                       VOX_MAT_METAL, 0L) != VOX_OK ||
+        vox_world_set_fixture(&fixture_match.world, 111U, 100U, 0U,
+                              1U) != VOX_OK ||
         vox_digs_use_tool(&fixture_match, 0U,
                           VOX_DIGS_TOOL_FIRECRACKER,
                           106U, 100U, 0U) != VOX_OK) {
@@ -224,6 +241,31 @@ int main(void)
         }
     }
     if (fixture_events != 3U || scrap_bodies != 2U) return 88;
+    /* MOLERAT! is earned by sustained successful direct excavation, not by
+     * collateral terrain loss.  Six of ten finite-match ticks exceed half. */
+    vox_digs_rules_classic(&fixture_rules);
+    fixture_rules.player_count = 1U;
+    fixture_rules.bot_mask = 0U;
+    fixture_rules.score_limit = 0U;
+    fixture_rules.match_ticks = 10U;
+    fixture_rules.lava_start_tick = 9U;
+    if (vox_digs_match_init(&fixture_match, &fixture_rules) != VOX_OK) {
+        return 89;
+    }
+    for (i = 0U; i < 6U; ++i) {
+        fixture_match.tick = i;
+        if (vox_world_set(&fixture_match.world, 150U, 120U,
+                          VOX_WORLD_DEPTH - 1U, VOX_MAT_SOIL, 0L) !=
+                VOX_OK ||
+            vox_digs_use_tool(&fixture_match, 0U, VOX_DIGS_TOOL_PULASKI,
+                              150U, 120U,
+                              VOX_WORLD_DEPTH - 1U) != VOX_OK) {
+            return 90;
+        }
+    }
+    if ((fixture_match.awards[0] &
+         (1U << VOX_DIGS_AWARD_MOLERAT)) == 0U ||
+        fixture_match.direct_dig_ticks[0] != 6U) return 91;
     vox_digs_rules_classic(&rope_rules);
     rope_rules.player_count = 1U;
     rope_rules.bot_mask = 0U;
@@ -267,17 +309,17 @@ int main(void)
         if (vox_world_set(&collapse_match.world, (vox_u32)x, 60U, 0U,
                           VOX_MAT_STONE, 0L) != VOX_OK) return 37;
     }
-    if (vox_structure_invalidate_with_cause(&collapse_match.structure,
-                                            82U, 60U, 6U, 0U,
-                                            VOX_DIGS_TOOL_FIRECRACKER) !=
+    if (vox_structure_invalidate_with_impulse(&collapse_match.structure,
+                                              82U, 60U, 6U, 0U,
+                                              VOX_DIGS_TOOL_FIRECRACKER,
+                                              255U) !=
         VOX_OK) return 38;
-    for (i = 0U; i < 12U &&
-         !saw_event(&collapse_match, VOX_DIGS_EVENT_CAVE_IN); ++i) {
+    for (i = 0U; i < 12U; ++i) {
         if (vox_digs_match_step(&collapse_match) != VOX_OK) return 39;
     }
-    if (!saw_event(&collapse_match, VOX_DIGS_EVENT_CAVE_IN) ||
+    if (saw_event(&collapse_match, VOX_DIGS_EVENT_CAVE_IN) ||
         (collapse_match.awards[0] &
-         (1U << VOX_DIGS_AWARD_CAVE_IN_ARTIST)) == 0U) return 40;
+         (1U << VOX_DIGS_AWARD_MOLERAT)) != 0U) return 40;
     for (i = 0U; i < VOX_RIGID_MAX_BODIES; ++i) {
         if ((collapse_match.ragdolls.bodies[i].flags &
              VOX_RIGID_BODY_DEBRIS) != 0U) {
@@ -316,9 +358,9 @@ int main(void)
         if (vox_world_set(&wide_collapse_match.world, (vox_u32)x, 60U,
                           0U, VOX_MAT_STONE, 0L) != VOX_OK) return 76;
     }
-    if (vox_structure_invalidate_with_cause(
+    if (vox_structure_invalidate_with_impulse(
             &wide_collapse_match.structure, 64U, 60U, 6U, 0U,
-            VOX_DIGS_TOOL_FIRECRACKER) != VOX_OK) {
+            VOX_DIGS_TOOL_FIRECRACKER, 255U) != VOX_OK) {
         return 77;
     }
     for (i = 0U; i < 96U; ++i) {
@@ -706,7 +748,10 @@ int main(void)
             VOX_OK ||
         vox_world_set(&rope_match.world, (vox_u32)second_x,
                       (vox_u32)second_y, 0U, VOX_MAT_METAL, 20L << 16) !=
-            VOX_OK || vox_world_sleep_all(&rope_match.world) != VOX_OK) return 9;
+            VOX_OK ||
+        vox_world_set_fixture(&rope_match.world, (vox_u32)second_x,
+                              (vox_u32)second_y, 0U, 1U) != VOX_OK ||
+        vox_world_sleep_all(&rope_match.world) != VOX_OK) return 9;
     rope_input.abi_version = VOX_ABI_VERSION;
     rope_input.struct_size = (vox_u32)sizeof(rope_input);
     rope_input.player = 0U;

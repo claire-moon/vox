@@ -22,11 +22,14 @@
 # Usage:
 #   tools/vox-bench.sh [build-dir]            compare against the baseline
 #   tools/vox-bench.sh --update [build-dir]   rewrite the baseline
+#   VOX_BENCH_STRESS=1 tools/vox-bench.sh ... run five-minute destruction
+#                                            stress with its own baseline
 #
 # Environment:
-#   VOX_BENCH_TICKS      simulation ticks (default 1800)
-#   VOX_BENCH_BASELINE   baseline path (default benchmarks/baseline.txt)
+#   VOX_BENCH_TICKS      simulation ticks (default 1800, or 18000 stress)
+#   VOX_BENCH_BASELINE   baseline path (default mode-specific baseline)
 #   VOX_BENCH_TOLERANCE  permitted work-counter drift, percent (default 10)
+#   VOX_BENCH_STRESS     1 selects the five-minute destruction scenario
 #
 # Exit status:
 #   0  within tolerance
@@ -41,9 +44,20 @@ if [ "${1:-}" = "--update" ]; then
     shift
 fi
 BUILD_DIR=${1:-${VOX_BUILD_DIR:-$ROOT/build}}
-BASELINE=${VOX_BENCH_BASELINE:-$ROOT/benchmarks/baseline.txt}
-TICKS=${VOX_BENCH_TICKS:-1800}
 TOLERANCE=${VOX_BENCH_TOLERANCE:-10}
+STRESS=${VOX_BENCH_STRESS:-0}
+
+case "$STRESS" in
+    0)
+        BASELINE=${VOX_BENCH_BASELINE:-$ROOT/benchmarks/baseline.txt}
+        TICKS=${VOX_BENCH_TICKS:-1800}
+        ;;
+    1)
+        BASELINE=${VOX_BENCH_BASELINE:-$ROOT/benchmarks/destruction-stress-baseline.txt}
+        TICKS=${VOX_BENCH_TICKS:-18000}
+        ;;
+    *) echo "VOX_BENCH_STRESS must be 0 or 1" >&2; exit 2 ;;
+esac
 
 case "$TICKS" in
     ''|*[!0-9]*) echo "VOX_BENCH_TICKS must be a positive integer" >&2; exit 2 ;;
@@ -61,7 +75,11 @@ fi
 
 CURRENT=$(mktemp 2>/dev/null) || { echo "could not create a temp file" >&2; exit 2; }
 trap 'rm -f "$CURRENT"' EXIT INT TERM
-"$BENCH_BIN" "$TICKS" >"$CURRENT"
+if [ "$STRESS" = 1 ]; then
+    "$BENCH_BIN" --stress "$TICKS" >"$CURRENT"
+else
+    "$BENCH_BIN" "$TICKS" >"$CURRENT"
+fi
 
 if [ "$UPDATE" = 1 ]; then
     mkdir -p "$(dirname "$BASELINE")"
