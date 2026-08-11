@@ -70,12 +70,15 @@ The following decisions are locked for v0.0.5:
   reserves its alert text for an actual `CAVE-IN!`.
 - Settled blood no longer occupies a full opaque terrain voxel in the SDL
   renderer.  The port projects each authoritative blood-fluid cell as a
-  bounded, deterministic wet/drying splatter on the dirt or metal that caught
-  it; the same pass reads replay-frame fluids and keeps replay blood/flesh
-  effects as screen-space particles, while the canonical fluid hash remains
-  untouched.  `digs_demo --blood-stain-self-test` proves that the visible
-  splat changes pixels without converting the air cell into blood or mutating
-  the match.
+  bounded, deterministic wet/drying impact field on the dirt or metal that
+  caught it, then carries its marks one to three cells through the visible
+  material face. Floors, walls, and ceilings therefore receive directional,
+  embedded splatters rather than a rim-only red topcoat. The same pass reads
+  replay-frame fluids and keeps replay blood/flesh effects as screen-space
+  particles, while the canonical fluid hash remains untouched.
+  `digs_demo --blood-stain-self-test` proves that the visible splat changes
+  pixels inside solid terrain without converting the air cell into blood or
+  mutating the match.
 
 Still open before calling v0.0.5 complete: complete connected-volume
 support/load analysis beyond the bounded cascade fragments, the recorded
