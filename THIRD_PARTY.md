@@ -9,16 +9,19 @@ traceable provenance, and an explicit distribution decision before merge.
 
 | Component | Use | License | Supported/tested version | Source | Intake and modifications |
 |---|---|---|---|---|---|
-| SDL2 | Optional desktop window, RGB texture presentation, input, timing, and queued audio | [zlib](https://github.com/libsdl-org/SDL/blob/SDL2/LICENSE.txt) | Floor: 2.0.10; tested: 2.30.0 | [upstream SDL2 branch](https://github.com/libsdl-org/SDL/tree/SDL2) | Found through CMake; Linux packages use the system runtime, while the Windows package statically links the vcpkg-built component; not vendored or modified |
+| SDL2 | Desktop window, RGB texture presentation, input, timing, queued audio, and Android host | [zlib](https://github.com/libsdl-org/SDL/blob/SDL2/LICENSE.txt) | Desktop floor: 2.0.10; desktop tested: 2.30.0; Android: 2.30.12, commit `8236e01a9f758d15927624925c6043f84d8a261f` | [upstream SDL2 release](https://github.com/libsdl-org/SDL/tree/release-2.30.12) | Desktop builds retain the system/vcpkg boundary. Android builds the unmodified, pinned `third_party/SDL` git submodule because the APK must package SDL's Android runtime. |
 | SDL GameControllerDB | Normalize known gamepads before SDL2 controller enumeration | [zlib](https://github.com/mdqinc/SDL_GameControllerDB/blob/8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5/LICENSE) | Commit `8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5`; database SHA-256 `dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0` | [pinned upstream tree](https://github.com/mdqinc/SDL_GameControllerDB/tree/8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5) | The reviewed database is vendored under `third_party/SDL_GameControllerDB` and distributed at `share/digs/controllers/gamecontrollerdb.txt`; mapping data is unmodified and its license/provenance are preserved |
 | Lua | Deterministic high-level DIGS data and bounded catalog runtime | [MIT](https://www.lua.org/license.html) | 5.1.5; archive SHA-256 `2640fc56a795f29d28ef15e13c34a47e223960b0240e8cb0a82d9b0738695333` | [official Lua 5.1.5 archive](https://www.lua.org/ftp/lua-5.1.5.tar.gz) | Complete upstream source is vendored under `third_party/lua-5.1.5`; the build omits the standalone interpreters and nondeterministic `io`, `os`, `package`, and `debug` libraries; no upstream source is locally patched |
 
 The Free Software Foundation lists the
 [zlib license as GPL-compatible](https://www.gnu.org/licenses/license-list.html#ZLib).
-This repository does not distribute an SDL2 source tree. Linux bundles use the
-system SDL2 runtime. The Windows bundle statically links SDL2 and includes its
-copyright and zlib license notice as `LICENSES/SDL2-zlib.txt`; the matching
-Corresponding Source archive remains distributed beside every binary release.
+Desktop Linux bundles use the system SDL2 runtime. The Windows bundle
+statically links SDL2 and includes its copyright and zlib license notice as
+`LICENSES/SDL2-zlib.txt`; the matching Corresponding Source archive remains
+distributed beside every binary release. The Android build pins the complete,
+unmodified SDL2 source as `third_party/SDL`; any distributed Android binary
+must include that initialized submodule in its matching Corresponding Source
+archive.
 
 The controller database is data, not an SDL2 binary. DIGS loads the packaged
 copy before enumerating devices, so known pads use consistent logical names and
@@ -68,6 +71,8 @@ terminal cockpit script.
 |---|---|---|---|---|
 | [actions/checkout](https://github.com/actions/checkout) | Materialize the repository in GitHub Actions | MIT | `11bd71901bbe5b1630ceea73d27597364c9af683` (v4.2.2) | Runs only in the hosted CI job; not copied into VOX archives |
 | [actions/upload-artifact](https://github.com/actions/upload-artifact) | Publish the checksummed Linux tester/source bundles from CI | MIT | `ea165f8d65b6e75b540449e92b4886f43607fa02` (v4.6.2) | Runs only in the hosted CI job; not copied into VOX archives |
+| [actions/setup-java](https://github.com/actions/setup-java) | Select JDK 17 for the Android Gradle build | MIT | `c5195efecf7bdfc987ee8bae7a71cb8b11521c00` (v4.7.1) | Runs only in the Android CI job; not copied into VOX archives |
+| [android-actions/setup-android](https://github.com/android-actions/setup-android) | Install the SDK, NDK, platform, and CMake components for the Android Gradle build | MIT | `00854ea68c109d98c75d956347303bf7c45b0277` (v3.2.1) | Runs only in the Android CI job; not copied into VOX archives |
 
 Both actions are fixed to reviewed commit identities rather than floating
 tags. They are development infrastructure and do not become game runtime

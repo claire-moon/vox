@@ -54,6 +54,29 @@ The public input and fire records are ABI-versioned. A future replay or network
 transport should serialize these commands plus required setup metadata, not
 body transforms or presentation events.
 
+## Android phone overlay
+
+The experimental Android host keeps the same player-one input record and
+authoritative tick boundary. Its Java overlay sends held actions and an aim
+vector directly to the SDL host; it does not synthesize a second simulation,
+touch-specific weapon, or alternate physics path.
+
+| Phone control | DIGS input | Non-play screen behavior |
+|---|---|---|
+| LEFT / RIGHT | Held horizontal movement | Navigate left / right |
+| JUMP / STEAM | Held jump / steam action | Navigate up / down |
+| AIM | Player-one aim direction and magnitude | No action |
+| FIRE | Held fire, charge/release, and ON FIRE respawn | Accept selection |
+| ROPE | Held/toggled rope under the configured rope policy | No action |
+| TOOL | Tap next weapon; hold previous weapon | No action |
+| PAUSE or Android Back | Pause | Escape/back |
+
+Buttons have a minimum 48 dp touch target, visible high-contrast labels, and
+Android accessibility descriptions. The aim pad is separately labelled as a
+drag control. A connected hardware controller still uses the existing SDL2
+controller path, while any phone-overlay action deliberately selects the
+existing keyboard-style player-one source.
+
 AUTO and locked keyboard/controller ownership are host policies and remain
 outside the match hash. In ON FIRE respawn mode the host requires Fire to be
 released after death and pressed again once the authoritative countdown is

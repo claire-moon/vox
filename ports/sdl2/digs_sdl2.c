@@ -13,6 +13,10 @@
 #include "vox/vox_script.h"
 #include "vox_sdl_ui.h"
 
+#if defined(VOX_ANDROID_PORT)
+#include "digs_android_controls.h"
+#endif
+
 #define DEMO_WIDTH 320U
 #define DEMO_HEIGHT 200U
 #define DEMO_WINDOW_WIDTH 1280
@@ -342,6 +346,13 @@ typedef struct demo_app {
     demo_controller controllers[DEMO_CONTROLLER_MAX];
     demo_player_input player_input[DEMO_LOCAL_MAX];
     demo_bindings bindings;
+#if defined(VOX_ANDROID_PORT)
+    digs_android_control_state android_controls;
+    digs_android_control_state android_previous_controls;
+    vox_u32 android_navigation_repeat[DIGS_ANDROID_CONTROL_COUNT];
+    int android_taps[DIGS_ANDROID_CONTROL_COUNT];
+    int android_aim_pending;
+#endif
     demo_damage_popup damage_popups[DEMO_DAMAGE_POPUP_MAX];
     demo_hit_marker hit_markers[DEMO_LOCAL_MAX];
     demo_killfeed_line killfeed[DEMO_KILLFEED_MAX];
@@ -1362,6 +1373,20 @@ static void demo_audio_close(demo_app *app)
     }
 }
 
+#if defined(VOX_ANDROID_PORT)
+static int demo_android_data_path(char *path, int capacity,
+                                  const char *suffix)
+{
+    const char *root = digs_android_controls_data_root();
+    size_t required;
+    if (path == 0 || capacity <= 0 || suffix == 0 || root == 0) return 0;
+    required = strlen(root) + 1U + strlen(suffix) + 1U;
+    if (required > (size_t)capacity) return 0;
+    sprintf(path, "%s/%s", root, suffix);
+    return 1;
+}
+#endif
+
 static int demo_scripts_open(demo_app *app)
 {
     static const char suffix[] = "share/digs/scripts/manifest.txt";
@@ -1372,6 +1397,19 @@ static int demo_scripts_open(demo_app *app)
     if (vox_script_runtime_init(&app->scripts, 0) != VOX_OK) {
         return 0;
     }
+    app->script_manifest[0] = '\0';
+#if defined(VOX_ANDROID_PORT)
+    if (demo_android_data_path(app->script_manifest,
+                               (int)sizeof(app->script_manifest),
+                               "share/digs/scripts/manifest.txt")) {
+        status = vox_script_reload_manifest(&app->scripts,
+                                            app->script_manifest, &report);
+        if (status == VOX_OK) {
+            app->scripts_ready = 1;
+            return 1;
+        }
+    }
+#endif
     app->script_manifest[0] = '\0';
     base = SDL_GetBasePath();
     if (base != 0 && strlen(base) + sizeof(suffix) <
@@ -2683,6 +2721,17 @@ static void demo_load_controller_mappings(void)
         (void)SDL_GameControllerAddMappingsFromFile(environment);
         return;
     }
+#if defined(VOX_ANDROID_PORT)
+    if (demo_android_data_path(path, (int)sizeof(path),
+                               "share/digs/controllers/gamecontrollerdb.txt")) {
+        file = fopen(path, "r");
+        if (file != 0) {
+            (void)fclose(file);
+            (void)SDL_GameControllerAddMappingsFromFile(path);
+            return;
+        }
+    }
+#endif
     base = SDL_GetBasePath();
     if (base != 0 && strlen(base) + strlen(relative) + 1U < sizeof(path)) {
         sprintf(path, "%s%s", base, relative);
@@ -4463,7 +4512,11 @@ static void demo_draw_world_feedback(demo_app *app)
         int x;
         int y;
         if (player == 0 && app->mouse_inside &&
-            app->player_input[0].active_source == DEMO_SOURCE_KEYBOARD) {
+            app->player_input[0].active_source == DEMO_SOURCE_KEYBOARD
+#if defined(VOX_ANDROID_PORT)
+            && !app->android_controls.aim_active
+#endif
+            ) {
             continue;
         }
         demo_world_to_screen(app,
@@ -4567,11 +4620,19 @@ static void demo_draw_play(demo_app *app)
     /* Keep the mouse player's authoritative aim synchronized to the camera
      * transform that is actually being presented this frame. */
     if (app->screen == DEMO_PLAY && app->mouse_inside &&
-        app->player_input[0].active_source == DEMO_SOURCE_KEYBOARD) {
+        app->player_input[0].active_source == DEMO_SOURCE_KEYBOARD
+#if defined(VOX_ANDROID_PORT)
+        && !app->android_controls.aim_active
+#endif
+        ) {
         demo_mouse_world(app, &app->aim_world_x[0], &app->aim_world_y[0]);
     }
     if (app->screen == DEMO_PLAY && app->mouse_inside &&
-        app->player_input[0].active_source == DEMO_SOURCE_KEYBOARD) {
+        app->player_input[0].active_source == DEMO_SOURCE_KEYBOARD
+#if defined(VOX_ANDROID_PORT)
+        && !app->android_controls.aim_active
+#endif
+        ) {
         demo_draw_crosshair(app, 0, app->mouse_x, app->mouse_y);
     }
     demo_draw_world_feedback(app);
@@ -5009,6 +5070,58 @@ static void demo_update_controller_aim(demo_app *app, int player,
     }
 }
 
+#if defined(VOX_ANDROID_PORT)
+static void demo_update_android_aim(demo_app *app, int player,
+                                    int raw_x, int raw_y, int rope_held)
+{
+    demo_player_input *input = &app->player_input[player];
+    double desired_x = (double)raw_x / 32767.0;
+    double desired_y = (double)raw_y / 32767.0;
+    double magnitude = demo_sqrt(desired_x * desired_x +
+                                 desired_y * desired_y);
+    double reach = demo_weapon_aim_range(app, player, rope_held);
+    double smoothing = input->sensitivity == 0 ? 0.24 :
+                       (input->sensitivity == 1 ? 0.38 : 0.58);
+    if (magnitude > 1.0) magnitude = 1.0;
+    if (magnitude > 0.08) {
+        double length;
+        desired_x /= magnitude;
+        desired_y /= magnitude;
+        if (input->aim_slowdown > 0 &&
+            demo_aim_near_visible_target(player, desired_x, desired_y,
+                                         reach)) {
+            smoothing *= input->aim_slowdown == 1 ? 0.65 : 0.45;
+        }
+        input->aim_direction_x +=
+            (desired_x - input->aim_direction_x) * smoothing;
+        input->aim_direction_y +=
+            (desired_y - input->aim_direction_y) * smoothing;
+        length = demo_sqrt(input->aim_direction_x * input->aim_direction_x +
+                           input->aim_direction_y * input->aim_direction_y);
+        if (length > 0.0001) {
+            input->aim_direction_x /= length;
+            input->aim_direction_y /= length;
+        }
+        input->aim_magnitude = magnitude;
+    }
+    input->aim_distance = reach * input->aim_magnitude;
+    {
+        long body_x = demo_match.players[player].position_x.value_q16 /
+                      65536L;
+        long body_y = demo_match.players[player].position_y.value_q16 /
+                      65536L;
+        long world_x = body_x + (long)(input->aim_direction_x *
+                                       input->aim_distance);
+        long world_y = body_y + (long)(input->aim_direction_y *
+                                       input->aim_distance);
+        if (world_x < 0L) world_x = 0L;
+        if (world_y < 0L) world_y = 0L;
+        app->aim_world_x[player] = (vox_u32)world_x;
+        app->aim_world_y[player] = (vox_u32)world_y;
+    }
+}
+#endif
+
 static void demo_submit_human_input(demo_app *app)
 {
     const vox_u8 *keys = SDL_GetKeyboardState(0);
@@ -5081,6 +5194,20 @@ static void demo_submit_human_input(demo_app *app)
         if (!use_controller) {
             previous_down = previous_key != 0 && keys[*previous_key];
             next_down = next_key != 0 && keys[*next_key];
+#if defined(VOX_ANDROID_PORT)
+            if (player == 0) {
+                if (app->android_controls.buttons[
+                        DIGS_ANDROID_CONTROL_PREVIOUS] ||
+                    app->android_taps[DIGS_ANDROID_CONTROL_PREVIOUS] != 0) {
+                    previous_down = 1;
+                }
+                if (app->android_controls.buttons[
+                        DIGS_ANDROID_CONTROL_NEXT] ||
+                    app->android_taps[DIGS_ANDROID_CONTROL_NEXT] != 0) {
+                    next_down = 1;
+                }
+            }
+#endif
             if (player == 0 && app->mouse_inside) {
                 demo_mouse_world(app, &app->aim_world_x[0],
                                  &app->aim_world_y[0]);
@@ -5091,13 +5218,43 @@ static void demo_submit_human_input(demo_app *app)
                 input.actions = (vox_u16)(input.actions |
                                           VOX_DIGS_ACTION_JUMP);
             }
+#if defined(VOX_ANDROID_PORT)
+            if (player == 0 &&
+                (app->android_controls.buttons[DIGS_ANDROID_CONTROL_JUMP] ||
+                 app->android_taps[DIGS_ANDROID_CONTROL_JUMP] != 0)) {
+                input.actions = (vox_u16)(input.actions |
+                                          VOX_DIGS_ACTION_JUMP);
+            }
+#endif
             if (steam != 0 && keys[*steam]) {
                 input.actions = (vox_u16)(input.actions |
                                           VOX_DIGS_ACTION_STEAM);
             }
+#if defined(VOX_ANDROID_PORT)
+            if (player == 0 &&
+                (app->android_controls.buttons[DIGS_ANDROID_CONTROL_STEAM] ||
+                 app->android_taps[DIGS_ANDROID_CONTROL_STEAM] != 0)) {
+                input.actions = (vox_u16)(input.actions |
+                                          VOX_DIGS_ACTION_STEAM);
+            }
+#endif
             if (rope != 0 && *rope != SDL_SCANCODE_UNKNOWN &&
                 keys[*rope]) physical_rope = 1;
+#if defined(VOX_ANDROID_PORT)
+            if (player == 0 &&
+                (app->android_controls.buttons[DIGS_ANDROID_CONTROL_ROPE] ||
+                 app->android_taps[DIGS_ANDROID_CONTROL_ROPE] != 0)) {
+                physical_rope = 1;
+            }
+#endif
             if (fire_key != 0 && keys[*fire_key]) fire = 1;
+#if defined(VOX_ANDROID_PORT)
+            if (player == 0 &&
+                (app->android_controls.buttons[DIGS_ANDROID_CONTROL_FIRE] ||
+                 app->android_taps[DIGS_ANDROID_CONTROL_FIRE] != 0)) {
+                fire = 1;
+            }
+#endif
             if (player == 0 && app->mouse_inside) {
                 if ((mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0U) {
                     fire = 1;
@@ -5106,10 +5263,31 @@ static void demo_submit_human_input(demo_app *app)
                     physical_rope = 1;
                 }
             }
+#if defined(VOX_ANDROID_PORT)
+            if (player == 0 &&
+                (app->android_controls.aim_active ||
+                 app->android_aim_pending)) {
+                demo_update_android_aim(
+                    app, player, app->android_controls.aim_x_q15,
+                    app->android_controls.aim_y_q15, physical_rope);
+            }
+#endif
             if (bark_key != 0 && keys[*bark_key]) bark = 1;
             if (player == 0) {
                 if (keys[SDL_SCANCODE_W]) move_y = -32767;
                 if (keys[SDL_SCANCODE_S]) move_y = 32767;
+#if defined(VOX_ANDROID_PORT)
+                if (app->android_controls.buttons[
+                        DIGS_ANDROID_CONTROL_LEFT] ||
+                    app->android_taps[DIGS_ANDROID_CONTROL_LEFT] != 0) {
+                    move_x = -32767;
+                } else if (app->android_controls.buttons[
+                               DIGS_ANDROID_CONTROL_RIGHT] ||
+                           app->android_taps[
+                               DIGS_ANDROID_CONTROL_RIGHT] != 0) {
+                    move_x = 32767;
+                }
+#endif
             } else {
                 if (keys[SDL_SCANCODE_UP]) move_y = -32767;
                 if (keys[SDL_SCANCODE_DOWN]) move_y = 32767;
@@ -5249,6 +5427,16 @@ static void demo_submit_human_input(demo_app *app)
             (void)vox_digs_request_respawn(&demo_match, (vox_u16)player);
         }
         app->fire_down[player] = fire;
+#if defined(VOX_ANDROID_PORT)
+        if (player == 0) {
+            int control;
+            for (control = 0; control < DIGS_ANDROID_CONTROL_COUNT;
+                 ++control) {
+                app->android_taps[control] = 0;
+            }
+            app->android_aim_pending = 0;
+        }
+#endif
     }
 }
 
@@ -6457,6 +6645,94 @@ static void demo_handle_key(demo_app *app, SDL_Keycode key,
         (void)demo_start_match(app, app->foundry);
     }
 }
+
+#if defined(VOX_ANDROID_PORT)
+static int demo_android_controls_active(const digs_android_control_state *state,
+                                        const int *taps)
+{
+    int control;
+    if (state == 0 || taps == 0) return 0;
+    if (state->aim_active) return 1;
+    for (control = 0; control < DIGS_ANDROID_CONTROL_COUNT; ++control) {
+        if (state->buttons[control] || taps[control] != 0) return 1;
+    }
+    return 0;
+}
+
+static void demo_android_navigate(demo_app *app, int control,
+                                  SDL_Keycode key)
+{
+    int held = app->android_controls.buttons[control];
+    int pressed = !app->android_previous_controls.buttons[control];
+    vox_u32 now = SDL_GetTicks();
+    if (app->android_taps[control] != 0 ||
+        (held && (pressed || now >= app->android_navigation_repeat[control]))) {
+        demo_handle_key(app, key, SDL_SCANCODE_UNKNOWN);
+        app->android_navigation_repeat[control] =
+            now + (pressed ? 300U : 120U);
+    }
+    if (!held) app->android_navigation_repeat[control] = 0U;
+    app->android_taps[control] = 0;
+}
+
+static void demo_android_update_controls(demo_app *app)
+{
+    int control;
+    digs_android_controls_snapshot(&app->android_controls);
+    if (app->android_controls.aim_revision !=
+        app->android_previous_controls.aim_revision) {
+        app->android_aim_pending = 1;
+    }
+    for (control = 0; control < DIGS_ANDROID_CONTROL_COUNT; ++control) {
+        int taps = digs_android_controls_take_tap(control);
+        if (taps > 0 && app->android_taps[control] < 16) {
+            app->android_taps[control] += taps;
+            if (app->android_taps[control] > 16) {
+                app->android_taps[control] = 16;
+            }
+        }
+    }
+    if (app->screen == DEMO_PLAY) {
+        int pause_pressed = !app->android_previous_controls.buttons[
+            DIGS_ANDROID_CONTROL_PAUSE];
+        if (demo_android_controls_active(&app->android_controls,
+                                         app->android_taps) ||
+            app->android_aim_pending) {
+            (void)demo_activate_source(app, 0, DEMO_SOURCE_KEYBOARD, 0);
+        }
+        if (app->android_taps[DIGS_ANDROID_CONTROL_PAUSE] != 0 ||
+            (app->android_controls.buttons[DIGS_ANDROID_CONTROL_PAUSE] &&
+             pause_pressed)) {
+            demo_handle_key(app, SDLK_ESCAPE, SDL_SCANCODE_UNKNOWN);
+            app->android_taps[DIGS_ANDROID_CONTROL_PAUSE] = 0;
+        }
+    } else {
+        int fire_pressed = !app->android_previous_controls.buttons[
+            DIGS_ANDROID_CONTROL_FIRE];
+        int pause_pressed = !app->android_previous_controls.buttons[
+            DIGS_ANDROID_CONTROL_PAUSE];
+        demo_android_navigate(app, DIGS_ANDROID_CONTROL_JUMP, SDLK_UP);
+        demo_android_navigate(app, DIGS_ANDROID_CONTROL_STEAM, SDLK_DOWN);
+        demo_android_navigate(app, DIGS_ANDROID_CONTROL_LEFT, SDLK_LEFT);
+        demo_android_navigate(app, DIGS_ANDROID_CONTROL_RIGHT, SDLK_RIGHT);
+        if (app->android_taps[DIGS_ANDROID_CONTROL_FIRE] != 0 ||
+            (app->android_controls.buttons[DIGS_ANDROID_CONTROL_FIRE] &&
+             fire_pressed)) {
+            demo_handle_key(app, SDLK_RETURN, SDL_SCANCODE_UNKNOWN);
+        }
+        if (app->android_taps[DIGS_ANDROID_CONTROL_PAUSE] != 0 ||
+            (app->android_controls.buttons[DIGS_ANDROID_CONTROL_PAUSE] &&
+             pause_pressed)) {
+            demo_handle_key(app, SDLK_ESCAPE, SDL_SCANCODE_UNKNOWN);
+        }
+        for (control = 0; control < DIGS_ANDROID_CONTROL_COUNT; ++control) {
+            app->android_taps[control] = 0;
+        }
+    }
+    memcpy(&app->android_previous_controls, &app->android_controls,
+           sizeof(app->android_previous_controls));
+}
+#endif
 
 static int demo_keyboard_player_for_scancode(demo_app *app,
                                              SDL_Scancode scancode)
@@ -8362,6 +8638,9 @@ int main(int argc, char **argv)
             demo_handle_event(&app, &event);
         }
         (void)demo_sync_hardware_mouse(&app);
+#if defined(VOX_ANDROID_PORT)
+        demo_android_update_controls(&app);
+#endif
         demo_update_cursor_visibility(&app);
         catchup = demo_fixed_step_service(&fixed_step, DEMO_MAX_CATCHUP);
         for (tick_index = 0U; tick_index < catchup; ++tick_index) {

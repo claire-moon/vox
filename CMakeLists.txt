@@ -211,7 +211,7 @@ file(COPY games/digs/catalog DESTINATION "${CMAKE_BINARY_DIR}/share/digs")
 file(COPY games/digs/icons DESTINATION "${CMAKE_BINARY_DIR}/share/digs")
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/share/digs/controllers")
 configure_file(
-    "${CMAKE_SOURCE_DIR}/third_party/SDL_GameControllerDB/gamecontrollerdb.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/SDL_GameControllerDB/gamecontrollerdb.txt"
     "${CMAKE_BINARY_DIR}/share/digs/controllers/gamecontrollerdb.txt"
     COPYONLY
 )
@@ -225,14 +225,33 @@ if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 if (VOX_BUILD_SDL2_DEMO)
-    find_package(SDL2 2.0.10 CONFIG REQUIRED)
-    add_executable(digs_demo
-        ports/sdl2/digs_sdl2.c
-        ports/sdl2/vox_sdl_ui.c
-    )
+    # Android builds compile the pinned SDL2 source submodule before adding
+    # this project. Desktop hosts keep their system SDL2 package boundary.
+    if (NOT TARGET SDL2::SDL2)
+        find_package(SDL2 2.0.10 CONFIG REQUIRED)
+    endif()
+    if (ANDROID)
+        # SDLActivity loads the game entry point from libdigs_demo.so and
+        # invokes its exported SDL_main symbol.
+        add_library(digs_demo SHARED
+            ports/sdl2/digs_sdl2.c
+            ports/sdl2/vox_sdl_ui.c
+        )
+    else()
+        add_executable(digs_demo
+            ports/sdl2/digs_sdl2.c
+            ports/sdl2/vox_sdl_ui.c
+        )
+    endif()
     target_link_libraries(digs_demo PRIVATE digs_game digs_miner_art vox_audio vox_script SDL2::SDL2)
     target_include_directories(digs_demo PRIVATE engine/include ports/sdl2)
-    target_compile_definitions(digs_demo PRIVATE SDL_MAIN_HANDLED)
+    if (ANDROID)
+        target_sources(digs_demo PRIVATE ports/android/digs_android_controls.c)
+        target_include_directories(digs_demo PRIVATE ports/android)
+        target_compile_definitions(digs_demo PRIVATE VOX_ANDROID_PORT=1)
+    else()
+        target_compile_definitions(digs_demo PRIVATE SDL_MAIN_HANDLED)
+    endif()
     set_property(TARGET digs_demo PROPERTY C_STANDARD 90)
     set_property(TARGET digs_demo PROPERTY C_STANDARD_REQUIRED ON)
     set_property(TARGET digs_demo PROPERTY C_EXTENSIONS OFF)
@@ -265,7 +284,7 @@ if (VOX_BUILD_TESTS)
     endif()
     add_test(NAME vox_script_determinism COMMAND vox_script_test)
     set_tests_properties(vox_script_determinism PROPERTIES
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_executable(vox_accel_test tests/headless/vox_accel_test.c)
     target_link_libraries(vox_accel_test PRIVATE vox_accel)
     target_include_directories(vox_accel_test PRIVATE engine/include)

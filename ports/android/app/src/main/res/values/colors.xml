@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="digs_control_fill">#E000263D</color>
+    <color name="digs_control_stroke">#FFFFEE58</color>
+    <color name="digs_control_text">#FFFFFFFF</color>
+</resources>
