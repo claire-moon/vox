@@ -44,13 +44,13 @@ int main(void)
         return 3;
     }
     if (cluster.support_q8 != 0U || cluster.load_q8 != 3U) return 4;
-    if (vox_cluster_spawn_debris(&cluster, &rigid, 2L << 16, -3L << 16) !=
+    if (vox_cluster_spawn_debris(&cluster, &rigid, 2L << 16, -(3L << 16)) !=
         VOX_OK) return 5;
     if (rigid.body_count != 1U) return 6;
     body_index = 0U;
     if ((rigid.bodies[body_index].flags & VOX_RIGID_BODY_DEBRIS) == 0U ||
         rigid.bodies[body_index].velocity_x_q16 != 2L << 16 ||
-        rigid.bodies[body_index].velocity_y_q16 != -3L << 16) return 7;
+        rigid.bodies[body_index].velocity_y_q16 != -(3L << 16)) return 7;
     /* Vertical connectivity is part of the same detached cluster. */
     if (vox_world_set(&world, 30U, 20U, 0U, VOX_MAT_SOIL, 0L) != VOX_OK ||
         vox_world_set(&world, 30U, 20U, 1U, VOX_MAT_SOIL, 0L) != VOX_OK ||
