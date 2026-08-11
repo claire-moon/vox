@@ -2312,20 +2312,22 @@ static int test_v003_overlap_recovery_and_crush(void)
     deaths = v003_match_a.deaths[0];
     v003_match_a.spawn_shield_ticks[0] = 0U;
     /*
-     * Full burial is survivable for a bounded window rather than instantly
-     * fatal.  The first entombed tick announces itself and starts hurting;
-     * the miner keeps their controls and can dig free.
+     * Static terrain overlap is recovery-only.  This is the tunnel-safety
+     * rule: a miner caught in freshly excavated terrain must not begin a
+     * cave-in countdown simply because the physics solver moved them out.
+     * Detached rigid debris is covered separately by the physical-burial and
+     * debris-impact tests.
      */
     if (vox_world_sleep_all(&v003_match_a.world) != VOX_OK ||
         vox_digs_match_step(&v003_match_a) != VOX_OK ||
         !v003_match_a.alive[0] ||
         v003_match_a.deaths[0] != deaths ||
-        v003_match_a.buried_ticks[0] != 1U ||
-        v003_match_a.health[0] >= VOX_DIGS_MAX_HEALTH ||
-        !event_type_seen(&v003_match_a, VOX_DIGS_EVENT_CRUSH)) {
+        v003_match_a.buried_ticks[0] != 0U ||
+        v003_match_a.health[0] != VOX_DIGS_MAX_HEALTH ||
+        event_type_seen(&v003_match_a, VOX_DIGS_EVENT_CRUSH)) {
         return 4;
     }
-    /* Crush pressure kills if the miner cannot escape it. */
+    /* Continued ordinary recovery may be inconvenient, never lethal. */
     {
         vox_u16 guard;
         for (guard = 0U; guard < DIGS_TEST_BURIED_GUARD_TICKS &&
@@ -2334,8 +2336,10 @@ static int test_v003_overlap_recovery_and_crush(void)
                 return 5;
             }
         }
-        if (v003_match_a.alive[0] ||
-            v003_match_a.deaths[0] != (vox_u16)(deaths + 1U)) {
+        if (!v003_match_a.alive[0] ||
+            v003_match_a.deaths[0] != deaths ||
+            v003_match_a.buried_ticks[0] != 0U ||
+            v003_match_a.health[0] != VOX_DIGS_MAX_HEALTH) {
             return 6;
         }
     }
@@ -4210,6 +4214,7 @@ static int test_partial_burial_is_survivable(void)
     vox_i32 x;
     vox_i32 y;
     vox_u16 tick;
+    vox_u16 debris_index;
     vox_digs_rules_classic(&rules);
     rules.player_count = 1U;
     rules.bot_mask = 0U;
@@ -4226,6 +4231,17 @@ static int test_partial_burial_is_survivable(void)
             }
         }
     }
+    /* Static terrain overlap alone is deliberately non-damaging: ordinary
+     * tunnel recovery must not become a cave-in.  A real detached debris
+     * body is what starts the recoverable crush-pressure path. */
+    if (vox_rigid_spawn(&match.ragdolls, &debris_index,
+                        match.players[0].position_x.value_q16,
+                        match.players[0].position_y.value_q16,
+                        2L << 16, 2L << 16, 65536L,
+                        VOX_RIGID_BODY_DEBRIS) != VOX_OK) {
+        return 8;
+    }
+    match.rigid_material[debris_index] = VOX_MAT_STONE;
     /* Burial cannot hurt an invulnerable miner, so retire the spawn shield. */
     match.spawn_shield_ticks[0] = 0U;
     if (vox_world_sleep_all(&match.world) != VOX_OK) return 3;
@@ -4247,6 +4263,9 @@ static int test_partial_burial_is_survivable(void)
                 return 6;
             }
         }
+    }
+    if (vox_rigid_release(&match.ragdolls, debris_index) != VOX_OK) {
+        return 9;
     }
     if (vox_world_sleep_all(&match.world) != VOX_OK ||
         vox_digs_match_step(&match) != VOX_OK ||

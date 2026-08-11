@@ -9211,7 +9211,8 @@ vox_result vox_digs_bot_think(vox_digs_match *match, vox_u16 player)
     if (goal_y + 4L < bot_y && match->steam_q16[player] > 8192U) {
         actions = (vox_u16)(actions | VOX_DIGS_ACTION_STEAM);
     }
-    if ((goal_y + 9L < bot_y ||
+    if (!breaching &&
+        (goal_y + 9L < bot_y ||
          (match->players[player].flags & VOX_PHYSICS_BODY_BLOCKED_X)) &&
         state->mode != VOX_DIGS_AI_RETREATING) {
         vox_i32 rope_x = bot_x + (move_x >= 0 ? 14L : -14L);
