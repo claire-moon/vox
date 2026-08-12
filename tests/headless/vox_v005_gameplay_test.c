@@ -81,11 +81,16 @@ int main(void)
     vox_u16 fixture_events;
     vox_u16 scrap_bodies;
     vox_u16 filled_bodies;
+    int saw_v004_gore_lifetime = 0;
     vox_digs_rules_classic(&rules);
     rules.player_count = 2U;
     rules.bot_mask = 0U;
     rules.score_limit = 0U;
     if (vox_digs_match_init(&match, &rules) != VOX_OK) return 1;
+    if (vox_material_get(VOX_MAT_BLOOD) == 0 ||
+        (vox_material_get(VOX_MAT_BLOOD)->flags & VOX_MATERIAL_SOLID) != 0U) {
+        return 91;
+    }
     input.abi_version = VOX_ABI_VERSION;
     input.struct_size = (vox_u32)sizeof(input);
     input.player = 0U;
@@ -114,8 +119,9 @@ int main(void)
             (vox_u16)(match.players[1].position_x.value_q16 >> 16),
             (vox_u16)(match.players[1].position_y.value_q16 >> 16), 0U) == 0 ||
         !saw_event(&match, VOX_DIGS_EVENT_HEADSHOT)) return 3;
-    /* Gore is a short ballistic presentation of a real blood deposit, not a
-     * cloud of long-lived floating organ pixels. */
+    /* Restore the v0.0.4 blood baseline: a death must leave a readable,
+     * long-lived ballistic burst. Flesh remains distinct from the blood
+     * residue path, so this does not revive the old floating-organ bug. */
     for (i = 0U; i < match.rules.fx_budget; ++i) {
         const vox_digs_effect *effect = &match.effects[i];
         if (!effect->active ||
@@ -123,8 +129,11 @@ int main(void)
              effect->material != VOX_MAT_FLESH)) {
             continue;
         }
-        if (effect->ttl_ticks > 55U) return 90;
+        if (effect->material == VOX_MAT_BLOOD && effect->ttl_ticks >= 90U) {
+            saw_v004_gore_lifetime = 1;
+        }
     }
+    if (!saw_v004_gore_lifetime) return 90;
     if (vox_world_set(&match.world, 100U, 100U, 0U, VOX_MAT_METAL,
                       20L << 16) != VOX_OK ||
         vox_world_set_fixture(&match.world, 100U, 100U, 0U, 1U) != VOX_OK) {

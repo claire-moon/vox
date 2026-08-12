@@ -34,8 +34,8 @@ emit metal scrap, and submerged miners receive hashed drowning damage. The new
 headless gates cover conservation, deterministic body order, cluster debris,
 fixture and drowning events, dropship route transitions, and replay selection.
 The current 600-tick SDL load gate begins the interactive dropship sequence and
-records fired 20, explosions 16, crushes 0, effects 1009, awake 3873, and
-canonical hash `9e258ae8`; the same result was
+records fired 20, explosions 16, crushes 0, effects 876, awake 3882, and
+canonical hash `8d98c1d0`; the same result was
 recaptured in strict `-O0` and `-O3` builds.
 
 This is engineering evidence, not a v0.0.5 release claim. The current source
@@ -216,11 +216,12 @@ The host builds a render-only snapshot for miners and projectiles so they
 receive the same Lightfield treatment without mutating authoritative terrain or
 replay hashes. Transient gore, smoke, sparks, and dust are then blended as
 compact screen-space marks, so they cannot overwrite terrain as opaque blocks.
-When blood settles, its authoritative fluid volume drives a bounded impact
-field that enters the visible face of the dirt or metal it struck; the result
-is a directional embedded splatter rather than a red strip on the terrain
-rim. SDL2 uploads the completed RGB texture and scales it to the window with
-letterboxing.
+Blood uses the restored v0.0.4 visual baseline while its newer systemic path is
+rebuilt: a broad, long-lived ballistic burst leaves non-blocking blood residue
+where drops land and also deposits into the authoritative fluid volume. The
+renderer no longer substitutes a faint surface-stain pass for the established
+readable spray. SDL2 uploads the completed RGB texture and scales it to the
+window with letterboxing.
 
 `MY MINER` also exposes outfit and helmet colours for each local human slot.
 They are presentation-only schema-6 preferences: bots retain their authored

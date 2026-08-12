@@ -63,22 +63,23 @@ The following decisions are locked for v0.0.5:
   fluid/rigid/cluster/gameplay tests, and SDL settings/chronicle/haptic
   self-tests. Those are source/build gates, not a substitute for human QA.
 - Feedback hardening keeps jointed corpse segments out of their own contact
-  pairs, so they settle rather than jittering as suspended organs.  Blood and
-  flesh effects now have a short, heavy ballistic pass: blood deposits into
-  the authoritative fluid world on impact and neither material remains a
-  long-lived airborne cloud.  `CRACKING...` is debug-only; ordinary play
-  reserves its alert text for an actual `CAVE-IN!`.
-- Settled blood no longer occupies a full opaque terrain voxel in the SDL
-  renderer.  The port projects each authoritative blood-fluid cell as a
-  bounded, deterministic wet/drying impact field on the dirt or metal that
-  caught it, then carries its marks one to three cells through the visible
-  material face. Floors, walls, and ceilings therefore receive directional,
-  embedded splatters rather than a rim-only red topcoat. The same pass reads
-  replay-frame fluids and keeps replay blood/flesh effects as screen-space
-  particles, while the canonical fluid hash remains untouched.
-  `digs_demo --blood-stain-self-test` proves that the visible splat changes
-  pixels inside solid terrain without converting the air cell into blood or
-  mutating the match.
+  pairs, so they settle rather than jittering as suspended organs. Blood
+  presentation is deliberately at its v0.0.4 baseline until the
+  fluid/rendering integration has human acceptance: blood and flesh retain a
+  long ballistic arc, while a blood impact writes non-blocking residue and a
+  persistent-fluid deposit; flesh never enters the residue path.
+  `CRACKING...` is debug-only; ordinary play reserves its alert text for an
+  actual `CAVE-IN!`.
+- Blood presentation is temporarily restored to the v0.0.4 baseline. A broad,
+  long-lived ballistic effect burst leaves non-blocking blood residue at its
+  impact cell, which is the readable screen language that existed before the
+  fluid/stain experiments. The same impact also enters the authoritative
+  persistent-fluid path; the renderer simply does not reinterpret those
+  volumes as subtle decals. Flesh and organs do not enter the residue path,
+  and no blood residue is written onto a miner. Replay effects use the same
+  particle path. `digs_demo --blood-baseline-self-test` proves live and replay blood
+  changes only presentation pixels and does not turn an airborne effect into a
+  blocking world cell.
 
 Still open before calling v0.0.5 complete: complete connected-volume
 support/load analysis beyond the bounded cascade fragments, the recorded

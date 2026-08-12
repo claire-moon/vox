@@ -80,12 +80,6 @@
  * solid red cell hovering directly above the ground.  Bound the cosmetic
  * pass independently from the simulation pool so a catastrophic match
  * cannot turn gore into a presentation-time allocation or frame spike. */
-#define DEMO_BLOOD_STAIN_VISUAL_CAP 240U
-/* A blood volume is a three-dimensional pool, but the current renderer is a
- * side-view column projection.  Keep a small fixed impact field so it reads
- * as a splatter that has soaked into the visible dirt rather than a single
- * red pixel perched on its rim. */
-#define DEMO_BLOOD_STAIN_MARK_CAP 14U
 /* Replay frames are captured every four simulation ticks.  Holding each
  * picture for a bounded six presentation ticks makes the result reel read as
  * a deliberate slow-motion recap rather than racing through its ledger. */
@@ -4178,11 +4172,10 @@ static void demo_voxelize_rigid_bodies(void)
 }
 
 /* Fluids are authoritative volumes, but the software renderer owns their
- * visible top layer.  Water and lava are opaque enough to read as chunky
- * cells.  Blood is deliberately excluded here: drawing it as a voxel above
- * the terrain made every small deposit look like a red cap instead of a
- * splatter soaked into the surface.  Blood gets a dedicated decal pass after
- * lighting, where it can preserve the actual dirt or metal underneath. */
+ * visible top layer. Water and lava are opaque enough to read as chunky
+ * cells. Blood stays out of this bridge: the restored v0.0.4 effect/residue
+ * path gives it the proven readable spray without turning every pooled fluid
+ * cell into a red terrain cap. */
 static void demo_voxelize_fluids(void)
 {
     vox_u16 index;
@@ -4587,6 +4580,11 @@ static int demo_effect_view_position(const vox_software_view *view,
                                     screen_x, screen_y);
 }
 
+/* The previous stain experiment projected a blood-fluid cell into side-view
+ * terrain. It is excluded from the current v0.0.4 visual baseline: a
+ * persistent volume remains authoritative, but visible blood comes from the
+ * proven ballistic effect burst until a replacement has human approval. */
+#if 0
 /* The fluid solver owns a blood cell in open space. A splatter belongs on
  * the first solid material that caught it: prefer its floor, then a wall or
  * ceiling for a glancing hit. We read the front-most non-fluid cell because
@@ -4821,6 +4819,7 @@ static vox_u16 demo_draw_blood_stains(const demo_app *app,
     }
     return embedded;
 }
+#endif
 
 static void demo_effect_particle_colour(vox_u16 material, vox_u8 *red,
                                         vox_u8 *green, vox_u8 *blue)
@@ -5810,10 +5809,6 @@ static void demo_draw_play(demo_app *app)
         memset(demo_pixels, 0, sizeof(demo_pixels));
     } else {
         demo_apply_atmosphere(app, &view);
-        /* Keep the temporary replay terrain available while surface stains
-         * choose the material they landed on. The overlay is restored before
-         * any gameplay/UI code can observe it. */
-        demo_draw_blood_stains(app, &view);
         if (app->replay_frame_valid) {
             demo_draw_replay_effect_particles(app, &view);
         } else {
@@ -9070,15 +9065,16 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench,
             fprintf(stderr,
                     "load self-test: explosive/collapse load missing\n");
             status = 6;
-        /* The current increment adds authoritative fluid, rigid, structural, replay, and
-         * dropship state.  The workload explicitly begins the interactive
-         * dropship sequence.  Recaptured at -O0 and -O2 from the same
-         * 600-tick input stream; these activity counters are a determinism
-         * baseline, not a wall-clock performance claim. */
+        /* The current increment adds authoritative fluid, rigid, structural,
+         * replay, dropship, and the restored v0.0.4 blood-residue baseline.
+         * The workload explicitly begins the interactive dropship sequence.
+         * Recaptured at -O0 and -O2 from the same 600-tick input stream;
+         * these activity counters are a determinism baseline, not a
+         * wall-clock performance claim. */
         } else if (ticks == 600U &&
                    (fired != 20U || explosions != 16U || crushes != 0U ||
-                    max_effects != 1009U || max_awake != 3873U ||
-                    demo_match.state_hash != (vox_u32)0x9E258AE8UL)) {
+                    max_effects != 876U || max_awake != 3882U ||
+                    demo_match.state_hash != (vox_u32)0x8D98C1D0UL)) {
             fprintf(stderr,
                     "load self-test: canonical 600-tick activity/hash "
                     "mismatch\n");
@@ -10284,6 +10280,9 @@ static int demo_particle_overlay_self_test(void)
     return 0;
 }
 
+/* Superseded surface-stain qualification retained only in source history.
+ * The v0.0.4 visual baseline below verifies the readable ballistic burst. */
+#if 0
 /* A pooled blood cell must not become a red terrain voxel. It is drawn after
  * the software world pass as a bounded surface mark, and neither the mark nor
  * its replay-safe colour selection may change canonical state. */
@@ -10410,6 +10409,101 @@ static int demo_blood_stain_overlay_self_test(void)
     }
     printf("DIGS blood stain overlay self-test passed pre=%08lx post=%08lx\n",
            (unsigned long)unstained_hash, (unsigned long)stained_hash);
+    return 0;
+}
+#endif
+
+/* Re-establish the v0.0.4 blood baseline: gore is a strong, long-lived
+ * ballistic particle burst over the rendered world. It must remain a
+ * presentation overlay so the legacy visual read cannot turn into a blocking
+ * cell, mutate a replay ledger, or enter the canonical hash. */
+static int demo_blood_baseline_self_test(void)
+{
+    demo_app app;
+    vox_digs_rules rules;
+    vox_software_view view;
+    vox_u32 world_hash;
+    vox_u32 match_hash;
+    vox_u32 before_hash;
+    vox_u32 after_hash;
+    vox_result render_status;
+    vox_u16 depth;
+    const vox_cell *cell;
+    memset(&app, 0, sizeof(app));
+    demo_prepare_targets();
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&demo_match, &rules) != VOX_OK) return 1;
+    for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+        if (vox_world_set(&demo_match.world, 160U, 99U, depth,
+                          VOX_MAT_AIR, 0L) != VOX_OK) {
+            return 1;
+        }
+    }
+    app.options.gore_level = 2;
+    app.camera_zoom = DEMO_CAMERA_ZOOM_MAX;
+    app.camera_scale = (double)DEMO_CAMERA_ZOOM_MAX;
+    app.camera_world_x = 160.0;
+    app.camera_world_y = 100.0;
+    demo_match.effects[0].active = 1U;
+    demo_match.effects[0].material = VOX_MAT_BLOOD;
+    demo_match.effects[0].position_x_q16 = 160L << 16;
+    demo_match.effects[0].position_y_q16 = 99L << 16;
+    demo_match.effects[0].velocity_x_q16 = 49152L;
+    demo_match.effects[0].velocity_y_q16 = -49152L;
+    demo_match.effects[0].ttl_ticks = 96U;
+    demo_match.effect_count = 1U;
+    world_hash = vox_world_hash(&demo_match.world);
+    match_hash = vox_digs_hash(&demo_match);
+    demo_camera_view(&app, &view);
+    demo_render_config.gi_quality = VOX_GI_COMPATIBILITY;
+    demo_render_overlay_begin();
+    demo_build_render_world(&app);
+    cell = vox_world_cell(&demo_match.world, 160U, 99U,
+                          VOX_WORLD_DEPTH - 1U);
+    if (cell == 0 || cell->material != VOX_MAT_AIR) {
+        demo_render_overlay_restore();
+        return 2;
+    }
+    render_status = vox_software_render_view_ex(&demo_match.world,
+        &demo_target, &demo_render_config, &view);
+    demo_render_overlay_restore();
+    if (render_status != VOX_OK) return 3;
+    demo_apply_atmosphere(&app, &view);
+    before_hash = vox_software_hash(&demo_target);
+    demo_draw_effect_particles(&app, &view);
+    after_hash = vox_software_hash(&demo_target);
+    if (vox_world_hash(&demo_match.world) != world_hash ||
+        vox_digs_hash(&demo_match) != match_hash || before_hash == after_hash) {
+        return 4;
+    }
+    app.replay_frame_valid = 1U;
+    app.replay_frame.effect_count = 1U;
+    app.replay_frame.effects[0].position_x_q16 = 160L << 16;
+    app.replay_frame.effects[0].position_y_q16 = 99L << 16;
+    app.replay_frame.effects[0].velocity_x_q16 = 49152L;
+    app.replay_frame.effects[0].velocity_y_q16 = -49152L;
+    app.replay_frame.effects[0].material = VOX_MAT_BLOOD;
+    app.replay_frame.effects[0].ttl_ticks = 96U;
+    demo_render_overlay_begin();
+    demo_build_render_world(&app);
+    demo_build_replay_render_world(&app.replay_frame);
+    render_status = vox_software_render_view_ex(&demo_match.world,
+        &demo_target, &demo_render_config, &view);
+    demo_render_overlay_restore();
+    if (render_status != VOX_OK) return 5;
+    demo_apply_atmosphere(&app, &view);
+    before_hash = vox_software_hash(&demo_target);
+    demo_draw_replay_effect_particles(&app, &view);
+    after_hash = vox_software_hash(&demo_target);
+    if (vox_world_hash(&demo_match.world) != world_hash ||
+        vox_digs_hash(&demo_match) != match_hash || before_hash == after_hash) {
+        return 6;
+    }
+    printf("DIGS blood baseline self-test passed live=%08lx replay=%08lx\n",
+           (unsigned long)after_hash, (unsigned long)before_hash);
     return 0;
 }
 
@@ -11172,8 +11266,8 @@ int main(int argc, char **argv)
     if (argc >= 2 && strcmp(argv[1], "--particle-overlay-self-test") == 0) {
         return demo_particle_overlay_self_test();
     }
-    if (argc >= 2 && strcmp(argv[1], "--blood-stain-self-test") == 0) {
-        return demo_blood_stain_overlay_self_test();
+    if (argc >= 2 && strcmp(argv[1], "--blood-baseline-self-test") == 0) {
+        return demo_blood_baseline_self_test();
     }
     if (argc >= 2 && strcmp(argv[1], "--fixed-step-self-test") == 0) {
         return demo_fixed_step_self_test();

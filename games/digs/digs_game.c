@@ -95,8 +95,6 @@
 #define DIGS_RAIL_STONE_COST 72U
 #define DIGS_RAIL_RECOIL_Q16 98304L
 #define DIGS_PROJECTILE_GRAVITY_Q16 6144L
-#define DIGS_GORE_GRAVITY_Q16 6144L
-#define DIGS_GORE_TERMINAL_FALL_Q16 (3L << 16)
 #define DIGS_PULASKI_CHARGE_TICKS 60U
 #define DIGS_PULASKI_RETURN_TICKS 24U
 #define DIGS_BOLT_CHARGE_TICKS 30U
@@ -5001,25 +4999,31 @@ static void digs_spawn_death_gore(vox_digs_match *match, vox_u16 victim,
             vox_i32 wound_x = x_q16 + box.offset_x_q16;
             vox_i32 wound_y = y_q16 + box.offset_y_q16;
             digs_spawn_effect_variant(match, VOX_MAT_FLESH, wound_x, wound_y,
-                direction_x * (16384L + (vox_i32)(noise % 5U) * 2048L),
-                -8192L - (vox_i32)((noise >> 8) % 5U) * 2048L,
-                (vox_u16)(18U + noise % 24U), victim, part);
+                direction_x * (24576L + (vox_i32)(noise % 5U) * 4096L),
+                -12288L - (vox_i32)((noise >> 8) % 9U) * 4096L,
+                (vox_u16)(54U + noise % 48U), victim, part);
             digs_emit_event(match, VOX_DIGS_EVENT_LIMB_SEVER, killer,
                             victim, weapon, VOX_MAT_FLESH, wound_x, wound_y,
                             part, (vox_u16)(noise & 15U));
         }
         severed_count++;
     }
-    if (heat) {
-        blood_count = 0U;
-    } else if (full_gib) {
-        blood_count = match->rules.fx_budget == VOX_DIGS_FX_CARNAGE ?
-                      56U : (match->rules.fx_budget == VOX_DIGS_FX_RETRO ?
-                             20U : 36U);
+    /* Restore the v0.0.4 blood baseline while the new systemic gore is
+     * rebuilt: a death is a broad, readable spray, not a handful of dense
+     * particles that vanish into the fluid pool before a player can read the
+     * hit. Anatomy and damage classification remain the newer implementation;
+     * this is deliberately only the established presentation profile. */
+    (void)severed_count;
+    (void)explosive;
+    (void)full_gib;
+    (void)heat;
+    (void)headshot;
+    if (match->rules.fx_budget == VOX_DIGS_FX_RETRO) {
+        blood_count = 24U;
+    } else if (match->rules.fx_budget == VOX_DIGS_FX_CARNAGE) {
+        blood_count = 72U;
     } else {
-        blood_count = (vox_u16)(4U + severed_count * 6U +
-                                 (headshot ? 10U : 0U));
-        if (blood_count > 28U) blood_count = 28U;
+        blood_count = 44U;
     }
     for (part = 0U; part < blood_count; ++part) {
         vox_u32 noise = digs_noise(match->rules.seed,
@@ -5027,14 +5031,12 @@ static void digs_spawn_death_gore(vox_digs_match *match, vox_u16 victim,
                                    (vox_u32)victim,
                                    0xB1000000U +
                                    (vox_u32)match->deaths[victim] * 53U);
-        vox_i32 velocity_x = direction_x * (8192L +
-                             (vox_i32)(noise % 9U) * 4096L) +
-                             ((vox_i32)((noise >> 4) % 5U) - 2L) * 2048L;
-        vox_i32 velocity_y = -4096L -
-            (vox_i32)((noise >> 7) % 8U) * 2048L;
+        vox_i32 velocity_x = ((vox_i32)(noise % 25U) - 12L) * 6144L;
+        vox_i32 velocity_y = -8192L -
+            (vox_i32)((noise >> 7) % 18U) * 4608L;
         digs_spawn_effect_variant(match, VOX_MAT_BLOOD, x_q16, y_q16,
                                   velocity_x, velocity_y,
-                                  (vox_u16)(22U + noise % 34U), victim,
+                                  (vox_u16)(38U + noise % 90U), victim,
                                   (vox_u16)(noise & 31U));
     }
 }
@@ -6851,9 +6853,9 @@ static void digs_sever_limb_chain(vox_digs_match *match, vox_u16 attacker,
             digs_spawn_effect_variant(match, VOX_MAT_FLESH,
                 wound_x_q16 + ((vox_i32)(noise % 7U) - 3L) * 4096L,
                 wound_y_q16 + ((vox_i32)((noise >> 5) % 5U) - 2L) * 4096L,
-                ((vox_i32)((noise >> 9) % 17U) - 8L) * 4096L,
-                -8192L - (vox_i32)((noise >> 15) % 5U) * 2048L,
-                (vox_u16)(18U + noise % 24U), victim,
+                ((vox_i32)((noise >> 9) % 17U) - 8L) * 6144L,
+                -12288L - (vox_i32)((noise >> 15) % 10U) * 4096L,
+                (vox_u16)(54U + noise % 72U), victim,
                 (vox_u16)((candidate << 3) | gib));
         }
         if (attacker != VOX_DIGS_NO_PLAYER && attacker != victim) {
@@ -6879,7 +6881,6 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
     vox_digs_hurtbox wound_box;
     vox_i32 wound_x_q16;
     vox_i32 wound_y_q16;
-    vox_i32 impact_direction_x = 1L;
     if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
         !vox_digs_player_is_active(match, victim) ||
         !match->alive[victim] || digs_player_extracted(match, victim) ||
@@ -6946,12 +6947,6 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
     if (attacker != VOX_DIGS_NO_PLAYER && attacker != victim) {
         match->last_attacker[victim] = attacker;
         match->last_attacker_tick[victim] = match->tick;
-        impact_direction_x =
-            match->players[victim].position_x.value_q16 -
-            match->players[attacker].position_x.value_q16;
-        impact_direction_x = impact_direction_x >= 0L ? 1L : -1L;
-    } else {
-        impact_direction_x = match->facing_right[victim] ? 1L : -1L;
     }
     match->last_damage_weapon[victim] = weapon;
     match->last_damage_part[victim] = part;
@@ -6969,14 +6964,12 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
         vox_u32 noise = digs_noise(match->rules.seed, match->tick + i,
                                    (vox_u32)victim,
                                    (vox_u32)part * 257U + damage);
-        vox_i32 spread_x = impact_direction_x *
-            (8192L + (vox_i32)(noise % 9U) * 4096L) +
-            ((vox_i32)((noise >> 4) % 5U) - 2L) * 2048L;
-        vox_i32 spread_y = -4096L -
-            (vox_i32)((noise >> 8) % 6U) * 2048L;
+        vox_i32 spread_x = ((vox_i32)(noise % 17U) - 8L) * 5120L;
+        vox_i32 spread_y = -10240L -
+            (vox_i32)((noise >> 8) % 13U) * 4096L;
         digs_spawn_effect_variant(match, VOX_MAT_BLOOD,
             wound_x_q16, wound_y_q16,
-            spread_x, spread_y, (vox_u16)(20U + noise % 30U), victim,
+            spread_x, spread_y, (vox_u16)(34U + noise % 60U), victim,
             (vox_u16)((part << 4) | (noise & 15U)));
     }
     {
@@ -9816,14 +9809,27 @@ static void digs_deposit_effect_impact(vox_digs_match *match,
                     impact_x + offsets[candidate][0];
         vox_i32 y = candidate == 0U ? free_y :
                     impact_y + offsets[candidate][1];
+        const vox_cell *cell;
         if (x < 0 || y < 0 || x >= (vox_i32)VOX_WORLD_WIDTH ||
             y >= (vox_i32)VOX_WORLD_HEIGHT ||
             digs_effect_cell_overlaps_player(match, x, y)) {
             continue;
         }
+        /* v0.0.4's readable blood baseline leaves a non-solid blood cell at
+         * the impact site. Retain the v0.0.5 fluid deposit alongside that
+         * residue, so a sprayed kill stays legible after the airborne effect
+         * stops without sacrificing pooling or fluid hazards. Never apply
+         * this path to flesh or to a cell occupied by a miner. */
+        cell = vox_world_cell(&match->world, (vox_u32)x, (vox_u32)y,
+                              effect->depth);
+        if (cell == 0 || cell->material != VOX_MAT_AIR) {
+            continue;
+        }
         (void)vox_fluid_add_at(&match->fluids, (vox_u16)x, (vox_u16)y,
                                effect->depth, VOX_FLUID_BLOOD, 4096L,
                                37L << 16);
+        (void)vox_world_set(&match->world, (vox_u32)x, (vox_u32)y,
+                            effect->depth, VOX_MAT_BLOOD, 37L << 16);
         return;
     }
 }
@@ -9845,13 +9851,7 @@ static void digs_step_effects(vox_digs_match *match)
         if (!effect->active) {
             continue;
         }
-        if (effect->material == VOX_MAT_BLOOD ||
-            effect->material == VOX_MAT_FLESH) {
-            effect->velocity_y_q16 += DIGS_GORE_GRAVITY_Q16;
-            if (effect->velocity_y_q16 > DIGS_GORE_TERMINAL_FALL_Q16) {
-                effect->velocity_y_q16 = DIGS_GORE_TERMINAL_FALL_Q16;
-            }
-        } else if (effect->material != VOX_MAT_SMOKE) {
+        if (effect->material != VOX_MAT_SMOKE) {
             effect->velocity_y_q16 += 2048L;
         }
         previous_x = effect->position_x_q16;
