@@ -1212,7 +1212,9 @@ static int find_tool_target(const vox_world *world, int require_air,
             }
             if (require_air ? cell->material == VOX_MAT_AIR :
                               (cell->material != VOX_MAT_AIR &&
-                               cell->material != VOX_MAT_BEDROCK)) {
+                               cell->material != VOX_MAT_BEDROCK &&
+                               !vox_world_is_fixture(world, x, y,
+                                                     VOX_WORLD_DEPTH - 1U))) {
                 *x_out = x;
                 *y_out = y;
                 return 1;
@@ -1242,13 +1244,11 @@ static int test_tools(void)
         return 2;
     }
     cell = vox_world_cell(&match.world, x, y, VOX_WORLD_DEPTH - 1U);
-    if (cell == 0 || cell->material != VOX_MAT_AIR ||
-        match.state_hash == initial_hash ||
-        !find_tool_target(&match.world, 0, &x, &y) ||
-        vox_digs_use_tool(&match, 0U, VOX_DIGS_TOOL_BLAST_CHARGE, x, y,
-                           VOX_WORLD_DEPTH - 1U) != VOX_OK) {
-        return 3;
-    }
+    if (cell == 0 || cell->material != VOX_MAT_AIR) return 31;
+    if (match.state_hash == initial_hash) return 32;
+    if (!find_tool_target(&match.world, 0, &x, &y)) return 33;
+    if (vox_digs_use_tool(&match, 0U, VOX_DIGS_TOOL_BLAST_CHARGE, x, y,
+                          VOX_WORLD_DEPTH - 1U) != VOX_OK) return 34;
     if (!find_tool_target(&match.world, 1, &x, &y) ||
         vox_digs_use_tool(&match, 0U, VOX_DIGS_TOOL_SMOKE_POT, x, y,
                            VOX_WORLD_DEPTH - 1U) != VOX_OK) {
@@ -1370,7 +1370,7 @@ static int test_combat_and_respawn(void)
     vox_digs_rules rules;
     vox_u32 tick;
     vox_u16 effect;
-    int found_flesh = 0;
+    int found_blood = 0;
     vox_digs_rules_classic(&rules);
     rules.player_count = 2U;
     rules.bot_mask = 0x0002U;
@@ -1394,11 +1394,11 @@ static int test_combat_and_respawn(void)
     }
     for (effect = 0U; effect < VOX_DIGS_MAX_EFFECTS; ++effect) {
         if (match.effects[effect].active &&
-            match.effects[effect].material == VOX_MAT_FLESH) {
-            found_flesh = 1;
+            match.effects[effect].material == VOX_MAT_BLOOD) {
+            found_blood = 1;
         }
     }
-    if (!found_flesh) {
+    if (!found_blood) {
         return 4;
     }
     for (tick = 0U; tick < VOX_DIGS_RESPAWN_TICKS; ++tick) {
@@ -2312,20 +2312,22 @@ static int test_v003_overlap_recovery_and_crush(void)
     deaths = v003_match_a.deaths[0];
     v003_match_a.spawn_shield_ticks[0] = 0U;
     /*
-     * Full burial is survivable for a bounded window rather than instantly
-     * fatal.  The first entombed tick announces itself and starts hurting;
-     * the miner keeps their controls and can dig free.
+     * Static terrain overlap is recovery-only.  This is the tunnel-safety
+     * rule: a miner caught in freshly excavated terrain must not begin a
+     * cave-in countdown simply because the physics solver moved them out.
+     * Detached rigid debris is covered separately by the physical-burial and
+     * debris-impact tests.
      */
     if (vox_world_sleep_all(&v003_match_a.world) != VOX_OK ||
         vox_digs_match_step(&v003_match_a) != VOX_OK ||
         !v003_match_a.alive[0] ||
         v003_match_a.deaths[0] != deaths ||
-        v003_match_a.buried_ticks[0] != 1U ||
-        v003_match_a.health[0] >= VOX_DIGS_MAX_HEALTH ||
-        !event_type_seen(&v003_match_a, VOX_DIGS_EVENT_CRUSH)) {
+        v003_match_a.buried_ticks[0] != 0U ||
+        v003_match_a.health[0] != VOX_DIGS_MAX_HEALTH ||
+        event_type_seen(&v003_match_a, VOX_DIGS_EVENT_CRUSH)) {
         return 4;
     }
-    /* Crush pressure kills if the miner cannot escape it. */
+    /* Continued ordinary recovery may be inconvenient, never lethal. */
     {
         vox_u16 guard;
         for (guard = 0U; guard < DIGS_TEST_BURIED_GUARD_TICKS &&
@@ -2334,8 +2336,10 @@ static int test_v003_overlap_recovery_and_crush(void)
                 return 5;
             }
         }
-        if (v003_match_a.alive[0] ||
-            v003_match_a.deaths[0] != (vox_u16)(deaths + 1U)) {
+        if (!v003_match_a.alive[0] ||
+            v003_match_a.deaths[0] != deaths ||
+            v003_match_a.buried_ticks[0] != 0U ||
+            v003_match_a.health[0] != VOX_DIGS_MAX_HEALTH) {
             return 6;
         }
     }
@@ -3956,8 +3960,8 @@ static int test_wide_excavation_caves_in(void)
     vox_u32 x;
     vox_u32 y;
     vox_u32 tick;
-    vox_u32 wide_open = 0U;
     vox_u32 narrow_open = 0U;
+    vox_u16 wide_cave_in = 0U;
     const vox_u32 base_x = 200U;
     const vox_u32 ground = 210U;
     const vox_u32 roof = 180U;
@@ -3983,21 +3987,30 @@ static int test_wide_excavation_caves_in(void)
             if (!set_test_column(&match.world, x, y, VOX_MAT_AIR)) return 5;
         }
     }
-    for (tick = 0U; tick < 300U; ++tick) {
+    /* Raw world edits in this fixture stand in for a high-output terrain
+     * breach.  Production tools notify the support frontier themselves. */
+    if (vox_structure_invalidate_with_impulse(
+            &match.structure, base_x + 20U, ground, 24U,
+            VOX_STRUCTURE_NO_SOURCE, VOX_DIGS_TOOL_FIRECRACKER,
+            255U) != VOX_OK) return 14;
+    for (tick = 0U; tick < 8U; ++tick) {
+        vox_u16 event_index;
         if (vox_digs_match_step(&match) != VOX_OK) return 6;
-    }
-    for (y = ground - 3U; y <= ground; ++y) {
-        for (x = base_x; x < base_x + 40U; ++x) {
-            if (vox_world_collision_classify(&match.world, x, y) !=
-                VOX_WORLD_COLLISION_SOLID) {
-                wide_open++;
+        for (event_index = 0U; event_index < match.event_count;
+             ++event_index) {
+            const vox_digs_event *event = vox_digs_event_get(&match,
+                                                               event_index);
+            if (event != 0 && event->type == VOX_DIGS_EVENT_CAVE_IN &&
+                event->magnitude >= 16U) {
+                wide_cave_in = 1U;
+                break;
             }
         }
     }
-    /* At least a third of the void must have filled with fallen material. */
-    if (wide_open * 3U > 40U * 4U * 2U) {
-        return 7;
-    }
+    /* Bounded rigid debris is allowed to remain loose/in flight; the
+     * acceptance is a major, physical cascade, never instantaneous terrain
+     * backfill into the whole chamber. */
+    if (wide_cave_in == 0U || match.structure.cascade_count == 0U) return 7;
 
     /* Now a narrow tunnel in fresh ground: it must survive intact. */
     if (vox_digs_match_init(&match, &rules) != VOX_OK) return 8;
@@ -4017,7 +4030,13 @@ static int test_wide_excavation_caves_in(void)
             if (!set_test_column(&match.world, x, y, VOX_MAT_AIR)) return 12;
         }
     }
-    for (tick = 0U; tick < 300U; ++tick) {
+    /* The corresponding narrow tunnel receives ordinary excavation strain,
+     * which must not turn it into an immediate collapse. */
+    if (vox_structure_invalidate_with_impulse(
+            &match.structure, base_x + 2U, ground, 8U,
+            VOX_STRUCTURE_NO_SOURCE, VOX_DIGS_TOOL_PULASKI,
+            24U) != VOX_OK) return 15;
+    for (tick = 0U; tick < 8U; ++tick) {
         if (vox_digs_match_step(&match) != VOX_OK) return 13;
     }
     for (y = ground - 3U; y <= ground; ++y) {
@@ -4132,14 +4151,48 @@ static int test_hot_rail_bore_leaves_no_lava(void)
         vox_digs_match_step(&match) != VOX_OK) {
         return 3;
     }
-    /* The seam must be scorched, never molten. */
+    /* A tap is an incendiary shot, not a tunnel edit. */
+    for (y = center_y - 2L; y <= center_y + 2L; ++y) {
+        for (x = center_x + 2L; x <= center_x + 8L; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                const vox_cell *cell = vox_world_cell(&match.world,
+                    (vox_u32)x, (vox_u32)y, z);
+                if (cell == 0 || cell->material != VOX_MAT_COAL) {
+                    return 4;
+                }
+            }
+        }
+    }
+    for (x = 0L; x < 8L; ++x) {
+        if (vox_digs_submit_input(&match, &input) != VOX_OK ||
+            vox_digs_match_step(&match) != VOX_OK) {
+            return 5;
+        }
+    }
+    /* Holding after the tap follows the dedicated safe bore path. */
+    {
+        int found_open = 0;
+        for (y = center_y - 2L; y <= center_y + 2L; ++y) {
+            for (x = center_x + 2L; x <= center_x + 8L; ++x) {
+                for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                    const vox_cell *cell = vox_world_cell(&match.world,
+                        (vox_u32)x, (vox_u32)y, z);
+                    if (cell != 0 && cell->material == VOX_MAT_AIR) {
+                        found_open = 1;
+                    }
+                }
+            }
+        }
+        if (!found_open) return 6;
+    }
+    /* The seam may be scorched or open, but must never become lava. */
     for (y = center_y - 2L; y <= center_y + 2L; ++y) {
         for (x = center_x + 2L; x <= center_x + 8L; ++x) {
             for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
                 const vox_cell *cell = vox_world_cell(&match.world,
                     (vox_u32)x, (vox_u32)y, z);
                 if (cell != 0 && cell->material == VOX_MAT_LAVA) {
-                    return 4;
+                    return 7;
                 }
             }
         }
@@ -4161,6 +4214,7 @@ static int test_partial_burial_is_survivable(void)
     vox_i32 x;
     vox_i32 y;
     vox_u16 tick;
+    vox_u16 debris_index;
     vox_digs_rules_classic(&rules);
     rules.player_count = 1U;
     rules.bot_mask = 0U;
@@ -4177,6 +4231,17 @@ static int test_partial_burial_is_survivable(void)
             }
         }
     }
+    /* Static terrain overlap alone is deliberately non-damaging: ordinary
+     * tunnel recovery must not become a cave-in.  A real detached debris
+     * body is what starts the recoverable crush-pressure path. */
+    if (vox_rigid_spawn(&match.ragdolls, &debris_index,
+                        match.players[0].position_x.value_q16,
+                        match.players[0].position_y.value_q16,
+                        2L << 16, 2L << 16, 65536L,
+                        VOX_RIGID_BODY_DEBRIS) != VOX_OK) {
+        return 8;
+    }
+    match.rigid_material[debris_index] = VOX_MAT_STONE;
     /* Burial cannot hurt an invulnerable miner, so retire the spawn shield. */
     match.spawn_shield_ticks[0] = 0U;
     if (vox_world_sleep_all(&match.world) != VOX_OK) return 3;
@@ -4198,6 +4263,9 @@ static int test_partial_burial_is_survivable(void)
                 return 6;
             }
         }
+    }
+    if (vox_rigid_release(&match.ragdolls, debris_index) != VOX_OK) {
+        return 9;
     }
     if (vox_world_sleep_all(&match.world) != VOX_OK ||
         vox_digs_match_step(&match) != VOX_OK ||
@@ -4615,9 +4683,13 @@ int main(void)
         fprintf(stderr, "DIGS player physics mismatch\n");
         return 5;
     }
-    if (test_tools() != 0) {
-        fprintf(stderr, "DIGS terrain tool mismatch\n");
-        return 6;
+    {
+        int tool_result = test_tools();
+        if (tool_result != 0) {
+            fprintf(stderr, "DIGS terrain tool mismatch (%d)\n",
+                    tool_result);
+            return 6;
+        }
     }
     if (test_player_controls() != 0) {
         fprintf(stderr, "DIGS player control mismatch\n");

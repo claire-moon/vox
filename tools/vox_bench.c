@@ -30,7 +30,8 @@
 #define BENCH_MAX_TICKS 100000U
 #define BENCH_SEED 0x50303033UL
 #define BENCH_BLAST_PERIOD 90U
-#define BENCH_BLAST_RADIUS 7U
+#define BENCH_STRESS_TICKS 18000U
+#define BENCH_STRESS_BLAST_PERIOD 45U
 
 typedef struct bench_counters {
     unsigned long awake_total;
@@ -63,6 +64,12 @@ typedef struct bench_counters {
     unsigned long speech_last_tick;
     unsigned long unattributed_deaths;
     unsigned long hazard_damage;
+    unsigned long fluids_total;
+    unsigned long fluids_peak;
+    unsigned long rigid_total;
+    unsigned long rigid_peak;
+    unsigned long structure_frontier_total;
+    unsigned long structure_frontier_peak;
 } bench_counters;
 
 static void bench_track_peak(unsigned long value, unsigned long *total,
@@ -204,15 +211,24 @@ int main(int argc, char **argv)
     vox_u32 ticks = BENCH_DEFAULT_TICKS;
     vox_u32 tick;
     vox_u16 player;
+    vox_u32 blast_period = BENCH_BLAST_PERIOD;
+    int stress = 0;
+    int argument = 1;
     clock_t started;
     clock_t finished;
     unsigned long elapsed_us;
     unsigned long per_tick_us;
 
-    if (argc >= 2) {
+    if (argc >= 2 && strcmp(argv[1], "--stress") == 0) {
+        stress = 1;
+        ticks = BENCH_STRESS_TICKS;
+        blast_period = BENCH_STRESS_BLAST_PERIOD;
+        argument++;
+    }
+    if (argc > argument) {
         char *end = 0;
-        unsigned long requested = strtoul(argv[1], &end, 10);
-        if (end == argv[1] || *end != '\0' ||
+        unsigned long requested = strtoul(argv[argument], &end, 10);
+        if (end == argv[argument] || *end != '\0' ||
             requested < BENCH_MIN_TICKS || requested > BENCH_MAX_TICKS) {
             fprintf(stderr, "vox_bench: ticks must be %u..%u\n",
                     (unsigned int)BENCH_MIN_TICKS,
@@ -220,6 +236,11 @@ int main(int argc, char **argv)
             return 2;
         }
         ticks = (vox_u32)requested;
+        argument++;
+    }
+    if (argc != argument) {
+        fprintf(stderr, "vox_bench: usage: vox_bench [--stress] [ticks]\n");
+        return 2;
     }
 
     vox_digs_rules_classic(&rules);
@@ -249,13 +270,17 @@ int main(int argc, char **argv)
 
     started = clock();
     for (tick = 0U; tick < ticks && match.phase == VOX_DIGS_RUNNING; ++tick) {
-        if ((tick % BENCH_BLAST_PERIOD) == 0U) {
+        if ((tick % blast_period) == 0U) {
             vox_u32 blast_x = VOX_WORLD_WIDTH / 5U +
-                (tick / BENCH_BLAST_PERIOD * 67U) %
+                (tick / blast_period * 67U) %
                 (VOX_WORLD_WIDTH * 3U / 5U);
             vox_u32 blast_y = VOX_WORLD_HEIGHT * 3U / 5U;
-            (void)vox_world_blast(&match.world, blast_x, blast_y, 0U,
-                                  BENCH_BLAST_RADIUS, 700L << 16);
+            vox_u16 source = (vox_u16)((tick / blast_period) % 2U);
+            if (match.alive[source]) {
+                (void)vox_digs_use_tool(&match, source,
+                                        VOX_DIGS_TOOL_FIRECRACKER,
+                                        blast_x, blast_y, 0U);
+            }
         }
         for (player = 0U; player < 2U; ++player) {
             if (!match.alive[player]) {
@@ -280,6 +305,13 @@ int main(int argc, char **argv)
         bench_track_peak((unsigned long)match.projectile_count,
                          &counters.projectiles_total,
                          &counters.projectiles_peak);
+        bench_track_peak((unsigned long)match.fluids.active_cells,
+                         &counters.fluids_total, &counters.fluids_peak);
+        bench_track_peak((unsigned long)match.ragdolls.body_count,
+                         &counters.rigid_total, &counters.rigid_peak);
+        bench_track_peak((unsigned long)match.structure.frontier_count,
+                         &counters.structure_frontier_total,
+                         &counters.structure_frontier_peak);
         bench_drain_events(&match, &counters);
     }
     finished = clock();
@@ -294,7 +326,9 @@ int main(int argc, char **argv)
     per_tick_us = tick != 0U ? elapsed_us / (unsigned long)tick : 0UL;
 
     printf("# VOX + DIGS deterministic simulation benchmark\n");
-    printf("scenario=deepworks_four_miner_carnage\n");
+    printf("scenario=%s\n", stress ?
+           "deepworks_four_miner_destruction_stress" :
+           "deepworks_four_miner_carnage");
     printf("seed=%08lx\n", (unsigned long)BENCH_SEED);
     printf("ticks_requested=%lu\n", (unsigned long)ticks);
     printf("ticks_run=%lu\n", (unsigned long)tick);
@@ -308,6 +342,16 @@ int main(int argc, char **argv)
     printf("effects_mean=%lu\n",
            tick != 0U ? counters.effects_total / (unsigned long)tick : 0UL);
     printf("projectiles_peak=%lu\n", counters.projectiles_peak);
+    printf("fluids_peak=%lu\n", counters.fluids_peak);
+    printf("fluids_mean=%lu\n",
+           tick != 0U ? counters.fluids_total / (unsigned long)tick : 0UL);
+    printf("rigid_bodies_peak=%lu\n", counters.rigid_peak);
+    printf("rigid_bodies_mean=%lu\n",
+           tick != 0U ? counters.rigid_total / (unsigned long)tick : 0UL);
+    printf("structure_frontier_peak=%lu\n", counters.structure_frontier_peak);
+    printf("structure_frontier_mean=%lu\n",
+           tick != 0U ? counters.structure_frontier_total /
+           (unsigned long)tick : 0UL);
     printf("occupied_cells=%lu\n", (unsigned long)match.world.occupied_cells);
     printf("weapon_fires=%lu\n", counters.weapon_fires);
     printf("explosions=%lu\n", counters.explosions);

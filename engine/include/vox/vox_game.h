@@ -77,19 +77,19 @@
 #define VOX_DIGS_REPLAY_MAX_FLUIDS 32U
 #define VOX_DIGS_REPLAY_MAX_EFFECTS 24U
 #define VOX_DIGS_REPLAY_MAX_EVENTS 12U
-#define VOX_DIGS_DROP_SHIP_ROUTE_TICKS 360U
+#define VOX_DIGS_DROP_SHIP_ROUTE_TICKS 660U
 #define VOX_DIGS_DROPSHIP_PHASE_LAUNCH 0U
 #define VOX_DIGS_DROPSHIP_PHASE_WAITING 1U
 #define VOX_DIGS_DROPSHIP_PHASE_EXTRACTION 2U
 #define VOX_DIGS_DROPSHIP_PHASE_DEPARTED 3U
-#define VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16 (5L << 16)
-#define VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16 (1L << 16)
-#define VOX_DIGS_DROPSHIP_BOARD_RADIUS_Q16 (6L << 16)
+#define VOX_DIGS_DROPSHIP_HALF_WIDTH_Q16 (14L << 16)
+#define VOX_DIGS_DROPSHIP_HALF_HEIGHT_Q16 (3L << 16)
+#define VOX_DIGS_DROPSHIP_BOARD_RADIUS_Q16 (16L << 16)
 #define VOX_DIGS_DROPSHIP_LAUNCH_SPEED_Q16 (1L << 16)
 #define VOX_DIGS_DROPSHIP_COLLISION_COOLDOWN_TICKS 12U
 /* Keep the launch deck below the HUD-safe top edge while remaining above the
  * minimum authored landform surface and its fixture clearance. */
-#define VOX_DIGS_DROPSHIP_CRUISE_Y_Q16 (42L << 16)
+#define VOX_DIGS_DROPSHIP_CRUISE_Y_Q16 (58L << 16)
 /* Keep the launch route in legal world coordinates.  Miners are staged on
  * the ship at the first simulation tick and auto-launch at the far endpoint
  * only if they have not fired for themselves. */
@@ -110,6 +110,9 @@
 #define VOX_DIGS_DAMAGE_EXPLOSIVE 4U
 #define VOX_DIGS_DAMAGE_HEAT 8U
 #define VOX_DIGS_DAMAGE_DROWNING 16U
+
+/* vox_digs_rules.reserved is an authoritative rules flag word. */
+#define VOX_DIGS_RULE_UNLIMITED_TIME 1U
 
 #define VOX_DIGS_PART_VITAL 1U
 #define VOX_DIGS_PART_LIMB 2U
@@ -398,16 +401,24 @@ typedef enum vox_digs_event_type {
     VOX_DIGS_EVENT_CAVE_IN = 32,
     VOX_DIGS_EVENT_DEBRIS_IMPACT = 33,
     VOX_DIGS_EVENT_FIXTURE_BREAK = 34,
-    VOX_DIGS_EVENT_DROWN = 35
+    VOX_DIGS_EVENT_DROWN = 35,
+    VOX_DIGS_EVENT_STRUCTURE_STRAIN = 36
 } vox_digs_event_type;
 
 typedef enum vox_digs_award_id {
-    VOX_DIGS_AWARD_PYROMANIAC = 0,
-    VOX_DIGS_AWARD_GRAVE_DIGGER = 1,
-    VOX_DIGS_AWARD_HEADHUNTER = 2,
-    VOX_DIGS_AWARD_CAVE_IN_ARTIST = 3,
-    VOX_DIGS_AWARD_EXTRACTIONIST = 4
+    VOX_DIGS_AWARD_FIREBRAND = 0,
+    VOX_DIGS_AWARD_REAPER = 1,
+    VOX_DIGS_AWARD_HOTSHOT = 2,
+    VOX_DIGS_AWARD_MOLERAT = 3,
+    VOX_DIGS_AWARD_SKYJOCKEY = 4
 } vox_digs_award_id;
+
+/* Preserve source compatibility and existing per-match award bit positions. */
+#define VOX_DIGS_AWARD_PYROMANIAC VOX_DIGS_AWARD_FIREBRAND
+#define VOX_DIGS_AWARD_GRAVE_DIGGER VOX_DIGS_AWARD_REAPER
+#define VOX_DIGS_AWARD_HEADHUNTER VOX_DIGS_AWARD_HOTSHOT
+#define VOX_DIGS_AWARD_CAVE_IN_ARTIST VOX_DIGS_AWARD_MOLERAT
+#define VOX_DIGS_AWARD_EXTRACTIONIST VOX_DIGS_AWARD_SKYJOCKEY
 
 /*
  * A replay frame is render-only state.  It deliberately contains bounded
@@ -881,6 +892,11 @@ typedef struct vox_digs_match {
     vox_digs_contract contracts[VOX_DIGS_MAX_PAIRS];
     vox_u16 awards[VOX_DIGS_MAX_SLOTS];
     vox_u16 award_value[VOX_DIGS_MAX_SLOTS];
+    /* Successful direct terrain-cutting time.  The stamp lets multiple cuts
+     * in one fixed tick count as one tick of digging while misses,
+     * explosions, and passive collapses count as none. */
+    vox_u32 direct_dig_ticks[VOX_DIGS_MAX_SLOTS];
+    vox_u32 direct_dig_last_tick[VOX_DIGS_MAX_SLOTS];
     vox_digs_replay_ledger replay;
     vox_digs_dropship dropship;
     vox_u32 lava_level_q16;

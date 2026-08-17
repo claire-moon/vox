@@ -94,6 +94,10 @@ typedef struct vox_material_properties {
 #define VOX_CELL_UNSTABLE 16U
 /* Loose solid cells simulate as debris but do not block character bodies. */
 #define VOX_CELL_LOOSE 32U
+/* Authored rope fixture metal.  It is distinct from ordinary metal terrain:
+ * only explicit explosive paths may destroy a fixture or classify it as a
+ * special grapple target. */
+#define VOX_CELL_FIXTURE 64U
 
 typedef enum vox_world_collision_class {
     VOX_WORLD_COLLISION_EMPTY = 0,
@@ -172,6 +176,10 @@ vox_result vox_world_rebuild(vox_world *world);
 const vox_material_properties *vox_material_get(vox_u16 material);
 vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
                          vox_u16 material, vox_i32 temperature_q16);
+vox_result vox_world_set_fixture(vox_world *world, vox_u32 x, vox_u32 y,
+                                 vox_u32 z, vox_u16 fixture);
+int vox_world_is_fixture(const vox_world *world, vox_u32 x, vox_u32 y,
+                         vox_u32 z);
 /* Set one complete x/z layer, retaining a material such as bedrock. */
 vox_result vox_world_set_layer_except(vox_world *world, vox_u32 y,
                                       vox_u16 material,

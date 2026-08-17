@@ -36,6 +36,11 @@ typedef struct vox_structure_chunk_state {
     vox_u16 load_q8;
     vox_u16 dirty;
     vox_u16 collapse_risk_q8;
+    /* Accumulated excavation/blast strain.  A low-strain unsupported fleck
+     * is a creak, not an immediate cave-in; only a critical chunk can queue
+     * a physical collapse seed. */
+    vox_u16 strain_q8;
+    vox_u16 warning_pending;
     /* An invalidation arms this chunk for one physical collapse decision.
      * Initial map analysis deliberately leaves it disarmed, so authored
      * overhangs do not spontaneously turn into debris before any excavation
@@ -111,6 +116,15 @@ vox_result vox_structure_invalidate_with_cause(vox_structure_state *state,
                                                vox_u32 radius,
                                                vox_u16 source,
                                                vox_u16 weapon);
+/* Like invalidate_with_cause, with an explicit deterministic structural
+ * impulse.  Direct cuts are gentle; explosive fractures can cross the
+ * critical threshold in one hit. */
+vox_result vox_structure_invalidate_with_impulse(vox_structure_state *state,
+                                                 vox_u32 x, vox_u32 y,
+                                                 vox_u32 radius,
+                                                 vox_u16 source,
+                                                 vox_u16 weapon,
+                                                 vox_u16 impulse_q8);
 vox_result vox_structure_step(vox_structure_state *state,
                               const vox_world *world, vox_u16 max_chunks);
 /* Returns VOX_OK and writes one stable FIFO collapse seed, or

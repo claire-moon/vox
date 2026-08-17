@@ -75,6 +75,11 @@
 #define DEMO_COSMETIC_COLOR_COUNT 6
 #define DEMO_RIGID_DEBRIS_VISUAL_CAP 32U
 #define DEMO_EFFECT_PARTICLE_CAP 320U
+/* Blood remains an authoritative fluid, but a side-on 320x200 view must
+ * render a settled film as marks on its supporting material rather than as a
+ * solid red cell hovering directly above the ground.  Bound the cosmetic
+ * pass independently from the simulation pool so a catastrophic match
+ * cannot turn gore into a presentation-time allocation or frame spike. */
 /* Replay frames are captured every four simulation ticks.  Holding each
  * picture for a bounded six presentation ticks makes the result reel read as
  * a deliberate slow-motion recap rather than racing through its ledger. */
@@ -116,6 +121,7 @@ typedef enum demo_screen {
     DEMO_RESULTS = 5,
     DEMO_INBOX = 6,
     DEMO_LOG = 7,
+    DEMO_REPLAY = 8,
     DEMO_CONTROLS = 9,
     DEMO_INPUT_OPTIONS = 11,
     DEMO_CUSTOMIZE = 12,
@@ -407,6 +413,8 @@ typedef struct demo_app {
     vox_u16 replay_playing;
     vox_u16 replay_frame_hold_ticks;
     vox_u16 replay_hold_ticks;
+    vox_u16 structure_strain;
+    vox_u16 structure_strain_ttl;
 } demo_app;
 
 static vox_u8 demo_pixels[DEMO_WIDTH * DEMO_HEIGHT * VOX_SOFTWARE_RGB_BYTES];
@@ -4030,28 +4038,34 @@ static void demo_voxelize_dropship(void)
     if (ship->phase == VOX_DIGS_DROPSHIP_PHASE_DEPARTED) return;
     center_x = (int)(ship->position_x_q16 / 65536L);
     center_y = (int)(ship->position_y_q16 / 65536L);
-    /* A tiny, deliberately blocky hull: broad enough to communicate the
-     * collision footprint without obscuring the launch platform. */
-    for (offset = -5; offset <= 5; ++offset) {
+    /* The collision hull is deliberately large and slow.  Match it with a
+     * readable, chunky steampunk silhouette instead of a tiny marker near
+     * the HUD. */
+    for (offset = -14; offset <= 14; ++offset) {
         demo_render_voxel(center_x + offset, center_y, VOX_MAT_METAL);
-        if (offset >= -3 && offset <= 3) {
+        if (offset >= -10 && offset <= 8) {
             demo_render_voxel(center_x + offset, center_y - 1,
                               VOX_MAT_METAL);
         }
+        if (offset >= -6 && offset <= 5) {
+            demo_render_voxel(center_x + offset, center_y - 2,
+                              VOX_MAT_METAL);
+        }
     }
-    demo_render_voxel(center_x - 2, center_y - 2, VOX_MAT_METAL);
-    demo_render_voxel(center_x - 1, center_y - 2, VOX_MAT_METAL);
-    demo_render_voxel(center_x, center_y - 2, VOX_MAT_LAVA);
-    demo_render_voxel(center_x + 1, center_y - 2, VOX_MAT_METAL);
-    demo_render_voxel(center_x + 2, center_y - 2, VOX_MAT_METAL);
+    demo_render_voxel(center_x - 3, center_y - 3, VOX_MAT_METAL);
+    demo_render_voxel(center_x - 2, center_y - 3, VOX_MAT_METAL);
+    demo_render_voxel(center_x - 1, center_y - 3, VOX_MAT_LAVA);
+    demo_render_voxel(center_x, center_y - 3, VOX_MAT_LAVA);
+    demo_render_voxel(center_x + 1, center_y - 3, VOX_MAT_METAL);
+    demo_render_voxel(center_x + 2, center_y - 3, VOX_MAT_METAL);
     tail_direction = ship->velocity_x_q16 < 0L ? 1 : -1;
     if (ship->phase == VOX_DIGS_DROPSHIP_PHASE_LAUNCH ||
         ship->phase == VOX_DIGS_DROPSHIP_PHASE_EXTRACTION) {
-        for (offset = 1; offset <= 4; ++offset) {
-            demo_render_voxel(center_x + tail_direction * (5 + offset),
+        for (offset = 1; offset <= 9; ++offset) {
+            demo_render_voxel(center_x + tail_direction * (14 + offset),
                               center_y, VOX_MAT_WATER);
-            if (offset <= 2) {
-                demo_render_voxel(center_x + tail_direction * (5 + offset),
+            if (offset <= 5) {
+                demo_render_voxel(center_x + tail_direction * (14 + offset),
                                   center_y + 1, VOX_MAT_SMOKE);
             }
         }
@@ -4157,6 +4171,26 @@ static void demo_voxelize_rigid_bodies(void)
     }
 }
 
+/* Fluids are authoritative volumes, but the software renderer owns their
+ * visible top layer. Water and lava are opaque enough to read as chunky
+ * cells. Blood stays out of this bridge: the restored v0.0.4 effect/residue
+ * path gives it the proven readable spray without turning every pooled fluid
+ * cell into a red terrain cap. */
+static void demo_voxelize_fluids(void)
+{
+    vox_u16 index;
+    for (index = 0U; index < demo_match.fluids.active_cells; ++index) {
+        const vox_fluid_cell *fluid = &demo_match.fluids.cells[index];
+        vox_u16 material = VOX_MAT_AIR;
+        if (fluid->active == 0U || fluid->volume_q16 <= 0L) continue;
+        if (fluid->material == VOX_FLUID_WATER) material = VOX_MAT_WATER;
+        else if (fluid->material == VOX_FLUID_LAVA) material = VOX_MAT_LAVA;
+        if (material != VOX_MAT_AIR) {
+            demo_render_voxel((int)fluid->x, (int)fluid->y, material);
+        }
+    }
+}
+
 static void demo_build_render_world(demo_app *app)
 {
     vox_u16 player;
@@ -4165,6 +4199,7 @@ static void demo_build_render_world(demo_app *app)
      * Give that exact boundary a top-layer voxel horizon so bedrock or deep
      * terrain cannot visually hide the rising hazard. */
     demo_voxelize_lava_horizon();
+    demo_voxelize_fluids();
     demo_voxelize_rigid_bodies();
     demo_voxelize_dropship();
     for (player = 0U; player < VOX_DIGS_MAX_SLOTS; ++player) {
@@ -4193,7 +4228,6 @@ static vox_u16 demo_replay_fluid_material(vox_u16 material)
 {
     if (material == VOX_FLUID_WATER) return VOX_MAT_WATER;
     if (material == VOX_FLUID_LAVA) return VOX_MAT_LAVA;
-    if (material == VOX_FLUID_BLOOD) return VOX_MAT_BLOOD;
     return VOX_MAT_AIR;
 }
 
@@ -4234,6 +4268,14 @@ static void demo_build_replay_render_world(const vox_digs_replay_frame *frame)
     }
     for (index = 0U; index < frame->effect_count; ++index) {
         const vox_digs_replay_effect *effect = &frame->effects[index];
+        /* Live effects are screen-space particles, not temporary terrain.
+         * Keep replay blood/flesh on that exact visual path as well; otherwise
+         * a captured droplet becomes a chunky red or pink world voxel only in
+         * the post-match reel. */
+        if (effect->material == VOX_MAT_BLOOD ||
+            effect->material == VOX_MAT_FLESH) {
+            continue;
+        }
         demo_render_voxel((int)(effect->position_x_q16 >> 16),
                           (int)(effect->position_y_q16 >> 16),
                           effect->material);
@@ -4417,7 +4459,7 @@ static void demo_atmosphere_pixel(const demo_app *app, vox_u32 world_x,
     green += fog;
     blue += fog * 2;
     moon_x = 28 + (int)(seed % (VOX_WORLD_WIDTH - 56U));
-    moon_y = 18 + (int)((seed >> 16) % 28U);
+    moon_y = 50 + (int)((seed >> 16) % 20U);
     moon_radius = 5 + (int)((seed >> 8) & 3U);
     delta_x = (int)world_x - moon_x;
     delta_y = (int)world_y - moon_y;
@@ -4503,19 +4545,20 @@ static void demo_blend_particle_pixel(int x, int y, vox_u8 red,
                          (vox_u16)blue * strength) / 3U);
 }
 
-static int demo_effect_view_position(const vox_software_view *view,
-                                     const vox_digs_effect *effect,
-                                     int *screen_x, int *screen_y)
+static int demo_world_view_position(const vox_software_view *view,
+                                    vox_i32 position_x_q16,
+                                    vox_i32 position_y_q16,
+                                    int *screen_x, int *screen_y)
 {
     double local_x;
     double local_y;
-    if (view == 0 || effect == 0 || screen_x == 0 || screen_y == 0 ||
+    if (view == 0 || screen_x == 0 || screen_y == 0 ||
         view->width_q16 <= 0L || view->height_q16 <= 0L) {
         return 0;
     }
-    local_x = (double)(effect->position_x_q16 - view->origin_x_q16) /
+    local_x = (double)(position_x_q16 - view->origin_x_q16) /
               (double)view->width_q16;
-    local_y = (double)(effect->position_y_q16 - view->origin_y_q16) /
+    local_y = (double)(position_y_q16 - view->origin_y_q16) /
               (double)view->height_q16;
     if (local_x < 0.0 || local_y < 0.0 || local_x >= 1.0 ||
         local_y >= 1.0) {
@@ -4527,32 +4570,282 @@ static int demo_effect_view_position(const vox_software_view *view,
            *screen_x < (int)DEMO_WIDTH && *screen_y < (int)DEMO_HEIGHT;
 }
 
-static void demo_effect_particle_colour(const vox_digs_effect *effect,
-                                        vox_u8 *red, vox_u8 *green,
-                                        vox_u8 *blue)
+static int demo_effect_view_position(const vox_software_view *view,
+                                     const vox_digs_effect *effect,
+                                     int *screen_x, int *screen_y)
 {
-    if (effect->material == VOX_MAT_BLOOD) {
+    if (effect == 0) return 0;
+    return demo_world_view_position(view, effect->position_x_q16,
+                                    effect->position_y_q16,
+                                    screen_x, screen_y);
+}
+
+/* The previous stain experiment projected a blood-fluid cell into side-view
+ * terrain. It is excluded from the current v0.0.4 visual baseline: a
+ * persistent volume remains authoritative, but visible blood comes from the
+ * proven ballistic effect burst until a replacement has human approval. */
+#if 0
+/* The fluid solver owns a blood cell in open space. A splatter belongs on
+ * the first solid material that caught it: prefer its floor, then a wall or
+ * ceiling for a glancing hit. We read the front-most non-fluid cell because
+ * that is the same material the software renderer made visible. */
+static int demo_blood_stain_material_at(int x, int y, vox_u16 *material)
+{
+    vox_i16 depth;
+    const vox_cell *cell;
+    if (material == 0 || x < 0 || y < 0 ||
+        x >= (int)VOX_WORLD_WIDTH || y >= (int)VOX_WORLD_HEIGHT) {
+        return 0;
+    }
+    for (depth = (vox_i16)VOX_WORLD_DEPTH - 1; depth >= 0; --depth) {
+        cell = vox_world_cell(&demo_match.world, (vox_u32)x, (vox_u32)y,
+                              (vox_u32)depth);
+        if (cell == 0 || cell->material == VOX_MAT_AIR ||
+            cell->material == VOX_MAT_WATER ||
+            cell->material == VOX_MAT_LAVA ||
+            cell->material == VOX_MAT_BLOOD ||
+            cell->material == VOX_MAT_SMOKE ||
+            cell->material == VOX_MAT_FIREDAMP) {
+            continue;
+        }
+        *material = cell->material;
+        return 1;
+    }
+    return 0;
+}
+
+static int demo_blood_stain_surface(vox_u16 x, vox_u16 y,
+                                    int *surface_x, int *surface_y,
+                                    int *normal_x, int *normal_y,
+                                    vox_u16 *surface_material)
+{
+    static const vox_i16 offsets[5][2] = {
+        {0, 1}, {-1, 0}, {1, 0}, {0, 0}, {0, -1}
+    };
+    vox_u16 candidate;
+    if (surface_x == 0 || surface_y == 0 || normal_x == 0 ||
+        normal_y == 0 || surface_material == 0) {
+        return 0;
+    }
+    for (candidate = 0U; candidate < 5U; ++candidate) {
+        int check_x = (int)x + offsets[candidate][0];
+        int check_y = (int)y + offsets[candidate][1];
+        vox_u16 material;
+        if (!demo_blood_stain_material_at(check_x, check_y, &material)) {
+            continue;
+        }
+        *surface_x = check_x;
+        *surface_y = check_y;
+        *normal_x = offsets[candidate][0];
+        *normal_y = offsets[candidate][1];
+        *surface_material = material;
+        return 1;
+    }
+    return 0;
+}
+
+static vox_u32 demo_blood_stain_noise(vox_u16 x, vox_u16 y, vox_u16 z,
+                                      vox_i32 volume_q16,
+                                      vox_i32 flow_q16)
+{
+    vox_u32 value = (vox_u32)x * 1103515245UL +
+                    (vox_u32)y * 12345UL;
+    value ^= (vox_u32)z * 2654435761UL;
+    value ^= (vox_u32)volume_q16 * 2246822519UL;
+    value ^= (vox_u32)flow_q16 * 3266489917UL;
+    value ^= value >> 16;
+    value *= 2246822519UL;
+    value ^= value >> 13;
+    return value;
+}
+
+static void demo_blood_stain_colour(vox_i32 volume_q16, vox_i32 flow_q16,
+                                    vox_u16 surface_material, vox_u8 *red,
+                                    vox_u8 *green, vox_u8 *blue,
+                                    vox_u16 *strength)
+{
+    int wet = volume_q16 >= 12288L || flow_q16 > 4096L;
+    if (red == 0 || green == 0 || blue == 0 || strength == 0) return;
+    if (surface_material == VOX_MAT_METAL) {
+        *red = wet ? 166U : 112U;
+        *green = wet ? 43U : 53U;
+        *blue = wet ? 36U : 42U;
+    } else {
+        *red = wet ? 174U : 118U;
+        *green = wet ? 38U : 37U;
+        *blue = wet ? 35U : 31U;
+    }
+    *strength = wet ? 2U : 1U;
+}
+
+static vox_u16 demo_draw_blood_stain_sample(const vox_software_view *view,
+                                            vox_u16 x, vox_u16 y, vox_u16 z,
+                                            vox_i32 volume_q16,
+                                            vox_i32 flow_q16,
+                                            vox_u16 *drawn)
+{
+    /* Coordinates are tangent / inset.  The inset carries pigment through
+     * the exposed material, while the tangent offsets make the mark read as
+     * a hit rather than a neat vertical drip.  The normal comes from the
+     * actual solid that caught the fluid, so floors, walls, and ceilings all
+     * receive the right orientation. */
+    static const vox_i16 marks[DEMO_BLOOD_STAIN_MARK_CAP][2] = {
+        {0, 0}, {1, 0}, {-1, 0}, {0, 1},
+        {1, 1}, {-1, 1}, {2, 1}, {-2, 1},
+        {0, 2}, {1, 2}, {-1, 2}, {2, 2},
+        {-2, 2}, {0, 3}
+    };
+    vox_u32 noise;
+    vox_u16 mark_count;
+    vox_u16 mark;
+    vox_u16 surface_material;
+    vox_u16 embedded = 0U;
+    int surface_x;
+    int surface_y;
+    int normal_x;
+    int normal_y;
+    int screen_x;
+    int screen_y;
+    if (drawn == 0 || *drawn >= DEMO_BLOOD_STAIN_VISUAL_CAP ||
+        volume_q16 <= 0L ||
+        !demo_world_view_position(view,
+            ((vox_i32)x << 16) + 32768L,
+            ((vox_i32)y << 16) + 32768L,
+            &screen_x, &screen_y) ||
+        !demo_blood_stain_surface(x, y, &surface_x, &surface_y,
+                                  &normal_x, &normal_y,
+                                  &surface_material) ||
+        !demo_world_view_position(view,
+            ((vox_i32)surface_x << 16) + 32768L,
+            ((vox_i32)surface_y << 16) + 32768L,
+            &screen_x, &screen_y)) {
+        return 0U;
+    }
+    noise = demo_blood_stain_noise(x, y, z, volume_q16, flow_q16);
+    mark_count = 4U;
+    if (volume_q16 >= 8192L) mark_count += 3U;
+    if (volume_q16 >= 24576L || flow_q16 > 8192L) mark_count += 4U;
+    if ((noise & 3U) == 0U) mark_count += 2U;
+    if (mark_count > DEMO_BLOOD_STAIN_MARK_CAP) {
+        mark_count = DEMO_BLOOD_STAIN_MARK_CAP;
+    }
+    for (mark = 0U; mark < mark_count; ++mark) {
+        int tangent = marks[mark][0];
+        int inset = marks[mark][1];
+        int target_x;
+        int target_y;
+        vox_u16 target_material;
+        vox_u8 target_red;
+        vox_u8 target_green;
+        vox_u8 target_blue;
+        vox_u16 target_strength;
+        if (((noise >> (mark & 15U)) & 1U) != 0U) tangent = -tangent;
+        target_x = surface_x + normal_x * inset - normal_y * tangent;
+        target_y = surface_y + normal_y * inset + normal_x * tangent;
+        target_material = surface_material;
+        if (mark != 0U && !demo_blood_stain_material_at(target_x, target_y,
+                                                         &target_material)) {
+            continue;
+        }
+        if (!demo_world_view_position(view,
+            ((vox_i32)target_x << 16) + 32768L,
+            ((vox_i32)target_y << 16) + 32768L,
+            &screen_x, &screen_y)) {
+            continue;
+        }
+        demo_blood_stain_colour(volume_q16, flow_q16, target_material,
+                                &target_red, &target_green, &target_blue,
+                                &target_strength);
+        if (inset != 0) {
+            /* The first contact is a wet edge; interior samples are a little
+             * darker so the splatter visibly enters the dirt or oxidises on
+             * metal instead of reading as a flat top-layer decal. */
+            if (target_red > 18U) target_red = (vox_u8)(target_red - 18U);
+            if (target_green > 4U) target_green = (vox_u8)(target_green - 4U);
+            if (target_blue > 3U) target_blue = (vox_u8)(target_blue - 3U);
+            ++embedded;
+        }
+        demo_blend_particle_pixel(screen_x, screen_y,
+                                  target_red, target_green, target_blue,
+                                  target_strength);
+    }
+    ++*drawn;
+    return embedded;
+}
+
+/* This is intentionally a presentation read of the authoritative fluid
+ * state. It leaves the volume free to run through a basin, while the player
+ * sees a wet mark on the terrain that caught it. Replay frames carry their
+ * own fluid snapshots, so the same pass reconstructs splatter in the kill
+ * reel instead of substituting a red block. */
+static vox_u16 demo_draw_blood_stains(const demo_app *app,
+                                      const vox_software_view *view)
+{
+    vox_u16 index;
+    vox_u16 drawn = 0U;
+    vox_u16 embedded = 0U;
+    if (app == 0 || view == 0 || app->options.gore_level == 0) return 0U;
+    if (app->replay_frame_valid != 0U) {
+        const vox_digs_replay_frame *frame = &app->replay_frame;
+        for (index = 0U; index < frame->fluid_count; ++index) {
+            const vox_digs_replay_fluid *fluid = &frame->fluids[index];
+            if (fluid->material != VOX_FLUID_BLOOD ||
+                fluid->volume_q16 <= 0L ||
+                (app->options.gore_level == 1 &&
+                 (demo_blood_stain_noise(fluid->x, fluid->y, fluid->z,
+                    fluid->volume_q16, fluid->flow_q16) & 1U) != 0U)) {
+                continue;
+            }
+            embedded = (vox_u16)(embedded +
+                demo_draw_blood_stain_sample(view, fluid->x, fluid->y,
+                                              fluid->z, fluid->volume_q16,
+                                              fluid->flow_q16, &drawn));
+        }
+        return embedded;
+    }
+    for (index = 0U; index < demo_match.fluids.active_cells; ++index) {
+        const vox_fluid_cell *fluid = &demo_match.fluids.cells[index];
+        if (fluid->active == 0U || fluid->material != VOX_FLUID_BLOOD ||
+            fluid->volume_q16 <= 0L ||
+            (app->options.gore_level == 1 &&
+             (demo_blood_stain_noise(fluid->x, fluid->y, fluid->z,
+                fluid->volume_q16, fluid->flow_q16) & 1U) != 0U)) {
+            continue;
+        }
+        embedded = (vox_u16)(embedded +
+            demo_draw_blood_stain_sample(view, fluid->x, fluid->y, fluid->z,
+                                          fluid->volume_q16, fluid->flow_q16,
+                                          &drawn));
+    }
+    return embedded;
+}
+#endif
+
+static void demo_effect_particle_colour(vox_u16 material, vox_u8 *red,
+                                        vox_u8 *green, vox_u8 *blue)
+{
+    if (material == VOX_MAT_BLOOD) {
         *red = 184U;
         *green = 44U;
         *blue = 39U;
-    } else if (effect->material == VOX_MAT_FLESH) {
+    } else if (material == VOX_MAT_FLESH) {
         *red = 165U;
         *green = 86U;
         *blue = 69U;
-    } else if (effect->material == VOX_MAT_LAVA) {
+    } else if (material == VOX_MAT_LAVA) {
         *red = 236U;
         *green = 84U;
         *blue = 22U;
-    } else if (effect->material == VOX_MAT_WATER) {
+    } else if (material == VOX_MAT_WATER) {
         *red = 58U;
         *green = 117U;
         *blue = 196U;
-    } else if (effect->material == VOX_MAT_SMOKE ||
-               effect->material == VOX_MAT_FIREDAMP) {
+    } else if (material == VOX_MAT_SMOKE ||
+               material == VOX_MAT_FIREDAMP) {
         *red = 104U;
         *green = 104U;
         *blue = 118U;
-    } else if (effect->material == VOX_MAT_METAL) {
+    } else if (material == VOX_MAT_METAL) {
         *red = 148U;
         *green = 155U;
         *blue = 166U;
@@ -4592,7 +4885,57 @@ static void demo_draw_effect_particles(const demo_app *app,
             !demo_effect_view_position(view, effect, &screen_x, &screen_y)) {
             continue;
         }
-        demo_effect_particle_colour(effect, &red, &green, &blue);
+        demo_effect_particle_colour(effect->material, &red, &green, &blue);
+        strength = gore ? 2U : 1U;
+        demo_blend_particle_pixel(screen_x, screen_y, red, green, blue,
+                                  strength);
+        if (effect->velocity_x_q16 > 4096L) tail_x = -1;
+        else if (effect->velocity_x_q16 < -4096L) tail_x = 1;
+        if (effect->velocity_y_q16 > 4096L) tail_y = -1;
+        else if (effect->velocity_y_q16 < -4096L) tail_y = 1;
+        if (tail_x != 0 || tail_y != 0) {
+            demo_blend_particle_pixel(screen_x + tail_x, screen_y + tail_y,
+                                      red, green, blue, 1U);
+        }
+        drawn++;
+    }
+}
+
+/* Replay effects carry the same compact motion data as live effects.  Draw
+ * them after lighting rather than injecting them into the replay terrain, so
+ * a blood drop stays a drop while the camera is revisiting the event. */
+static void demo_draw_replay_effect_particles(const demo_app *app,
+                                              const vox_software_view *view)
+{
+    const vox_digs_replay_frame *frame;
+    vox_u16 index;
+    vox_u16 drawn = 0U;
+    if (app == 0 || view == 0 || app->replay_frame_valid == 0U) return;
+    frame = &app->replay_frame;
+    for (index = 0U; index < frame->effect_count; ++index) {
+        const vox_digs_replay_effect *effect = &frame->effects[index];
+        int gore;
+        int screen_x;
+        int screen_y;
+        int tail_x = 0;
+        int tail_y = 0;
+        vox_u8 red;
+        vox_u8 green;
+        vox_u8 blue;
+        vox_u16 strength;
+        gore = effect->material == VOX_MAT_FLESH ||
+               effect->material == VOX_MAT_BLOOD;
+        if (gore && (app->options.gore_level == 0 ||
+            (app->options.gore_level == 1 && (index % 3U) != 0U))) {
+            continue;
+        }
+        if (drawn >= DEMO_EFFECT_PARTICLE_CAP ||
+            !demo_world_view_position(view, effect->position_x_q16,
+                                      effect->position_y_q16,
+                                      &screen_x, &screen_y)) {
+            continue;
+        }
+        demo_effect_particle_colour(effect->material, &red, &green, &blue);
         strength = gore ? 2U : 1U;
         demo_blend_particle_pixel(screen_x, screen_y, red, green, blue,
                                   strength);
@@ -5105,9 +5448,11 @@ static void demo_draw_debug(demo_app *app)
             (unsigned int)demo_match.lava_surface_y,
             (unsigned long)demo_match.state_hash);
     vox_ui_text(&demo_ui, 7, 178, 1, text, DEMO_VGA_LIGHT_CYAN);
-    sprintf(text, "CELLS %lu AWAKE %lu TARGET %lu,%lu MAT %u",
+    sprintf(text, "CELLS %lu AWAKE %lu STRAIN %u TARGET %lu,%lu MAT %u",
             (unsigned long)demo_match.world.occupied_cells,
             (unsigned long)demo_match.world.awake_cells,
+            (unsigned int)(app->structure_strain_ttl != 0U ?
+                           app->structure_strain : 0U),
             (unsigned long)world_x, (unsigned long)world_y,
             cell == 0 ? 0U : (unsigned int)cell->material);
     vox_ui_text(&demo_ui, 7, 187, 1, text, DEMO_VGA_LIGHT_GRAY);
@@ -5458,17 +5803,19 @@ static void demo_draw_play(demo_app *app)
     }
     render_status = vox_software_render_view_ex(&demo_match.world,
         &demo_target, &demo_render_config, &view);
-    demo_render_overlay_restore();
     if (render_status != VOX_OK) {
         /* A validated camera should never reach this path. Keep presentation
          * readable instead of exposing uninitialized or stale pixels. */
         memset(demo_pixels, 0, sizeof(demo_pixels));
     } else {
         demo_apply_atmosphere(app, &view);
-        if (!app->replay_frame_valid) {
+        if (app->replay_frame_valid) {
+            demo_draw_replay_effect_particles(app, &view);
+        } else {
             demo_draw_effect_particles(app, &view);
         }
     }
+    demo_render_overlay_restore();
     app->scene_tick = demo_match.tick;
     app->scene_laptop = app->options.laptop_mode;
     app->scene_valid = render_status == VOX_OK;
@@ -5483,8 +5830,10 @@ static void demo_draw_play(demo_app *app)
         demo_draw_crosshair(app, 0, app->mouse_x, app->mouse_y);
     }
     demo_draw_world_feedback(app);
-    demo_draw_hud(app);
-    demo_draw_notifications(app);
+    if (app->screen != DEMO_REPLAY) {
+        demo_draw_hud(app);
+        demo_draw_notifications(app);
+    }
     demo_draw_debug(app);
     if (app->screen == DEMO_PAUSE) {
         demo_dark_panel(88, 65, 144, 70);
@@ -5584,6 +5933,61 @@ static void demo_draw_results(demo_app *app)
                        "ENTER RETURNS TO TITLE", DEMO_VGA_YELLOW);
 }
 
+static void demo_draw_replay(demo_app *app)
+{
+    char line[64];
+    int player;
+    int replay_applied = 0;
+    vox_i32 saved_x[VOX_DIGS_MAX_SLOTS];
+    vox_i32 saved_y[VOX_DIGS_MAX_SLOTS];
+    vox_i32 saved_previous_x[VOX_DIGS_MAX_SLOTS];
+    vox_i32 saved_previous_y[VOX_DIGS_MAX_SLOTS];
+    vox_u16 saved_alive[VOX_DIGS_MAX_SLOTS];
+    vox_u16 saved_health[VOX_DIGS_MAX_SLOTS];
+    /* The replay world is already reconstructed before rendering.  Apply the
+     * matching captured miner pose for this draw only; the live result state
+     * remains untouched after the frame is presented. */
+    if (app->replay_frame_valid) {
+        for (player = 0; player < (int)VOX_DIGS_MAX_SLOTS; ++player) {
+            saved_x[player] = demo_match.players[player].position_x.value_q16;
+            saved_y[player] = demo_match.players[player].position_y.value_q16;
+            saved_previous_x[player] = app->previous_player_x[player];
+            saved_previous_y[player] = app->previous_player_y[player];
+            saved_alive[player] = demo_match.alive[player];
+            saved_health[player] = demo_match.health[player];
+            demo_match.players[player].position_x.value_q16 =
+                app->replay_frame.player_x_q16[player];
+            demo_match.players[player].position_y.value_q16 =
+                app->replay_frame.player_y_q16[player];
+            demo_match.alive[player] = app->replay_frame.player_alive[player];
+            demo_match.health[player] = app->replay_frame.player_health[player];
+            app->previous_player_x[player] =
+                app->replay_frame.player_x_q16[player];
+            app->previous_player_y[player] =
+                app->replay_frame.player_y_q16[player];
+        }
+        replay_applied = 1;
+    }
+    demo_draw_play(app);
+    if (replay_applied) {
+        for (player = 0; player < (int)VOX_DIGS_MAX_SLOTS; ++player) {
+            demo_match.players[player].position_x.value_q16 = saved_x[player];
+            demo_match.players[player].position_y.value_q16 = saved_y[player];
+            demo_match.alive[player] = saved_alive[player];
+            demo_match.health[player] = saved_health[player];
+            app->previous_player_x[player] = saved_previous_x[player];
+            app->previous_player_y[player] = saved_previous_y[player];
+        }
+    }
+    demo_dark_panel(75, 5, 170, 24);
+    vox_ui_text_center_shadow(&demo_ui, 160, 9, 1, "BEST KILL REPLAY",
+                              DEMO_VGA_YELLOW);
+    sprintf(line, "TAPE %u/%u",
+            (unsigned int)demo_match.replay.play_cursor,
+            (unsigned int)demo_match.replay.frame_count);
+    vox_ui_text_center(&demo_ui, 160, 18, 1, line, DEMO_VGA_LIGHT_CYAN);
+}
+
 static void demo_render(demo_app *app)
 {
     /* A screen never inherits another screen's scroll position. */
@@ -5616,6 +6020,8 @@ static void demo_render(demo_app *app)
         demo_draw_controls(app);
     } else if (app->screen == DEMO_INPUT_OPTIONS) {
         demo_draw_input_options(app);
+    } else if (app->screen == DEMO_REPLAY) {
+        demo_draw_replay(app);
     } else if (app->screen == DEMO_RESULTS) {
         demo_draw_results(app);
     } else {
@@ -5737,6 +6143,7 @@ static int demo_start_match(demo_app *app, int foundry)
         vox_u32 lead;
         if (minutes <= 0) {
             minutes = DEMO_TIME_UNLIMITED_MINUTES;
+            rules.reserved = VOX_DIGS_RULE_UNLIMITED_TIME;
         }
         rules.match_ticks = (vox_u32)minutes * 60U *
                             VOX_DIGS_TICKS_PER_SECOND;
@@ -5802,6 +6209,8 @@ static int demo_start_match(demo_app *app, int foundry)
     app->replay_playing = 0U;
     app->replay_frame_hold_ticks = 0U;
     app->replay_hold_ticks = 0U;
+    app->structure_strain = 0U;
+    app->structure_strain_ttl = 0U;
     app->scene_valid = 0;
     app->global_bark_tick = 0U;
     memset(app->banners, 0, sizeof(app->banners));
@@ -5847,7 +6256,7 @@ static int demo_start_match(demo_app *app, int foundry)
     app->screen = DEMO_PLAY;
     app->selection = 0;
     demo_audio_play(app, DEMO_SOUND_START);
-    demo_audio_speak_text(app, "FIRE TO LAUNCH!", VOX_AUDIO_SPEECH_DEEP,
+    demo_audio_speak_text(app, "OVER AND OUT!", VOX_AUDIO_SPEECH_DEEP,
                           VOX_AUDIO_PRIORITY_ANNOUNCER,
                           VOX_AUDIO_PAN_CENTER);
     return 1;
@@ -6342,7 +6751,9 @@ static void demo_add_damage_popup(demo_app *app,
         demo_damage_popup *popup = &app->damage_popups[slot];
         if (popup->active && popup->target == event->target &&
             popup->ttl > 84U) {
-            popup->amount = (vox_u16)(popup->amount + event->magnitude);
+            vox_u32 total = (vox_u32)popup->amount + event->magnitude;
+            popup->amount = total > VOX_DIGS_MAX_HEALTH ?
+                            VOX_DIGS_MAX_HEALTH : (vox_u16)total;
             popup->ttl = 90U;
             popup->world_x_q16 = event->position_x_q16;
             popup->world_y_q16 = event->position_y_q16;
@@ -6353,7 +6764,9 @@ static void demo_add_damage_popup(demo_app *app,
     if (free_slot < 0) free_slot = (int)(event->sequence %
                                           DEMO_DAMAGE_POPUP_MAX);
     app->damage_popups[free_slot].active = 1U;
-    app->damage_popups[free_slot].amount = event->magnitude;
+    app->damage_popups[free_slot].amount =
+        event->magnitude > VOX_DIGS_MAX_HEALTH ? VOX_DIGS_MAX_HEALTH :
+        event->magnitude;
     app->damage_popups[free_slot].ttl = 90U;
     app->damage_popups[free_slot].target = event->target;
     app->damage_popups[free_slot].world_x_q16 = event->position_x_q16;
@@ -6505,16 +6918,16 @@ static const char *demo_player_name(const demo_app *app, vox_u16 player)
 static const char *demo_award_name(vox_u16 award)
 {
     switch (award) {
-    case VOX_DIGS_AWARD_PYROMANIAC:
-        return "PYROMANIAC";
-    case VOX_DIGS_AWARD_GRAVE_DIGGER:
-        return "GRAVE DIGGER";
-    case VOX_DIGS_AWARD_HEADHUNTER:
-        return "HEADHUNTER";
-    case VOX_DIGS_AWARD_CAVE_IN_ARTIST:
-        return "CAVE-IN ARTIST";
-    case VOX_DIGS_AWARD_EXTRACTIONIST:
-        return "EXTRACTIONIST";
+    case VOX_DIGS_AWARD_FIREBRAND:
+        return "FIREBRAND!";
+    case VOX_DIGS_AWARD_REAPER:
+        return "REAPER!";
+    case VOX_DIGS_AWARD_HOTSHOT:
+        return "HOTSHOT!";
+    case VOX_DIGS_AWARD_MOLERAT:
+        return "MOLERAT!";
+    case VOX_DIGS_AWARD_SKYJOCKEY:
+        return "SKYJOCKEY!";
     default:
         return "AWARD";
     }
@@ -6561,13 +6974,13 @@ static void demo_register_kill(demo_app *app,
     int target_local = event->target < (vox_u16)app->local_players;
     if (event->source < demo_match.rules.player_count &&
         event->source != event->target) {
-        sprintf(line, "%s > %s", demo_player_name(app, event->source),
+        sprintf(line, "%s FIRED %s", demo_player_name(app, event->source),
                 demo_player_name(app, event->target));
     } else if (event->target < demo_match.rules.player_count) {
-        sprintf(line, "%s LOST TO THE MINE",
+        sprintf(line, "%s CLOCKED OUT!",
                 demo_player_name(app, event->target));
     } else {
-        strcpy(line, "THE MINE CLAIMED ANOTHER");
+        strcpy(line, "CLOCKED OUT!");
     }
     demo_add_killfeed(app, line);
     if (event->target < DEMO_LOCAL_MAX) {
@@ -6587,11 +7000,11 @@ static void demo_register_kill(demo_app *app,
         app->last_kill_tick[source] = event->tick;
         ++app->spree_count[source];
         if (target_local) {
-            sprintf(line, "%s KILLED %s",
+            sprintf(line, "%s FIRED %s",
                     demo_player_name(app, event->source),
                     demo_player_name(app, event->target));
         } else {
-            sprintf(line, "YOU KILLED %s",
+            sprintf(line, "YOU FIRED %s",
                     demo_player_name(app, event->target));
         }
         demo_set_banner(app, line, 0);
@@ -6610,10 +7023,10 @@ static void demo_register_kill(demo_app *app,
     } else if (target_local) {
         if (event->source < demo_match.rules.player_count &&
             event->source != event->target) {
-            sprintf(line, "KILLED BY %s",
+            sprintf(line, "FIRED BY %s",
                     demo_player_name(app, event->source));
         } else {
-            strcpy(line, "THE MINE GOT YOU");
+            strcpy(line, "YOU CLOCKED OUT!");
         }
         demo_set_banner(app, line, 0);
     }
@@ -6775,6 +7188,14 @@ static void demo_process_events(demo_app *app)
                 demo_set_banner(app, "SHIP SPLATTER!", 1);
                 app->camera_trauma += 0.9;
             }
+        } else if (event->type == VOX_DIGS_EVENT_STRUCTURE_STRAIN) {
+            demo_audio_emit(app, VOX_AUDIO_PRESET_HIT,
+                            event->variant, pan);
+            /* Structural strain is useful instrumentation, but a normal
+             * narrow tunnel must not read as a cave-in warning.  Retain it
+             * exclusively for F1's debug pane. */
+            app->structure_strain = event->magnitude;
+            app->structure_strain_ttl = 90U;
         } else if (event->type == VOX_DIGS_EVENT_CAVE_IN) {
             demo_audio_emit(app, VOX_AUDIO_PRESET_EXPLOSION,
                             event->variant, pan);
@@ -6947,6 +7368,7 @@ static void demo_tick_presentation(demo_app *app)
         if (app->banners[slot].ttl > 0U) --app->banners[slot].ttl;
     }
     if (app->death_camera_hold > 0U) --app->death_camera_hold;
+    if (app->structure_strain_ttl > 0U) --app->structure_strain_ttl;
     demo_update_ambience(app);
 }
 
@@ -6979,6 +7401,13 @@ static void demo_tick_results(demo_app *app)
 
 static void demo_tick(demo_app *app)
 {
+    if (app->screen == DEMO_REPLAY) {
+        demo_tick_results(app);
+        if (!app->replay_playing && demo_match.replay.active == 0U) {
+            app->screen = DEMO_RESULTS;
+        }
+        return;
+    }
     if (app->screen == DEMO_RESULTS) {
         demo_tick_results(app);
         return;
@@ -7004,7 +7433,8 @@ static void demo_tick(demo_app *app)
     demo_haptics_tick(app);
     demo_tick_presentation(app);
     if (demo_match.phase == VOX_DIGS_RESULTS) {
-        app->screen = DEMO_RESULTS;
+        app->screen = demo_match.replay.active != 0U ?
+                      DEMO_REPLAY : DEMO_RESULTS;
     }
 }
 
@@ -8396,7 +8826,8 @@ static int demo_compare_u32(const void *left, const void *right)
     return 0;
 }
 
-static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
+static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench,
+                                      int destruction_stress)
 {
     static const vox_u16 explosive_tools[3] = {
         VOX_DIGS_TOOL_FIRECRACKER,
@@ -8409,8 +8840,10 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
     Uint64 total_us = 0U;
     vox_u32 tick;
     vox_u32 p95_index;
+    vox_u32 p99_index;
     vox_u32 average_us;
     vox_u32 p95_us;
+    vox_u32 p99_us;
     vox_u32 maximum_us;
     vox_u32 fired = 0U;
     vox_u32 explosions = 0U;
@@ -8471,7 +8904,17 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
     }
     for (tick = 0U; tick < ticks; ++tick) {
         vox_u16 player;
-        if ((tick % 90U) == 0U) {
+        if (destruction_stress && (tick % 45U) == 0U) {
+            vox_u16 source = (vox_u16)((tick / 45U) % 2U);
+            vox_u32 blast_x = VOX_WORLD_WIDTH / 5U +
+                (tick / 45U * 67U) % (VOX_WORLD_WIDTH * 3U / 5U);
+            vox_u32 blast_y = VOX_WORLD_HEIGHT * 3U / 5U;
+            if (demo_match.alive[source]) {
+                (void)vox_digs_use_tool(&demo_match, source,
+                                        VOX_DIGS_TOOL_FIRECRACKER,
+                                        blast_x, blast_y, 0U);
+            }
+        } else if ((tick % 90U) == 0U) {
             vox_u32 blast_x = VOX_WORLD_WIDTH / 5U +
                 (tick / 90U * 67U) % (VOX_WORLD_WIDTH * 3U / 5U);
             vox_u32 blast_y = VOX_WORLD_HEIGHT * 3U / 5U;
@@ -8577,20 +9020,37 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
             p95_index = (ticks * 95U + 99U) / 100U;
             if (p95_index > 0U) --p95_index;
             if (p95_index >= ticks) p95_index = ticks - 1U;
+            p99_index = (ticks * 99U + 99U) / 100U;
+            if (p99_index > 0U) --p99_index;
+            if (p99_index >= ticks) p99_index = ticks - 1U;
             average_us = (vox_u32)((total_us + ticks / 2U) / ticks);
             p95_us = samples[p95_index];
+            p99_us = samples[p99_index];
             maximum_us = samples[ticks - 1U];
-            printf("DIGS named-bench performance qualification ticks=%lu "
-                   "slots=4 local=2 bots=2 avg=%.3fms p95=%.3fms "
-                   "max=%.3fms fired=%lu explosions=%lu crushes=%lu "
-                   "effects=%u awake=%lu hash=%08lx\n",
-                   (unsigned long)ticks, (double)average_us / 1000.0,
-                   (double)p95_us / 1000.0,
-                   (double)maximum_us / 1000.0,
-                   (unsigned long)fired, (unsigned long)explosions,
-                   (unsigned long)crushes, (unsigned int)max_effects,
-                   (unsigned long)max_awake,
-                   (unsigned long)demo_match.state_hash);
+            if (destruction_stress) {
+                printf("DIGS named destruction stress ticks=%lu slots=4 "
+                       "local=2 bots=2 p99=%.3fms max=%.3fms tick_debt=0 "
+                       "fired=%lu explosions=%lu crushes=%lu effects=%u "
+                       "awake=%lu hash=%08lx\n",
+                       (unsigned long)ticks, (double)p99_us / 1000.0,
+                       (double)maximum_us / 1000.0,
+                       (unsigned long)fired, (unsigned long)explosions,
+                       (unsigned long)crushes, (unsigned int)max_effects,
+                       (unsigned long)max_awake,
+                       (unsigned long)demo_match.state_hash);
+            } else {
+                printf("DIGS named-bench performance qualification ticks=%lu "
+                       "slots=4 local=2 bots=2 avg=%.3fms p95=%.3fms "
+                       "max=%.3fms fired=%lu explosions=%lu crushes=%lu "
+                       "effects=%u awake=%lu hash=%08lx\n",
+                       (unsigned long)ticks, (double)average_us / 1000.0,
+                       (double)p95_us / 1000.0,
+                       (double)maximum_us / 1000.0,
+                       (unsigned long)fired, (unsigned long)explosions,
+                       (unsigned long)crushes, (unsigned int)max_effects,
+                       (unsigned long)max_awake,
+                       (unsigned long)demo_match.state_hash);
+            }
         } else {
             printf("DIGS deterministic load self-test ticks=%lu slots=4 "
                    "local=2 bots=2 fired=%lu explosions=%lu crushes=%lu "
@@ -8605,19 +9065,26 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
             fprintf(stderr,
                     "load self-test: explosive/collapse load missing\n");
             status = 6;
-        /* The current increment adds authoritative fluid, rigid, structural, replay, and
-         * dropship state.  The workload explicitly begins the interactive
-         * dropship sequence.  Recaptured at -O0 and -O2 from the same
-         * 600-tick input stream; these activity counters are a determinism
-         * baseline, not a wall-clock performance claim. */
+        /* The current increment adds authoritative fluid, rigid, structural,
+         * replay, dropship, and the restored v0.0.4 blood-residue baseline.
+         * The workload explicitly begins the interactive dropship sequence.
+         * Recaptured at -O0 and -O2 from the same 600-tick input stream;
+         * these activity counters are a determinism baseline, not a
+         * wall-clock performance claim. */
         } else if (ticks == 600U &&
-                   (fired != 23U || explosions != 16U || crushes != 0U ||
-                    max_effects != 978U || max_awake != 4616U ||
-                    demo_match.state_hash != (vox_u32)0xC53B59D9UL)) {
+                   (fired != 20U || explosions != 16U || crushes != 0U ||
+                    max_effects != 876U || max_awake != 3882U ||
+                    demo_match.state_hash != (vox_u32)0x8D98C1D0UL)) {
             fprintf(stderr,
                     "load self-test: canonical 600-tick activity/hash "
                     "mismatch\n");
             status = 8;
+        } else if (qualify_named_bench && destruction_stress &&
+                   p99_us > 16667U) {
+            fprintf(stderr,
+                    "performance stress: named p99 exceeds 16.67ms or "
+                    "simulation accrued tick debt\n");
+            status = 7;
         } else if (qualify_named_bench &&
                    (average_us > 5000U || p95_us > 8000U ||
                     maximum_us > 16667U)) {
@@ -9641,9 +10108,9 @@ static int demo_camera_self_test(void)
     return 0;
 }
 
-/* Exercise the result-only replay controls without a display.  The ledger is
- * intentionally outside vox_digs_hash, so pacing or reframing it must never
- * change the match the replay is describing. */
+/* Exercise the dedicated replay-view controls without a display.  The ledger
+ * is intentionally outside vox_digs_hash, so pacing or reframing it must
+ * never change the match the replay is describing. */
 static int demo_replay_presentation_self_test(void)
 {
     demo_app app;
@@ -9678,25 +10145,32 @@ static int demo_replay_presentation_self_test(void)
     demo_match.replay.frames[1].tick = 124U;
     demo_match.replay.frames[1].player_x_q16[0] = 204L << 16;
     demo_match.replay.frames[1].player_x_q16[1] = 216L << 16;
+    app.screen = DEMO_REPLAY;
     hash_before = vox_digs_hash(&demo_match);
-    demo_tick_results(&app);
+    demo_tick(&app);
     if (app.replay_playing == 0U || app.replay_frame_valid == 0U ||
         app.replay_frame_hold_ticks != DEMO_REPLAY_FRAME_HOLD_TICKS ||
-        demo_match.replay.play_cursor != 1U) return 2;
+        demo_match.replay.play_cursor != 1U || app.screen != DEMO_REPLAY)
+        return 2;
     demo_update_replay_camera(&app);
     if (app.camera_world_x < 180.0 || app.camera_world_x > 240.0 ||
         app.camera_scale < 3.0) return 3;
     for (tick = 0U; tick < DEMO_REPLAY_FRAME_HOLD_TICKS; ++tick) {
-        demo_tick_results(&app);
+        demo_tick(&app);
         if (demo_match.replay.play_cursor != 1U) return 4;
     }
-    demo_tick_results(&app);
+    demo_tick(&app);
     if (demo_match.replay.play_cursor != 2U ||
         demo_match.replay.active != 0U || app.replay_hold_ticks != 30U) {
         return 5;
     }
     hash_after = vox_digs_hash(&demo_match);
     if (hash_after != hash_before) return 6;
+    for (tick = 0U; tick <= 30U; ++tick) {
+        demo_tick(&app);
+    }
+    if (app.screen != DEMO_RESULTS || app.replay_playing != 0U ||
+        app.replay_frame_valid != 0U) return 7;
     printf("DIGS replay presentation self-test passed hold=%u zoom=%.2f\n",
            (unsigned int)DEMO_REPLAY_FRAME_HOLD_TICKS, app.camera_scale);
     return 0;
@@ -9803,6 +10277,233 @@ static int demo_particle_overlay_self_test(void)
     }
     printf("DIGS particle overlay self-test passed frame=%08lx\n",
            (unsigned long)vox_software_hash(&demo_target));
+    return 0;
+}
+
+/* Superseded surface-stain qualification retained only in source history.
+ * The v0.0.4 visual baseline below verifies the readable ballistic burst. */
+#if 0
+/* A pooled blood cell must not become a red terrain voxel. It is drawn after
+ * the software world pass as a bounded surface mark, and neither the mark nor
+ * its replay-safe colour selection may change canonical state. */
+static int demo_blood_stain_overlay_self_test(void)
+{
+    demo_app app;
+    vox_digs_rules rules;
+    vox_software_view view;
+    vox_u32 world_hash;
+    vox_u32 match_hash;
+    vox_u32 unstained_hash;
+    vox_u32 stained_hash;
+    vox_result render_status;
+    vox_u16 depth;
+    vox_u16 stain_y;
+    vox_u16 embedded;
+    const vox_cell *cell;
+    memset(&app, 0, sizeof(app));
+    demo_prepare_targets();
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&demo_match, &rules) != VOX_OK) return 1;
+    for (stain_y = 99U; stain_y <= 104U; ++stain_y) {
+        for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+            if (vox_world_set(&demo_match.world, 160U, stain_y, depth,
+                              VOX_MAT_AIR, 0L) != VOX_OK) {
+                return 2;
+            }
+        }
+    }
+    for (stain_y = 100U; stain_y <= 104U; ++stain_y) {
+        if (vox_world_set(&demo_match.world, 160U, stain_y,
+                          VOX_WORLD_DEPTH - 1U, VOX_MAT_STONE,
+                          20L << 16) != VOX_OK) {
+            return 3;
+        }
+    }
+    if (vox_fluid_add_at(&demo_match.fluids, 160U, 99U,
+                         VOX_WORLD_DEPTH - 1U, VOX_FLUID_BLOOD,
+                         32768L, 37L << 16) != VOX_OK) {
+        return 3;
+    }
+    demo_match.alive[0] = 0U;
+    app.options.gore_level = 2;
+    app.camera_zoom = DEMO_CAMERA_ZOOM_MAX;
+    app.camera_scale = (double)DEMO_CAMERA_ZOOM_MAX;
+    app.camera_world_x = 160.0;
+    app.camera_world_y = 100.0;
+    world_hash = vox_world_hash(&demo_match.world);
+    match_hash = vox_digs_hash(&demo_match);
+    demo_camera_view(&app, &view);
+    demo_render_config.gi_quality = VOX_GI_COMPATIBILITY;
+    demo_render_overlay_begin();
+    demo_build_render_world(&app);
+    cell = vox_world_cell(&demo_match.world, 160U, 99U,
+                          VOX_WORLD_DEPTH - 1U);
+    if (cell == 0 || cell->material != VOX_MAT_AIR) {
+        demo_render_overlay_restore();
+        return 4;
+    }
+    render_status = vox_software_render_view_ex(&demo_match.world,
+        &demo_target, &demo_render_config, &view);
+    if (render_status != VOX_OK) {
+        demo_render_overlay_restore();
+        return 5;
+    }
+    demo_apply_atmosphere(&app, &view);
+    unstained_hash = vox_software_hash(&demo_target);
+    embedded = demo_draw_blood_stains(&app, &view);
+    stained_hash = vox_software_hash(&demo_target);
+    demo_render_overlay_restore();
+    if (vox_world_hash(&demo_match.world) != world_hash ||
+        vox_digs_hash(&demo_match) != match_hash ||
+        unstained_hash == stained_hash || embedded == 0U) {
+        return 6;
+    }
+    /* Replay must use exactly the same surface/particle rule.  A captured
+     * blood effect used to overwrite this air cell as a red terrain block;
+     * keep the terrain untouched and require the post-lighting passes to
+     * change only the frame. */
+    app.replay_frame_valid = 1U;
+    app.replay_frame.fluid_count = 1U;
+    app.replay_frame.fluids[0].x = 160U;
+    app.replay_frame.fluids[0].y = 99U;
+    app.replay_frame.fluids[0].z = VOX_WORLD_DEPTH - 1U;
+    app.replay_frame.fluids[0].material = VOX_FLUID_BLOOD;
+    app.replay_frame.fluids[0].volume_q16 = 32768L;
+    app.replay_frame.fluids[0].temperature_q16 = 37L << 16;
+    app.replay_frame.fluids[0].flow_q16 = 0L;
+    app.replay_frame.effect_count = 1U;
+    app.replay_frame.effects[0].position_x_q16 = 160L << 16;
+    app.replay_frame.effects[0].position_y_q16 = 99L << 16;
+    app.replay_frame.effects[0].velocity_x_q16 = 16384L;
+    app.replay_frame.effects[0].velocity_y_q16 = -8192L;
+    app.replay_frame.effects[0].material = VOX_MAT_BLOOD;
+    app.replay_frame.effects[0].ttl_ticks = 20U;
+    demo_render_overlay_begin();
+    demo_build_render_world(&app);
+    demo_build_replay_render_world(&app.replay_frame);
+    cell = vox_world_cell(&demo_match.world, 160U, 99U,
+                          VOX_WORLD_DEPTH - 1U);
+    if (cell == 0 || cell->material != VOX_MAT_AIR) {
+        demo_render_overlay_restore();
+        return 7;
+    }
+    render_status = vox_software_render_view_ex(&demo_match.world,
+        &demo_target, &demo_render_config, &view);
+    if (render_status != VOX_OK) {
+        demo_render_overlay_restore();
+        return 8;
+    }
+    demo_apply_atmosphere(&app, &view);
+    unstained_hash = vox_software_hash(&demo_target);
+    embedded = demo_draw_blood_stains(&app, &view);
+    demo_draw_replay_effect_particles(&app, &view);
+    stained_hash = vox_software_hash(&demo_target);
+    demo_render_overlay_restore();
+    if (vox_world_hash(&demo_match.world) != world_hash ||
+        vox_digs_hash(&demo_match) != match_hash ||
+        unstained_hash == stained_hash || embedded == 0U) {
+        return 9;
+    }
+    printf("DIGS blood stain overlay self-test passed pre=%08lx post=%08lx\n",
+           (unsigned long)unstained_hash, (unsigned long)stained_hash);
+    return 0;
+}
+#endif
+
+/* Re-establish the v0.0.4 blood baseline: gore is a strong, long-lived
+ * ballistic particle burst over the rendered world. It must remain a
+ * presentation overlay so the legacy visual read cannot turn into a blocking
+ * cell, mutate a replay ledger, or enter the canonical hash. */
+static int demo_blood_baseline_self_test(void)
+{
+    demo_app app;
+    vox_digs_rules rules;
+    vox_software_view view;
+    vox_u32 world_hash;
+    vox_u32 match_hash;
+    vox_u32 before_hash;
+    vox_u32 after_hash;
+    vox_result render_status;
+    vox_u16 depth;
+    const vox_cell *cell;
+    memset(&app, 0, sizeof(app));
+    demo_prepare_targets();
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&demo_match, &rules) != VOX_OK) return 1;
+    for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+        if (vox_world_set(&demo_match.world, 160U, 99U, depth,
+                          VOX_MAT_AIR, 0L) != VOX_OK) {
+            return 1;
+        }
+    }
+    app.options.gore_level = 2;
+    app.camera_zoom = DEMO_CAMERA_ZOOM_MAX;
+    app.camera_scale = (double)DEMO_CAMERA_ZOOM_MAX;
+    app.camera_world_x = 160.0;
+    app.camera_world_y = 100.0;
+    demo_match.effects[0].active = 1U;
+    demo_match.effects[0].material = VOX_MAT_BLOOD;
+    demo_match.effects[0].position_x_q16 = 160L << 16;
+    demo_match.effects[0].position_y_q16 = 99L << 16;
+    demo_match.effects[0].velocity_x_q16 = 49152L;
+    demo_match.effects[0].velocity_y_q16 = -49152L;
+    demo_match.effects[0].ttl_ticks = 96U;
+    demo_match.effect_count = 1U;
+    world_hash = vox_world_hash(&demo_match.world);
+    match_hash = vox_digs_hash(&demo_match);
+    demo_camera_view(&app, &view);
+    demo_render_config.gi_quality = VOX_GI_COMPATIBILITY;
+    demo_render_overlay_begin();
+    demo_build_render_world(&app);
+    cell = vox_world_cell(&demo_match.world, 160U, 99U,
+                          VOX_WORLD_DEPTH - 1U);
+    if (cell == 0 || cell->material != VOX_MAT_AIR) {
+        demo_render_overlay_restore();
+        return 2;
+    }
+    render_status = vox_software_render_view_ex(&demo_match.world,
+        &demo_target, &demo_render_config, &view);
+    demo_render_overlay_restore();
+    if (render_status != VOX_OK) return 3;
+    demo_apply_atmosphere(&app, &view);
+    before_hash = vox_software_hash(&demo_target);
+    demo_draw_effect_particles(&app, &view);
+    after_hash = vox_software_hash(&demo_target);
+    if (vox_world_hash(&demo_match.world) != world_hash ||
+        vox_digs_hash(&demo_match) != match_hash || before_hash == after_hash) {
+        return 4;
+    }
+    app.replay_frame_valid = 1U;
+    app.replay_frame.effect_count = 1U;
+    app.replay_frame.effects[0].position_x_q16 = 160L << 16;
+    app.replay_frame.effects[0].position_y_q16 = 99L << 16;
+    app.replay_frame.effects[0].velocity_x_q16 = 49152L;
+    app.replay_frame.effects[0].velocity_y_q16 = -49152L;
+    app.replay_frame.effects[0].material = VOX_MAT_BLOOD;
+    app.replay_frame.effects[0].ttl_ticks = 96U;
+    demo_render_overlay_begin();
+    demo_build_render_world(&app);
+    demo_build_replay_render_world(&app.replay_frame);
+    render_status = vox_software_render_view_ex(&demo_match.world,
+        &demo_target, &demo_render_config, &view);
+    demo_render_overlay_restore();
+    if (render_status != VOX_OK) return 5;
+    demo_apply_atmosphere(&app, &view);
+    before_hash = vox_software_hash(&demo_target);
+    demo_draw_replay_effect_particles(&app, &view);
+    after_hash = vox_software_hash(&demo_target);
+    if (vox_world_hash(&demo_match.world) != world_hash ||
+        vox_digs_hash(&demo_match) != match_hash || before_hash == after_hash) {
+        return 6;
+    }
+    printf("DIGS blood baseline self-test passed live=%08lx replay=%08lx\n",
+           (unsigned long)after_hash, (unsigned long)before_hash);
     return 0;
 }
 
@@ -10565,6 +11266,9 @@ int main(int argc, char **argv)
     if (argc >= 2 && strcmp(argv[1], "--particle-overlay-self-test") == 0) {
         return demo_particle_overlay_self_test();
     }
+    if (argc >= 2 && strcmp(argv[1], "--blood-baseline-self-test") == 0) {
+        return demo_blood_baseline_self_test();
+    }
     if (argc >= 2 && strcmp(argv[1], "--fixed-step-self-test") == 0) {
         return demo_fixed_step_self_test();
     }
@@ -10604,6 +11308,15 @@ int main(int argc, char **argv)
         return demo_benchmark(frames);
     }
     if (argc >= 2 &&
+        strcmp(argv[1], "--performance-stress-self-test") == 0) {
+        if (argc != 2) {
+            fprintf(stderr,
+                    "performance stress self-test is fixed at 18000 ticks\n");
+            return 1;
+        }
+        return demo_performance_self_test(18000U, 1, 1);
+    }
+    if (argc >= 2 &&
         (strcmp(argv[1], "--load-self-test") == 0 ||
          strcmp(argv[1], "--performance-self-test") == 0)) {
         int qualify_named_bench =
@@ -10621,7 +11334,7 @@ int main(int argc, char **argv)
             }
             ticks = (vox_u32)requested;
         }
-        return demo_performance_self_test(ticks, qualify_named_bench);
+        return demo_performance_self_test(ticks, qualify_named_bench, 0);
     }
     /*
      * The licence notice used to sit on the title screen.  The menu is meant

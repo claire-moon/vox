@@ -36,6 +36,18 @@ THIRD_PARTY.md :: was vendored through `v0.0.3`
 games/digs/digs_game.c :: That was the v0.0.2 behaviour
 games/digs/digs_game.c :: v0.0.3 removed on purpose
 
+# PR #9 restores the established v0.0.4 blood presentation while retaining
+# the newer fluid simulation. These comments and the live demo guide name the
+# historical visual baseline, not the version of the current build.
+ports/sdl2/digs_sdl2.c :: restored v0.0.4 effect/residue
+ports/sdl2/digs_sdl2.c :: current v0.0.4 visual baseline
+ports/sdl2/digs_sdl2.c :: restored v0.0.4 blood-residue baseline
+ports/sdl2/digs_sdl2.c :: v0.0.4 visual baseline below
+ports/sdl2/digs_sdl2.c :: Re-establish the v0.0.4 blood baseline
+games/digs/digs_game.c :: Restore the v0.0.4 blood baseline
+games/digs/digs_game.c :: v0.0.4's readable blood baseline
+docs/DEMO.md :: restored v0.0.4 visual baseline
+
 # Architecture notes comparing today's profile against the original ones.
 docs/architecture/ACCELERATION.md :: `v0.0.1` includes one deliberately small
 docs/architecture/CHUNKED_WORLD.md :: four times the v0.0.1 dense slab

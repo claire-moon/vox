@@ -215,8 +215,12 @@ The host builds a render-only snapshot for miners and projectiles so they
 receive the same Lightfield treatment without mutating authoritative terrain or
 replay hashes. Transient gore, smoke, sparks, and dust are then blended as
 compact screen-space marks, so they cannot overwrite terrain as opaque blocks.
-SDL2 uploads the completed RGB texture and scales it to the window with
-letterboxing.
+Blood uses the restored v0.0.4 visual baseline while its newer systemic path is
+rebuilt: a broad, long-lived ballistic burst leaves non-blocking blood residue
+where drops land and also deposits into the authoritative fluid volume. The
+renderer no longer substitutes a faint surface-stain pass for the established
+readable spray. SDL2 uploads the completed RGB texture and scales it to the
+window with letterboxing.
 
 `MY MINER` also exposes outfit and helmet colours for each local human slot.
 They are presentation-only schema-6 preferences: bots retain their authored

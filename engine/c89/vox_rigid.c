@@ -721,6 +721,25 @@ static void rigid_joint_solve(vox_rigid_world *world,
     }
 }
 
+/* Connected segments already have a positional and angular constraint.  Let
+ * them collide as well and a corpse fights its own joints every solver pass:
+ * the result is the suspended, dancing anatomy seen in play. */
+static int rigid_bodies_are_jointed(const vox_rigid_world *world,
+                                    vox_u16 body_a, vox_u16 body_b)
+{
+    vox_u16 joint_index;
+    if (world == 0) return 0;
+    for (joint_index = 0U; joint_index < world->joint_count; ++joint_index) {
+        const vox_rigid_joint *joint = &world->joints[joint_index];
+        if (!joint->active) continue;
+        if ((joint->body_a == body_a && joint->body_b == body_b) ||
+            (joint->body_a == body_b && joint->body_b == body_a)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void rigid_apply_fluid_forces(vox_rigid_body *body,
                                      const vox_fluid_world *fluids,
                                      vox_i32 gravity_q16)
@@ -795,6 +814,7 @@ vox_result vox_rigid_step_fluids(vox_rigid_world *world,
                     (world->bodies[j].flags & VOX_RIGID_BODY_SLEEPING) != 0U) {
                     continue;
                 }
+                if (rigid_bodies_are_jointed(world, i, j)) continue;
                 rigid_body_contact(&world->bodies[i], &world->bodies[j]);
             }
         }

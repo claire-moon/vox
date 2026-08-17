@@ -25,11 +25,19 @@ int main(void)
         structure.chunks[0].load_q8 != 3U ||
         structure.chunks[0].support_q8 != 0U ||
         structure.chunks[0].collapse_risk_q8 == 0U) return 10;
+    /* Ordinary excavation must accumulate visible strain before it can
+     * detach an unsupported roof.  A high-energy fracture uses the explicit
+     * impulse path and may collapse immediately. */
     if (structure.collapse_count != 0U ||
         vox_structure_invalidate_with_cause(&structure, 5U, 10U, 4U,
                                             7U, 9U) != VOX_OK ||
         structure.frontier_count == 0U ||
         vox_structure_hash(&structure) == 0U ||
+        vox_structure_step(&structure, &world, 1U) != VOX_OK ||
+        structure.collapse_count != 0U ||
+        structure.chunks[0].strain_q8 == 0U ||
+        vox_structure_invalidate_with_impulse(&structure, 5U, 10U, 4U,
+                                              7U, 9U, 255U) != VOX_OK ||
         vox_structure_step(&structure, &world, 1U) != VOX_OK) return 11;
     if (vox_structure_pop_collapse(&structure, &collapse) != VOX_OK ||
         collapse.x != 4U || collapse.y != 10U || collapse.z != 3U ||
