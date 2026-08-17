@@ -266,7 +266,7 @@ def add_environment_sheet(workbook: Workbook) -> None:
         ("Controller mapping path", "VOX diagnostics", "Record SDL mapped or raw joystick fallback."),
         ("P1 / P2 input ownership", "VOX Options", "Record AUTO KEYBOARD CONTROLLER and claimed pad per local player."),
         ("Aim calibration", "VOX Options", "Record sensitivity deadzone aim slowdown and whether calibration ran."),
-        ("P1 / P2 rope mode", "VOX Options", "Record Hold or Toggle independently for each local player."),
+        ("P1 / P2 grapple behavior", "VOX Controls", "Record the always-toggle binding plus tested retarget and jump-cancel paths."),
         ("Haptics level / availability", "VOX Options / SDL", "Record Off Low Normal Heavy and available blocked or unsupported."),
         ("Haptic mixer self-test result", "VOX automation log", "Record off low normal heavy near and far values; this does not prove physical rumble."),
         ("Audio device", "System settings", "Use a general device label; omit unique IDs."),

@@ -1,0 +1,8 @@
+{
+  "name": "vox-digs",
+  "version-string": "0.0.5",
+  "description": "DIGS desktop package dependency manifest",
+  "dependencies": [
+    "sdl2"
+  ]
+}

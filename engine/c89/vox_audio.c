@@ -196,7 +196,7 @@ static const vox_audio_patch vox_audio_patches[] = {
      5100U, 3300U, 0},
 
     /*
-     * DIGS v0.0.4 tool patches.  They deliberately share only the synthesis
+     * DIGS v0.0.5 tool patches.  They deliberately share only the synthesis
      * vocabulary (tone and polynomial noise), not any recorded source.  The
      * attack, sweep, and noise colour give each tool a readable identity on
      * small speakers as well as on a full-range output device.

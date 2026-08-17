@@ -48,7 +48,7 @@ menu/HUD text is composited afterward as a separate RGB layer.
 After the Lightfield pass, an air-only SDL2 backdrop applies a restrained fog
 bias and a seed-derived white moon. It leaves the renderer's background
 gradient intact instead of drawing competing parallax silhouettes or
-per-cell cloud dither: those layers were visually noisier than the v0.0.4
+per-cell cloud dither: those layers were visually noisier than the current
 material read at 320x200 and are deferred pending a cohesive palette/art pass.
 The same port derives compact miner walk, jump, steam, pain, and fire poses
 plus paced best-kill replay framing from existing match snapshots. These are
@@ -58,7 +58,7 @@ restore the match exactly. This is not the exact imported DOOM palette or a
 full raymarched/skeletal renderer; those remain provenance and scope work.
 
 The renderer owns two fixed world-sized light fields plus solid and surface
-caches, so this v0.0.4 scalar implementation is allocation-free but not
+caches, so this v0.0.5 scalar implementation is allocation-free but not
 reentrant. A host must serialize calls. A future worker implementation may use
 caller-owned scratch arenas and chunk-dirty recomputation after proving
 byte-stable results against this path.

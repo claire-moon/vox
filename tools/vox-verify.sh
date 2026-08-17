@@ -61,7 +61,7 @@ else
     cmake --build "$BUILD_DIR" --parallel
 fi
 ctest --test-dir "$BUILD_DIR" --output-on-failure
-# The v0.0.4 size diet depends on -Os and --gc-sections being result-neutral.
+# The v0.0.5 size diet depends on -Os and --gc-sections being result-neutral.
 # Prove it every run rather than assuming it.
 if [ "${VOX_OPTIMISATION_INVARIANCE:-1}" = 1 ]; then
     "$ROOT/tools/vox-optimisation-invariance.sh"
@@ -86,7 +86,7 @@ fi
     "$BUILD_DIR/digs-settings-self-test.cfg"
 "$BUILD_DIR/digs_demo" --camera-self-test
 "$BUILD_DIR/digs_demo" --fixed-step-self-test
-# v0.0.4: the save layer round-trips and refuses a damaged file, and no screen
+# v0.0.5: the save layer round-trips and refuses a damaged file, and no screen
 # draws outside its frame.  Neither is covered by ctest -- both need the port.
 "$BUILD_DIR/digs_demo" --chronicle-self-test \
     "$BUILD_DIR/digs-chronicle-self-test.dat"

@@ -27,11 +27,8 @@ ROADMAP.txt
 # Individual historical statements inside otherwise-live documents
 # ---------------------------------------------------------------------------
 
-# Tells the tester not to compare against a two-release-old evidence log.
-CG-README.TXT :: rather than old v0.0.1 values
-
-# Lua was dropped for v0.0.4; the note explains what it was there for and
-# when it left, which requires naming the release it left after.
+# Lua was removed after this historical catalog boundary, which requires
+# naming the release it left after.
 THIRD_PARTY.md :: was vendored through `v0.0.3`
 
 # The comment explains a behaviour that was deliberately removed, and which
@@ -86,40 +83,25 @@ docs/compatibility/MATRIX.md :: ## v0.0.3 test lanes
 docs/compatibility/MATRIX.md :: Through v0.0.3 a Rust boundary
 docs/compatibility/MATRIX.md :: qa/V0.0.3-QUICK-FEEDBACK.txt
 
+# The v0.0.4 section is a frozen development-candidate record. These phrases
+# identify historical claims rather than an active v0.0.5 package.
+docs/compatibility/MATRIX.md :: ## v0.0.4 development-candidate evidence
+docs/compatibility/MATRIX.md :: v0.0.4 is ISO C only
+docs/compatibility/MATRIX.md :: v0.0.4 remains a CPU renderer
+docs/compatibility/MATRIX.md :: These rows preserve the v0.0.4 development-candidate record
+docs/compatibility/MATRIX.md :: The v0.0.4 release checklist, a clean package, the QA workbook, and physical
+docs/compatibility/MATRIX.md :: qa/V0.0.4-QUICK-FEEDBACK.txt
+docs/compatibility/MATRIX.md :: ## v0.0.4 test lanes
+docs/compatibility/MATRIX.md :: exercised; v0.0.4 has neither
+docs/compatibility/MATRIX.md :: Corrected during v0.0.4 planning
+docs/compatibility/MATRIX.md :: docs/releasing/V0.0.4_SUPERSESSION.md
+
 # Names the workflow this one replaced, and the release whose assets that
 # workflow could have clobbered. The guard itself is version-agnostic --
 # it protects any published release -- so this is context, not behaviour.
 .github/workflows/publish-release.yml :: This replaces the v0.0.3-era release.yml
 
-# Warns the tester that the previous release's canonical hash no longer
-# applies. Naming it is the entire content of the warning.
-CG-README.TXT :: the activity counters moved from v0.0.3
-CG-README.TXT :: a v0.0.3 expectation applied here reads as a failure
-
 # The v0.0.4 load row states that v0.0.3's counters no longer apply, which is
 # the one thing a tester most needs told. Its own rule, matched on v0.0.4 text.
 docs/compatibility/MATRIX.md :: These counters differ from v0.0.3 principally
 docs/compatibility/MATRIX.md :: a v0.0.3 expectation applied here reads as a failure
-
-# ---------------------------------------------------------------------------
-# Forward references to the next release
-#
-# The gate was written to catch stale numbers and so treats every 0.0.x that
-# is not the current one as suspect.  A plan for the release after this one is
-# the legitimate opposite case.
-# ---------------------------------------------------------------------------
-
-# The plan document itself is not scanned -- planning documents are out of
-# scope by path, like the RFCs and the release checklists -- so it needs no
-# rule.  The README is in scope, and its index links to the plan by filename.
-README.md :: docs/ROADMAP_V0.0.5.md
-
-# Dates when bark stopped being a cosmetic keypress. A port carrying the old
-# assumption will desync, so the sentence has to say which release changed it.
-docs/architecture/PLAYER_CONTROLS.md :: It was through v0.0.3
-
-# The current checkout contains an untagged v0.0.5 implementation increment;
-# these lines describe that in-tree physics work while VERSION remains the
-# releasable v0.0.4 product identity.
-ports/sdl2/digs_sdl2.c :: v0.0.5 always uses toggle grapple behavior.
-docs/architecture/PHYSICS.md :: v0.0.5

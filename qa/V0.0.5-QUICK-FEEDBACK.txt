@@ -1,0 +1,83 @@
+DIGS v0.0.5 QUICK FEEDBACK RUN
+==============================
+
+This is a short defect-discovery lane for one exact v0.0.5 candidate package.
+It does not replace the complete workbook or the release checklist. Record the
+bundle name, SHA-256, platform, input devices, and every result in
+`VOX_QA_FEEDBACK.xlsx`; attach only reviewed evidence.
+
+Before starting, open `qa/README.md` and `docs/releasing/V0.0.5_RELEASE_CHECKLIST.md`.
+If this is a `-ci` artifact, record it as CI evidence only: it is not a public
+release candidate.
+
+1. PACKAGE IDENTITY AND AUTOMATION (5 MINUTES)
+------------------------------------------------
+
+1. Start from a fresh extraction, keep its folder layout intact, and launch it
+   through `run-digs.sh` on Linux or `run-digs.bat` on Windows.
+2. From the extracted package, run the supplied input and load self-tests.
+   On Linux also run `./smoke-test.sh`; retain complete stdout/stderr and the
+   exit statuses.
+3. Record the title-screen version and the package checksum. A mismatch is a
+   BLOCKER; do not continue by substituting a build-tree executable.
+
+Workbook IDs: VOX-QA-001, 022, 024, 087, 103, and 104.
+
+2. CARRIED MEMORY AND CONVERSATION (10 MINUTES)
+------------------------------------------------
+
+1. Play one match with RIVET, CINDER, and FLAMEY; use Bark near each miner and
+   record the seed and the conversation log.
+2. Quit to the desktop, relaunch, then inspect INBOX and LOG. Confirm that
+   remembered attitudes are noticeable, unread state clears on opening, and
+   no corrupt-file recovery is silently treated as a first meeting.
+3. Listen for an ordinary exchange and an interruption: RIVET should usually
+   wait, CINDER should often cut in, and FLAMEY should vary. At most one bubble
+   may be on screen.
+4. Do not reset memory until these observations are recorded. Then test the
+   two-press reset separately and verify that backing out preserves history.
+
+Workbook IDs: VOX-QA-089 through 100.
+
+3. MATERIAL, ANATOMY, AND COLLAPSE (10 MINUTES)
+-------------------------------------------------
+
+1. In PRACTICE and a live match, make a water channel, open a lava pocket, and
+   create a blood pool. Observe containment, movement, reaction, and whether a
+   local player can understand the result without reading a debug value.
+2. Create terrain damage below a supported roof and near miners. Watch the
+   collapse, debris, and recovery path for teleports, stuck bodies, invisible
+   collisions, or runaway material.
+3. Land a headshot and several damage-type kills. Record what happens to the
+   body, blood, score/award feedback, and replay selection. Do not label a
+   missing visual behavior as covered by a headless test.
+
+Workbook IDs: VOX-QA-029, 066, 067, 069, 085, plus the v0.0.5 feature result
+rows added to the final workbook.
+
+4. MOVEMENT, MATCH FLOW, AND PRESENTATION (10 MINUTES)
+--------------------------------------------------------
+
+1. Use the always-toggle Steam Hook: cast, retarget with a second press, jump
+   to cancel, attach to terrain, and destroy an anchor. Test dash and a
+   dropship launch in the same session.
+2. Check BEGIN, INBOX, LOG, PRACTICE, CONTROLS, OPTIONS, pause, results, and
+   clean quit. Nothing may draw over a window title or footer.
+3. Test a supported low cap, a supported high cap, Laptop Mode, a controller
+   if available, and audio fallback/output. Presentation changes must not
+   change the authoritative result for a matched run.
+
+Workbook IDs: VOX-QA-020, 070 through 082, 101, and 102.
+
+5. STOP CONDITIONS AND HANDOFF
+-------------------------------
+
+Stop and record a BLOCKER or HIGH issue for a launch failure, crash, data loss,
+determinism mismatch, missing package data, controller crossover, persistent
+audio fault, invisible/unsafe collision, or a failed self-test. Keep the
+smallest useful log, screenshot, or video; never include private paths,
+credentials, serial numbers, or unrelated desktop content.
+
+This quick lane cannot close the fifteen-minute VOX-QA-084 soak, the full
+platform acceptance pass, or any unchecked item in the v0.0.5 release
+checklist.

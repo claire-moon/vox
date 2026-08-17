@@ -49,6 +49,37 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  windows-package:
+    name: Windows x64 CI tester bundle
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Read the tree's version
+        id: version
+        shell: pwsh
+        run: '"tag=v$((Get-Content -LiteralPath VERSION -Raw).Trim())" >> $env:GITHUB_OUTPUT'
+      - name: Build and verify Windows x64 CI-only tester bundle
+        shell: pwsh
+        env:
+          VCPKG_INSTALLATION_ROOT: C:\vcpkg
+          CI_PACKAGE_VERSION: ${{ steps.version.outputs.tag }}-ci
+          CI_PACKAGE_DIST: ${{ runner.temp }}\dist
+        run: >-
+          powershell -NoProfile -ExecutionPolicy Bypass -File
+          .\tools\package-windows-demo.ps1 -Version $env:CI_PACKAGE_VERSION
+          -DistDir $env:CI_PACKAGE_DIST
+      - name: Upload Windows tester bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vox-digs-${{ steps.version.outputs.tag }}-ci-windows-x86_64
+          path: |
+            ${{ runner.temp }}/dist/vox-digs-${{ steps.version.outputs.tag }}-ci-windows-x86_64.zip
+            ${{ runner.temp }}/dist/vox-digs-${{ steps.version.outputs.tag }}-ci-windows-x86_64.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+
   portable-core:
     name: portable core / ${{ matrix.label }}
     runs-on: ${{ matrix.os }}

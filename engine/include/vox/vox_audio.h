@@ -61,7 +61,7 @@ typedef enum vox_audio_preset {
     VOX_AUDIO_PRESET_AMBIENCE_WATER = 19,
     VOX_AUDIO_PRESET_AMBIENCE_LAVA = 20,
     /*
-     * DIGS v0.0.4 weapon palette.  These are source-native patch IDs rather
+     * DIGS v0.0.5 weapon palette.  These are source-native patch IDs rather
      * than recorded samples: callers may use event_id and variant to make
      * repeated shots differ deterministically without changing the patch's
      * recognizable identity.

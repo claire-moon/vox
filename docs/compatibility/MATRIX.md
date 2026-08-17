@@ -13,20 +13,29 @@ every machine released since 1990.
 | VERIFIED | Native or reproducible acceptance evidence is recorded |
 | UNSUPPORTED | Explicitly outside the current profile |
 
-## Untagged current-source evidence
+## v0.0.5 pre-release source snapshot
 
-This is local source evidence for the untagged implementation increment, not a
-published release or a replacement for the v0.0.4 promotion/human-QA lanes below.
+This is local source evidence collected before the v0.0.5 release-foundation
+candidate. It is not a published release or a replacement for the carried
+human-QA lanes below. The exact release candidate must recapture the relevant
+automated, package, hosted, and manual evidence.
 
 | Surface | Exact environment | State | Evidence and boundary |
 |---|---|---|---|
 | Strict portable core and current gameplay increment | Current local checkout; strict C90 CMake build | RUNS | `ctest --test-dir build-sdl-v005 --output-on-failure` completed 31/31, including the 479-second deterministic match regression, fluid/rigid/cluster gates, wide-cascade and fixture-overflow scenarios, dropship start safety, particle overlay, and cosmetic art determinism. This is native Linux source evidence only. |
 | SDL deterministic load | Current local checkout; clean strict SDL2 builds at `-O0` and `-O2` | RUNS | Both optimisation levels reproduced the 600-tick stream including the interactive dropship start: fired 23, explosions 16, crushes 0, effects 978, awake 4616, canonical hash `c53b59d9`. No timing threshold was applied. |
+| Memory/hash boundary | Controlled load and cross-session process lanes | RUNS | The controlled 600-tick load test starts from a canonical snapshot and must ignore port wall-clock metadata. A match opened from carried memory intentionally has a different opening state and may have a different canonical hash; that is not a desync. |
 | SDL settings and menu migration | Current local SDL2 host | RUNS | Settings, input, bark, chronicle, camera, fixed-step, cap, haptic, audio-cadence, smoke, particle overlay, dropship-start, and menu self-tests pass. The menu gate now renders and hit-tests 12 screens, including both Input & Controller pages; this is not physical controller, display, or audio acceptance. |
-| Current-source test package | Explicitly allowed dirty local checkout; clean Release+NASM package build | RUNS | Package CTest completed 31/31. The temporary package produced binary and Corresponding Source archives, validated SPDX SBOMs and SHA-256 checksums, and a 560,087-byte staged payload (37.9% of the 1,474,560-byte ceiling; 914,473 bytes headroom). Its `0.0.4-feedback-test` name makes it non-release evidence, not an artifact to publish. The package was made before this evidence-row wording refresh. |
-| Current manual/release acceptance | No human or release-package evidence | PLANNED | The dam, magma, blood, cave-in, grapple, bot-tunnelling, replay, dropship, platform-performance, source-archive, SBOM, and checksum lanes still require a clean release candidate and recorded human acceptance. v0.0.4's outstanding human QA remains separate and blocking for v0.0.4 publication. |
+| Current-source test package | Explicitly allowed dirty local checkout; clean Release+NASM package build | RUNS | Package CTest completed 31/31. The temporary package produced binary and Corresponding Source archives, validated SPDX SBOMs and SHA-256 checksums, and a 560,087-byte staged payload (37.9% of the 1,474,560-byte ceiling; 914,473 bytes headroom). Its historical feedback-test name makes it non-release evidence, not an artifact to publish. The package was made before this evidence-row wording refresh. |
+| Linux and Windows package preflight | Checked-in GitHub Actions workflows | PLANNED | Both platforms build release-shaped `-ci` tester artifacts without publishing. They must be green for the exact candidate, but hosted output still does not replace fresh-package manual acceptance. |
+| Current manual/release acceptance | No human or release-package evidence | PLANNED | The dam, magma, blood, cave-in, grapple, bot-tunnelling, replay, dropship, platform-performance, source-archive, SBOM, and checksum lanes still require a clean release candidate and recorded human acceptance. Carried human QA remains separate and blocking for public publication. |
 
 ## v0.0.4 development-candidate evidence
+
+> **Erratum:** the historical "Saved history excluded" row records a controlled
+> load-test result, not a claim that carried memory never reaches the match
+> hash. Carried memory is an intentional simulation input; only wall-clock
+> metadata must stay out. See `docs/releasing/V0.0.4_SUPERSESSION.md`.
 
 | Surface | Exact environment | State | Evidence and boundary |
 |---|---|---|---|
@@ -42,8 +51,8 @@ published release or a replacement for the v0.0.4 promotion/human-QA lanes below
 | Bot memory across sessions | Same host; three separate processes over one chronicle file | RUNS | `tools/vox-session-evidence.sh` plays a match in one process, writes the chronicle, and opens a match from it in another. The carried accounts arrive intact (regard total 592, three pairs met), the second match opens at valence -136 where a first meeting opens at 0, and its state hash differs from a first meeting's -- so memory reaches the simulation rather than merely being stored. A missing or checksum-failed chronicle is refused rather than reported as a first meeting, which would pass the carry test for the wrong reason. Verified by reintroducing the defect: a build that ignores loaded memory fails exactly the two load-bearing assertions. This proves the mechanism, NOT that any of it reads as a grudge; VOX-QA-089 through 093 remain the human evidence and are still unrecorded. |
 | NVIDIA GTX 1660 Ti rendering | Same laptop | PLANNED | v0.0.4 remains a CPU renderer presented by SDL2. GPU presence is test-bench context, not evidence of graphics acceleration. |
 
-These rows preserve the v0.0.4 development-candidate record. The v0.0.4
-release checklist, a clean package, the QA workbook, and physical
+These rows preserve the v0.0.4 development-candidate record.
+The v0.0.4 release checklist, a clean package, the QA workbook, and physical
 controller/audio evidence remain authoritative promotion gates.
 
 One gap is deliberately still open. The cross-session row proves the

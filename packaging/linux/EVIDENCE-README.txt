@@ -1,4 +1,4 @@
-DIGS v0.0.4 package-time evidence
+DIGS v0.0.5 package-time evidence
 ========================================
 
 Each named command has an unmodified stdout stream, unmodified stderr stream,
@@ -22,9 +22,11 @@ from a genuinely corrupted file on disk, which is a manual checkpoint. The
 menu stream proves that no screen draws content outside its own frame; it says
 nothing about whether those screens are legible, which is judged by eye.
 
-Neither the chronicle nor the memory it carries enters the canonical hash.
-The load stream prints the same state hash on a machine with a long history as
-on a fresh one, which is the determinism boundary this release rests on.
+No wall-clock value from the chronicle enters the canonical hash. The load
+stream deliberately opens from a controlled canonical snapshot, so it prints
+the same state hash on a machine with a long history as on a fresh one. Carried
+memory in an actual opened match is an intentional simulation input and can
+change the hash; the cross-session evidence records that separate boundary.
 
 Archive ordering, ownership, and timestamps are normalized with
 SOURCE_DATE_EPOCH. The source archive is reproducible from the same tree.

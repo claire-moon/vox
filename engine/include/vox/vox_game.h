@@ -163,7 +163,7 @@ typedef enum vox_digs_tool {
     VOX_DIGS_TOOL_COUNT = 11
 } vox_digs_tool;
 
-/* Stable numeric slots with v0.0.4 gameplay names. */
+/* Stable numeric slots with the current DIGS gameplay names. */
 #define VOX_DIGS_TOOL_PULASKI VOX_DIGS_TOOL_PICK
 #define VOX_DIGS_TOOL_POPPER VOX_DIGS_TOOL_BLAST_CHARGE
 #define VOX_DIGS_TOOL_SMOKER VOX_DIGS_TOOL_SMOKE_POT

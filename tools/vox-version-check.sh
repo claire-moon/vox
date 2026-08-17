@@ -54,6 +54,7 @@ README.md
 CG-README.TXT
 ROADMAP.txt
 THIRD_PARTY.md
+vcpkg.json
 tools/package-linux-demo.sh
 tools/package-windows-demo.ps1
 tools/vox-verify.sh
@@ -64,6 +65,7 @@ ports
 engine
 games
 qa/README.md
+docs/DEMO.md
 docs/architecture
 docs/compatibility
 '

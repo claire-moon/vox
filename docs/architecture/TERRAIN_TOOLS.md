@@ -18,7 +18,7 @@ the gameplay names have changed twice. Anything persisted -- a saved binding,
 a replay, an arsenal mask -- refers to the ID, so renaming a weapon costs
 nothing.
 
-| ID | Enum constant | v0.0.4 name | Delivery | Primary world interaction |
+| ID | Enum constant | Current name | Delivery | Primary world interaction |
 |---:|---|---|---|---|
 | 0 | `TOOL_PICK` | PULASKI | Melee | Precise excavation |
 | 1 | `TOOL_BLAST_CHARGE` | POPPER | Gravity projectile and fuse | Blast, smoke, terrain/player damage |
@@ -32,7 +32,7 @@ nothing.
 | 9 | `TOOL_NAIL_BOMB` | BORING DRILL | Gravity projectile and fuse | Blast plus voxel debris effects |
 | 10 | `TOOL_RAIL_GUN` | RAILSHOT | Charged hitscan ray | Piercing line that loses energy through terrain and bodies |
 
-The `v0.0.4` names are `#define` aliases onto the same constants rather than a
+The current names are `#define` aliases onto the same constants rather than a
 second enum, so there is exactly one numbering and no mapping table to drift.
 
 Properties are table-driven: name, cooldown, damage, blast radius, projectile

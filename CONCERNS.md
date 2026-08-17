@@ -4,9 +4,11 @@
 What worries me about this codebase, written for whoever picks it up next.
 
 This is deliberately not a task list — `docs/ROADMAP_V0.0.5.md` is that, and
-`docs/releasing/V0.0.4_RELEASE_CHECKLIST.md` is what still needs verifying.
-This file is the other thing: the traps, the things proven less thoroughly than
-they look, and the decisions most likely to be wrong.
+`docs/releasing/V0.0.5_RELEASE_CHECKLIST.md` is what still needs verifying.
+`docs/releasing/V0.0.4_SUPERSESSION.md` preserves the prior candidate's open
+gates without pretending it shipped. This file is the other thing: the traps,
+the things proven less thoroughly than they look, and the decisions most likely
+to be wrong.
 
 Everything here was verified against the source at the time of writing. If you
 are reading this much later, check before acting — a concern that has been

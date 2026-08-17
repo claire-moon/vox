@@ -20,13 +20,13 @@
 #define VOX_VERSION_MINOR @PROJECT_VERSION_MINOR@
 #define VOX_VERSION_PATCH @PROJECT_VERSION_PATCH@
 
-/* "0.0.4" */
+/* "0.0.5" */
 #define VOX_VERSION_STRING "@PROJECT_VERSION@"
 
-/* "v0.0.4" -- the tag, and how the game names itself on screen. */
+/* "v0.0.5" -- the tag, and how the game names itself on screen. */
 #define VOX_VERSION_TAG "v@PROJECT_VERSION@"
 
-/* "DIGS v0.0.4" -- window titles and banners. */
+/* "DIGS v0.0.5" -- window titles and banners. */
 #define VOX_VERSION_TITLE "DIGS v@PROJECT_VERSION@"
 
 #endif

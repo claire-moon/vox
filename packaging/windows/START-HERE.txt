@@ -1,4 +1,4 @@
-DIGS v0.0.4 DEMO - Windows x86-64
+DIGS v0.0.5 DEMO - Windows x86-64
 ==================================
 
 1. Extract the complete ZIP file.

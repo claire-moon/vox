@@ -19,7 +19,7 @@ configure_file(
     @ONLY
 )
 
-# v0.0.4 is ISO C only: every first-party translation unit is compiled as
+# v0.0.5 is ISO C only: every first-party translation unit is compiled as
 # ISO C90 (the C89 language profile).  Keep compiler extensions off globally
 # so every target, including small tools and tests, exercises that boundary.
 set(CMAKE_C_STANDARD 90)
@@ -620,7 +620,7 @@ if (VOX_BUILD_TESTS)
             COMMAND digs_demo --particle-overlay-self-test)
         add_test(NAME digs_fixed_step_debt
             COMMAND digs_demo --fixed-step-self-test)
-        # v0.0.4 budgets the shipped payload (digs_demo plus the staged
+        # v0.0.5 budgets the shipped payload (digs_demo plus the staged
         # share/ tree) at 1440 KiB.  The gate only fails past that hard
         # ceiling; the target and warning lines are advisory so the diet
         # can be measured phase by phase without blocking the build.

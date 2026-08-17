@@ -255,7 +255,7 @@ capture_evidence digs-camera-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --camera-self-test
 capture_evidence digs-fixed-step-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --fixed-step-self-test
-# v0.0.4 adds a save layer and a window widget every screen draws through.
+# v0.0.5 carries a save layer and a window widget every screen draws through.
 # Both can fail in ways the simulation tests cannot see, so both are shipped
 # as package evidence alongside the determinism logs.
 capture_evidence digs-chronicle-self-test "$EVIDENCE_DIR" \
@@ -317,7 +317,8 @@ install -m 0644 -- "$ROOT/packaging/linux/libexec/vox-runtime.sh" \
     "$STAGE_DIR/libexec/vox-runtime.sh"
 copy_file "$ROOT/packaging/linux/START-HERE.txt" "$STAGE_DIR/START-HERE.txt"
 copy_file "$ROOT/CG-README.TXT" "$STAGE_DIR/CG-README.TXT"
-copy_file "$ROOT/qa/V0.0.4-QUICK-FEEDBACK.txt" \
+CURRENT_FEEDBACK_FORM="V$("$ROOT/tools/vox-version.sh")-QUICK-FEEDBACK.txt"
+copy_file "$ROOT/qa/$CURRENT_FEEDBACK_FORM" \
     "$STAGE_DIR/QUICK-FEEDBACK.txt"
 
 copy_file "$ROOT/LICENSE" "$STAGE_DIR/LICENSE"
@@ -342,7 +343,6 @@ if [[ -d "$ROOT/qa" ]]; then
     # Derived from the VERSION file, not from $VERSION: the latter carries
     # suffixes like -ci and -dev, which name no form and would fail the
     # check below on every CI package run.
-    CURRENT_FEEDBACK_FORM="V$("$ROOT/tools/vox-version.sh")-QUICK-FEEDBACK.txt"
     for form in "$STAGE_DIR"/qa/V*-QUICK-FEEDBACK.txt; do
         [[ -e "$form" ]] || continue
         if [[ "$(basename -- "$form")" != "$CURRENT_FEEDBACK_FORM" ]]; then
@@ -397,7 +397,7 @@ if [[ $(printf '%s\n%s\n' "$GLIBC_REQUIRED" "$GLIBC_MAX" |
     die "digs_demo requires GLIBC_$GLIBC_REQUIRED; release baseline is GLIBC_$GLIBC_MAX"
 fi
 
-# v0.0.4 budgets the playable payload -- the binary plus the runtime data it
+# v0.0.5 budgets the playable payload -- the binary plus the runtime data it
 # needs to boot -- at a 1440 KiB floppy.  Documentation, licences, QA material
 # and the evidence bundle are tester material and stay outside the budget.
 # Fail here, before the archive can reach a release page, in the same spirit
@@ -499,7 +499,7 @@ PACKAGED_ROOT="$PACKAGED_CHECK_DIR/$ARCHIVE_STEM"
 [[ -x "$PACKAGED_ROOT/run-digs.sh" ]] || \
     die 'the packaged Linux launcher is missing or not executable'
 # Assert the property, not one payload file.  This check named the Lua
-# catalog manifest, which v0.0.4 removed, so it failed on a package that was
+# catalog manifest, which the current C-only build removed, so it failed on a package that was
 # perfectly good.  Comparing the two trees keeps it testing what it is for --
 # that bin/share resolves to the one canonical copy -- however the payload
 # changes later.

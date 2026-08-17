@@ -41,8 +41,8 @@ defaults the host ships:
   mask; and
 - `C` for P1, `M` for P2, or controller R3 barks.
 
-**Bark is not presentation-only.** It was through v0.0.3. From v0.0.4 it is
-`VOX_DIGS_ACTION_BARK` in the authoritative input word, it is folded into the
+**Bark is not presentation-only.** It is `VOX_DIGS_ACTION_BARK` in the
+authoritative input word, it is folded into the
 canonical hash like any other action, and it drives the whole conversation
 system: one press produces exactly one line, and the aim vector submitted with
 it decides who is being addressed. A port that treats it as a cosmetic

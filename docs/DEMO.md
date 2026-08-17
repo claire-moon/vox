@@ -1,28 +1,27 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# DIGS v0.0.4 demo guide
+# DIGS v0.0.5 development guide
 
 DIGS is a deterministic voxel-destruction deathmatch. The same bounded voxel
 world drives terrain destruction, granular motion, liquids, gases, heat,
 hazards, lighting, projectile impacts, and transient effects, and every one of
 those feeds the authoritative match rather than being presentation-only.
 
-v0.0.4 is "THE BOTS REMEMBER". The three miners you fight — RIVET, CINDER and
-FLAMEY — carry attitudes between sessions, hold conversations with each other
-and with you, and keep grudges. That is the release's headline change and the
-part of it least visible in a single match.
+v0.0.5 retains the three persistent miners — RIVET, CINDER and FLAMEY — and
+their remembered attitudes, conversations, and grudges. Those player-facing
+behaviors remain release-blocking human acceptance work, even where the save
+and deterministic mechanisms have automated coverage.
 
-This guide describes what the current build actually does. It replaces a
-v0.0.1 document that had gone comprehensively out of date: different menus,
-ten weapons instead of eleven, and a claim that the bots were "target-selection
-demonstrators, not navigation" agents, which stopped being true when they
-learned to cut their way out of terrain.
+This guide describes what the current build actually does. It replaces an
+older guide that had gone comprehensively out of date: menus changed, the
+arsenal expanded, and bots learned to cut their way out of terrain.
 
-The checkout still identifies itself as v0.0.4 and has not been tagged or
-published as v0.0.5. It also contains an untagged v0.0.5 physics/gameplay
-increment. The status below separates those verified source changes from the
-human release work and presentation features that remain open.
+The checkout identifies itself as v0.0.5. That is a product identity, not a
+public-release claim: a package becomes public only after the full release
+checklist, reviewed protected-main integration, and tagged GitHub publication.
+The status below separates source changes from the human release work and
+presentation features that remain open.
 
-## Untagged v0.0.5 increment
+## v0.0.5 development status
 
 The strict-C90 build now includes bounded, integer-authoritative pools for
 persistent water/lava/blood volumes, oriented rigid bodies and joints, corpse
@@ -33,10 +32,10 @@ gravity-increasing y coordinates and exact 3-D terrain blocking; fixture blasts
 emit metal scrap, and submerged miners receive hashed drowning damage. The new
 headless gates cover conservation, deterministic body order, cluster debris,
 fixture and drowning events, dropship route transitions, and replay selection.
-The current 600-tick SDL load gate begins the interactive dropship sequence and
-records fired 23, explosions 16, crushes 0, effects 978, awake 4616, and
-canonical hash `c53b59d9`; the same result was
-recaptured in strict `-O0` and `-O2` builds.
+The 600-tick SDL load gate begins the interactive dropship sequence. Its exact
+activity counters and canonical hash are release-candidate evidence: take them
+only from the raw package evidence for the frozen candidate under test, never
+from an earlier source snapshot.
 
 This is engineering evidence, not a v0.0.5 release claim. The current source
 now carries wide unsupported roofs through bounded support-frontier fragments
@@ -48,7 +47,7 @@ grapple, bot, replay, and dropship scenarios. The SDL2 port now has a
 restrained air-only fog/moon pass, paced replay framing, compact live
 rigid-body marks, and simple miner motion poses. The noisier parallax and
 cloud treatment is deliberately deferred until it can preserve the material
-read of the v0.0.4 renderer; it still does not ship the exact imported DOOM
+read of the current renderer; it still does not ship the exact imported DOOM
 palette or a full skeletal-animation system.
 
 ## The title screen
@@ -122,8 +121,8 @@ the deterministic match state.
 | 10 | BORING DRILL | Fused explosive with blast damage and nail-like voxel effects |
 | 11 | RAILSHOT | Charged piercing ray that loses energy through terrain and bodies |
 
-Numeric slots are stable across releases; the names are v0.0.4 gameplay names
-layered over them, so a saved binding or a replay does not break when a weapon
+Numeric slots are stable across releases; current gameplay names are layered
+over them, so a saved binding or a replay does not break when a weapon
 is renamed.
 
 The pools are fixed and bounded: up to 64 authoritative projectiles and 768
@@ -180,7 +179,7 @@ instead. It exists at the project lead's explicit request.
 The demo uses fourteen stable material IDs: air, bedrock, stone, soil, coal,
 biomass, sand, water, lava, metal, flesh, blood, smoke, and firedamp.
 
-- Sand, water, lava, and blood fall; the untagged v0.0.5 core also keeps bounded
+- Sand, water, lava, and blood fall; the v0.0.5 core also keeps bounded
   fixed-point fluid volumes that pool and equalize laterally; smoke, firedamp,
   and gaseous water rise.
 - Water touching lava converts the lava contact to stone and emits hot smoke
@@ -275,9 +274,8 @@ After configuring with `-DVOX_BUILD_SDL2_DEMO=ON`:
 
 The load self-test is the portable determinism gate: 600 authoritative ticks
 reproducing exact activity counters and state hash, with no wall-clock
-assertion. Those counters moved from v0.0.3 because bots now dig, so a v0.0.3
-expectation applied to a v0.0.4 binary reads as a failure and is not one — use
-this release's evidence log.
+assertion. Use the exact candidate's evidence log; an expectation copied from
+an earlier release is not evidence of a regression in this one.
 
 `--chronicle-self-test` round-trips the save layer and confirms a damaged file
 is refused by its checksum. `--menu-self-test` walks every screen.
@@ -300,7 +298,7 @@ navigation, all eleven weapon bindings, bot combat, damage/death/respawn, the
 three map styles, fixed-step behavior at every cap, Lightfield differences,
 fullscreen transitions, pause/results flow, audio fallback, rising-lava damage
 — and, new in this release, whether the miners read as characters. See
-`qa/V0.0.4-QUICK-FEEDBACK.txt`.
+`qa/V0.0.5-QUICK-FEEDBACK.txt`.
 
 ## Testing cockpit and feedback
 
