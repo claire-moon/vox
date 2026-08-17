@@ -598,7 +598,8 @@ if (VOX_BUILD_TESTS)
         add_test(NAME digs_dropship_start
             COMMAND digs_demo --dropship-start-self-test)
         add_test(NAME digs_menu_screens
-            COMMAND digs_demo --menu-self-test)
+            COMMAND digs_demo --menu-self-test
+                    ${CMAKE_CURRENT_BINARY_DIR}/digs-menu-self-test.ppm)
         add_test(NAME digs_chronicle_persistence
             COMMAND digs_demo --chronicle-self-test
                     ${CMAKE_CURRENT_BINARY_DIR}/digs-chronicle-self-test.dat)

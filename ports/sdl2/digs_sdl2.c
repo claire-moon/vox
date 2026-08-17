@@ -11078,7 +11078,7 @@ static int demo_screenshot(const char *screen_name, const char *path)
  * renders a flat panel because a helper returned early, looks exactly like a
  * screen that is fine until somebody opens it.
  */
-static int demo_menu_self_test(void)
+static int demo_menu_self_test(const char *path)
 {
     static const char *screens[12] = {
         "title", "setup", "options", "options2", "inbox", "inbox-read",
@@ -11092,7 +11092,6 @@ static int demo_menu_self_test(void)
     static const int rows_expected[12] = {
         1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1
     };
-    const char *path = "/tmp/digs-menu-self-test.ppm";
     int i;
     for (i = 0; i < 12; ++i) {
         vox_u32 x;
@@ -11273,8 +11272,9 @@ int main(int argc, char **argv)
         return demo_fixed_step_self_test();
     }
     if (argc >= 2 && strcmp(argv[1], "--menu-self-test") == 0) {
+        const char *path = argc >= 3 ? argv[2] : "digs-menu-self-test.ppm";
         demo_prepare_targets();
-        return demo_menu_self_test();
+        return demo_menu_self_test(path);
     }
     if (argc >= 4 && strcmp(argv[1], "--shot") == 0) {
         demo_prepare_targets();
