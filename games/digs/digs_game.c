@@ -9816,10 +9816,10 @@ static void digs_deposit_effect_impact(vox_digs_match *match,
             continue;
         }
         /* v0.0.4's readable blood baseline leaves a non-solid blood cell at
-         * the impact site. Retain the v0.0.5 fluid deposit alongside that
-         * residue, so a sprayed kill stays legible after the airborne effect
-         * stops without sacrificing pooling or fluid hazards. Never apply
-         * this path to flesh or to a cell occupied by a miner. */
+         * the impact site. Retain the authoritative persistent-fluid deposit
+         * alongside that residue, so a sprayed kill stays legible after the
+         * airborne effect stops without sacrificing pooling or fluid hazards.
+         * Never apply this path to flesh or to a cell occupied by a miner. */
         cell = vox_world_cell(&match->world, (vox_u32)x, (vox_u32)y,
                               effect->depth);
         if (cell == 0 || cell->material != VOX_MAT_AIR) {
