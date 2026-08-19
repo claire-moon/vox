@@ -33,6 +33,19 @@ static vox_u16 last_bark_stimulus(const vox_digs_match *match,
     return stimulus;
 }
 
+/* Arena construction is test-only setup.  It may deliberately replace a
+ * generated anchor, but has to do so explicitly now that ordinary world
+ * writes reject fixture replacement. */
+static vox_result clear_test_cell(vox_world *world, vox_u32 x, vox_u32 y,
+                                  vox_u32 z)
+{
+    if (vox_world_is_fixture(world, x, y, z) &&
+        vox_world_set_fixture(world, x, y, z, 0U) != VOX_OK) {
+        return VOX_ERR_INVALID;
+    }
+    return vox_world_set(world, x, y, z, VOX_MAT_AIR, 0L);
+}
+
 int main(void)
 {
     static vox_digs_match match;
@@ -112,10 +125,12 @@ int main(void)
         match.ragdolls.joint_count < 10U ||
         vox_fluid_cell_get_at(&match.fluids,
             (vox_u16)(match.players[1].position_x.value_q16 >> 16),
-            (vox_u16)(match.players[1].position_y.value_q16 >> 16), 0U) == 0 ||
+            (vox_u16)(match.players[1].position_y.value_q16 >> 16), 0U) != 0 ||
         !saw_event(&match, VOX_DIGS_EVENT_HEADSHOT)) return 3;
     if (vox_world_set(&match.world, 100U, 100U, 0U, VOX_MAT_METAL,
-                      20L << 16) != VOX_OK) return 4;
+                      20L << 16) != VOX_OK ||
+        vox_world_set_fixture(&match.world, 100U, 100U, 0U, 1U) != VOX_OK)
+        return 4;
     if (vox_digs_use_tool(&match, 0U, VOX_DIGS_TOOL_FIRECRACKER,
                           100U, 100U, 0U) != VOX_OK) {
         fprintf(stderr, "fixture blast failed\n");
@@ -145,8 +160,8 @@ int main(void)
     for (y = 80L; y <= 120L; ++y) {
         for (x = 80L; x <= 120L; ++x) {
             for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-                if (vox_world_set(&fixture_match.world, (vox_u32)x,
-                                  (vox_u32)y, z, VOX_MAT_AIR, 0L) != VOX_OK) {
+                if (clear_test_cell(&fixture_match.world, (vox_u32)x,
+                                    (vox_u32)y, z) != VOX_OK) {
                     return 81;
                 }
             }
@@ -158,6 +173,10 @@ int main(void)
                       VOX_MAT_METAL, 0L) != VOX_OK ||
         vox_world_set(&fixture_match.world, 103U, 100U, 0U,
                       VOX_MAT_METAL, 0L) != VOX_OK ||
+        vox_world_set_fixture(&fixture_match.world, 101U, 100U, 0U, 1U) !=
+            VOX_OK ||
+        vox_world_set_fixture(&fixture_match.world, 103U, 100U, 0U, 1U) !=
+            VOX_OK ||
         vox_digs_use_tool(&fixture_match, 0U,
                           VOX_DIGS_TOOL_FIRECRACKER,
                           96U, 100U, 0U) != VOX_OK) {
@@ -202,6 +221,8 @@ int main(void)
                       VOX_MAT_STONE, 0L) != VOX_OK ||
         vox_world_set(&fixture_match.world, 111U, 100U, 0U,
                       VOX_MAT_METAL, 0L) != VOX_OK ||
+        vox_world_set_fixture(&fixture_match.world, 111U, 100U, 0U, 1U) !=
+            VOX_OK ||
         vox_digs_use_tool(&fixture_match, 0U,
                           VOX_DIGS_TOOL_FIRECRACKER,
                           106U, 100U, 0U) != VOX_OK) {
@@ -256,8 +277,8 @@ int main(void)
     for (y = 54L; y <= 68L; ++y) {
         for (x = 76L; x <= 88L; ++x) {
             for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-                if (vox_world_set(&collapse_match.world, (vox_u32)x,
-                                  (vox_u32)y, z, VOX_MAT_AIR, 0L) != VOX_OK) {
+                if (clear_test_cell(&collapse_match.world, (vox_u32)x,
+                                    (vox_u32)y, z) != VOX_OK) {
                     return 36;
                 }
             }
@@ -304,9 +325,8 @@ int main(void)
     for (y = 44L; y <= 76L; ++y) {
         for (x = 48L; x <= 336L; ++x) {
             for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-                if (vox_world_set(&wide_collapse_match.world,
-                                  (vox_u32)x, (vox_u32)y, z,
-                                  VOX_MAT_AIR, 0L) != VOX_OK) {
+                if (clear_test_cell(&wide_collapse_match.world,
+                                    (vox_u32)x, (vox_u32)y, z) != VOX_OK) {
                     return 75;
                 }
             }
@@ -360,8 +380,8 @@ int main(void)
     for (y = 70L; y <= 90L; ++y) {
         for (x = 190L; x <= 210L; ++x) {
             for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-                if (vox_world_set(&impact_match.world, (vox_u32)x,
-                                  (vox_u32)y, z, VOX_MAT_AIR, 0L) != VOX_OK) {
+                if (clear_test_cell(&impact_match.world, (vox_u32)x,
+                                    (vox_u32)y, z) != VOX_OK) {
                     return 43;
                 }
             }
@@ -392,8 +412,8 @@ int main(void)
     for (y = 96L; y <= 104L; ++y) {
         for (x = 246L; x <= 254L; ++x) {
             for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-                if (vox_world_set(&impact_match.world, (vox_u32)x,
-                                  (vox_u32)y, z, VOX_MAT_AIR, 0L) != VOX_OK) {
+                if (clear_test_cell(&impact_match.world, (vox_u32)x,
+                                    (vox_u32)y, z) != VOX_OK) {
                     return 68;
                 }
             }
@@ -593,8 +613,8 @@ int main(void)
     for (y = 44L; y <= 76L; ++y) {
         for (x = 100L; x <= 140L; ++x) {
             for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-                if (vox_world_set(&ai_match.world, (vox_u32)x,
-                                  (vox_u32)y, z, VOX_MAT_AIR, 0L) != VOX_OK) {
+                if (clear_test_cell(&ai_match.world, (vox_u32)x,
+                                    (vox_u32)y, z) != VOX_OK) {
                     return 59;
                 }
             }
@@ -647,8 +667,8 @@ int main(void)
     ai_match.players[3].flags = 0U;
     for (y = 50L; y <= 68L; ++y) {
         for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-            if (vox_world_set(&ai_match.world, 120U, (vox_u32)y, z,
-                              VOX_MAT_AIR, 0L) != VOX_OK) return 63;
+            if (clear_test_cell(&ai_match.world, 120U, (vox_u32)y, z) !=
+                VOX_OK) return 63;
         }
     }
     ai_match.bots[3].target = VOX_DIGS_NO_PLAYER;
@@ -694,8 +714,8 @@ int main(void)
                 x >= (vox_i32)VOX_WORLD_WIDTH ||
                 y >= (vox_i32)VOX_WORLD_HEIGHT) continue;
             for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-                if (vox_world_set(&rope_match.world, (vox_u32)x,
-                                  (vox_u32)y, z, VOX_MAT_AIR, 0L) != VOX_OK) {
+                if (clear_test_cell(&rope_match.world, (vox_u32)x,
+                                    (vox_u32)y, z) != VOX_OK) {
                     return 8;
                 }
             }
@@ -706,7 +726,10 @@ int main(void)
             VOX_OK ||
         vox_world_set(&rope_match.world, (vox_u32)second_x,
                       (vox_u32)second_y, 0U, VOX_MAT_METAL, 20L << 16) !=
-            VOX_OK || vox_world_sleep_all(&rope_match.world) != VOX_OK) return 9;
+            VOX_OK ||
+        vox_world_set_fixture(&rope_match.world, (vox_u32)second_x,
+                              (vox_u32)second_y, 0U, 1U) != VOX_OK ||
+        vox_world_sleep_all(&rope_match.world) != VOX_OK) return 9;
     rope_input.abi_version = VOX_ABI_VERSION;
     rope_input.struct_size = (vox_u32)sizeof(rope_input);
     rope_input.player = 0U;
@@ -787,9 +810,8 @@ int main(void)
     for (x = source_x - 8L; x <= source_x + 8L; ++x) {
         if (x < 0L || x >= (vox_i32)VOX_WORLD_WIDTH) continue;
         for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-            if (vox_world_set(&ship_match.world, (vox_u32)x,
-                              (vox_u32)source_y, z, VOX_MAT_AIR, 0L) !=
-                VOX_OK) return 22;
+            if (clear_test_cell(&ship_match.world, (vox_u32)x,
+                                (vox_u32)source_y, z) != VOX_OK) return 22;
         }
     }
     ship_match.dropship.position_x_q16 = (source_x + 8L) << 16;

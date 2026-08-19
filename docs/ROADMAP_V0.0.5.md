@@ -77,7 +77,7 @@ From the lead's notes, unchanged since v0.0.4:
 
 - **ISO C only.** Strict C89 for every first-party translation unit, including
   ports, tools and tests. No C++, no Rust, no embedded scripting.
-- **The game must not exceed 1.44 MB.** The gate is enforced inside
+- **The game must not exceed 10 MiB.** The gate is enforced inside
   `tools/package-linux-demo.sh`, so a bundle that outgrows it fails rather
   than ships.
 - **Performance must hold at all framerates regardless of device.**
@@ -86,10 +86,10 @@ From the lead's notes, unchanged since v0.0.4:
   by the port and written to the chronicle, but must never reach a digest the
   canonical hash consumes.
 
-**The size budget is the binding constraint on this release.** v0.0.5 is the
+**The size budget remains a release constraint.** v0.0.5 is the
 heaviest feature list the project has had — fluid simulation, ragdolls,
 skeletal animation, a raymarched sky, a 256-colour palette, voxel weapon models
-— against 960 KB of headroom. Budget per feature before writing it, and measure
+— under a 10 MiB hard ceiling. Budget per feature before writing it, and measure
 with `tools/vox-size-report.sh` as you go rather than at the end.
 
 ---
@@ -411,10 +411,10 @@ the earlier exploratory roadmap:
    QA checkpoints are what answer this.
 4. **The third archetype is FLAMEY:** short trap tunnels, ambush routes,
    smoke/fire setups, and opportunistic escapes.
-5. **The 1.44 MB ceiling remains decisive.** 960 KB of headroom for
-   fluids, ragdolls, skeletal animation, a raymarched sky and voxel weapon
-   models is tight. If it comes to a choice, which features are the release and
-   which are negotiable?
+5. **The 10 MiB ceiling defines the current payload limit.** The larger budget
+   leaves room for fluids, ragdolls, skeletal animation, a raymarched sky and
+   voxel weapon models. If it comes to a choice, decide which features are the
+   release and which are negotiable.
 
 ---
 

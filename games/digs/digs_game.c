@@ -38,6 +38,14 @@
 #define DIGS_RIGID_IMPACT_COOLDOWN_TICKS 12U
 #define DIGS_RIGID_IMPACT_MIN_SPEED_Q16 16384L
 #define DIGS_RIGID_IMPACT_MAX_DAMAGE 60U
+#define DIGS_SCRAP_IMPACT_MIN_SPEED_Q16 65536L
+#define DIGS_SCRAP_IMPACT_DAMAGE_STEP_Q16 32768L
+#define DIGS_SCRAP_IMPACT_MAX_DAMAGE 10U
+#define DIGS_EFFECT_LANDED_TICKS 180U
+#define DIGS_TERRAIN_FRAGMENT_GRAVITY_Q16 4096L
+#define DIGS_TERRAIN_FRAGMENT_TERMINAL_FALL_Q16 (3L << 16)
+#define DIGS_TERRAIN_FRAGMENT_SETTLE_SPEED_Q16 12288L
+#define DIGS_TERRAIN_FRAGMENT_SETTLE_RADIUS 3U
 /* A detached cluster can hold 128 cells, but reintroducing all of them in
  * one tick would turn one sleeping rigid body into an unbounded terrain edit.
  * The first sixteen available slots become loose material in stable local
@@ -706,6 +714,22 @@ static void digs_spawn_effect_variant(vox_digs_match *match,
                                       vox_i32 velocity_x_q16,
                                       vox_i32 velocity_y_q16, vox_u16 ttl,
                                       vox_u16 source, vox_u16 variant);
+static int digs_terrain_fragment_material(vox_u16 material);
+static int digs_structural_terrain_material(vox_u16 material);
+static int digs_spawn_terrain_fragment(vox_digs_match *match,
+                                       vox_u32 x, vox_u32 y, vox_u32 z,
+                                       vox_u16 material, vox_u16 source,
+                                       vox_u16 weapon, vox_u32 origin_x,
+                                       vox_u32 origin_y,
+                                       vox_i32 impulse_q16);
+static void digs_spawn_blast_terrain_fragments(
+    vox_digs_match *match, const vox_blast_capture *capture,
+    vox_u32 x, vox_u32 y, vox_u16 radius, vox_u16 source, vox_u16 weapon);
+static void digs_append_blast_capture(vox_blast_capture *destination,
+                                      const vox_blast_capture *source);
+static vox_result digs_remove_player_terrain_cell(
+    vox_digs_match *match, vox_u32 x, vox_u32 y, vox_u32 z,
+    vox_i32 temperature_q16, vox_u16 source, vox_u16 weapon);
 static void digs_emit_event(vox_digs_match *match, vox_u16 type,
                             vox_u16 source, vox_u16 target,
                             vox_u16 weapon, vox_u16 material,
@@ -718,15 +742,15 @@ static void digs_replay_frame_init(vox_digs_replay_frame *frame);
 static void digs_replay_capture(vox_digs_match *match);
 static void digs_spawn_corpse_assembly(vox_digs_match *match,
                                        vox_u16 victim, vox_u16 killer);
-static void digs_spawn_blast_debris(vox_digs_match *match, vox_u32 x,
-                                    vox_u32 y, vox_u16 radius,
-                                    vox_u16 scrap, vox_u16 source,
-                                    vox_u16 weapon);
 static void digs_step_structural_cascades(vox_digs_match *match);
 static void digs_step_rigid_impacts(vox_digs_match *match);
 static vox_result digs_blast(vox_digs_match *match, vox_u32 x, vox_u32 y,
                              vox_u32 z, vox_u16 radius, vox_i32 heat_q16,
                              vox_u16 source, vox_u16 weapon);
+static vox_result digs_blast_capture_fragments(
+    vox_digs_match *match, vox_u32 x, vox_u32 y, vox_u32 z,
+    vox_u16 radius, vox_i32 heat_q16, vox_u16 source, vox_u16 weapon,
+    vox_blast_capture *fragment_capture);
 static void digs_recycle_sleeping_rigids(vox_digs_match *match);
 static void digs_detach_rope(vox_digs_match *match, vox_u16 player,
                              vox_u16 event_type);
@@ -751,6 +775,14 @@ static vox_u32 digs_scale_lava_level(vox_u32 numerator,
 static int digs_point_hits_player(const vox_digs_match *match,
                                   vox_u16 player, vox_i32 x_q16,
                                   vox_i32 y_q16, vox_u16 *part_out);
+static int digs_fragment_cell_overlaps_player(const vox_digs_match *match,
+                                              vox_u32 x, vox_u32 y);
+static vox_u16 digs_place_loose_material(vox_digs_match *match,
+                                         vox_u16 material,
+                                         vox_i32 center_x,
+                                         vox_i32 center_y, vox_u16 wanted,
+                                         vox_u16 radius_limit,
+                                         vox_u16 preferred_depth);
 static int digs_segment_is_clear(const vox_world *world,
                                  vox_i32 from_x_q16,
                                  vox_i32 from_y_q16,
@@ -959,6 +991,147 @@ static int digs_point_hits_player(const vox_digs_match *match,
         }
     }
     return 0;
+}
+
+/* A restored loose cell must not appear inside a living miner.  Collision
+ * itself is nonblocking for loose terrain, but rejecting the full cell/body
+ * overlap keeps its first visible frame from reading as a pop-through. */
+static int digs_fragment_cell_overlaps_player(const vox_digs_match *match,
+                                              vox_u32 x, vox_u32 y)
+{
+    vox_u16 player;
+    vox_i32 cell_min_x;
+    vox_i32 cell_min_y;
+    vox_i32 cell_max_x;
+    vox_i32 cell_max_y;
+    if (match == 0 || x >= VOX_WORLD_WIDTH || y >= VOX_WORLD_HEIGHT) {
+        return 1;
+    }
+    cell_min_x = (vox_i32)x << 16;
+    cell_min_y = (vox_i32)y << 16;
+    cell_max_x = cell_min_x + 65535L;
+    cell_max_y = cell_min_y + 65535L;
+    for (player = 0U; player < match->rules.player_count; ++player) {
+        const vox_physics_body *body = &match->players[player];
+        vox_i32 player_min_x;
+        vox_i32 player_min_y;
+        vox_i32 player_max_x;
+        vox_i32 player_max_y;
+        if (!match->alive[player] || digs_player_extracted(match, player)) {
+            continue;
+        }
+        player_min_x = body->position_x.value_q16 - body->half_width_q16;
+        player_max_x = body->position_x.value_q16 + body->half_width_q16;
+        player_min_y = body->position_y.value_q16 - body->half_height_q16;
+        player_max_y = body->position_y.value_q16 + body->half_height_q16;
+        if (cell_max_x >= player_min_x && cell_min_x <= player_max_x &&
+            cell_max_y >= player_min_y && cell_min_y <= player_max_y) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Keep a removed front-layer voxel in that same visible depth whenever the
+ * landing column still has room.  The alternating near-depth order gives a
+ * deterministic fallback without making a z=9 fragment silently reappear at
+ * z=0 behind the rendered surface.  Rigid debris has no source depth and
+ * retains the historical back-to-front order by passing VOX_WORLD_DEPTH. */
+static vox_u16 digs_loose_depth_candidate(vox_u16 preferred_depth,
+                                          vox_u16 rank)
+{
+    vox_u16 delta;
+    vox_u16 seen = 0U;
+    if (preferred_depth >= VOX_WORLD_DEPTH) {
+        return rank;
+    }
+    for (delta = 0U; delta < VOX_WORLD_DEPTH; ++delta) {
+        if (delta <= preferred_depth) {
+            if (seen == rank) return (vox_u16)(preferred_depth - delta);
+            seen++;
+        }
+        if (delta != 0U && preferred_depth + delta < VOX_WORLD_DEPTH) {
+            if (seen == rank) return (vox_u16)(preferred_depth + delta);
+            seen++;
+        }
+    }
+    return preferred_depth;
+}
+
+/* Stable local placement shared by sleeping rigid debris and material-backed
+ * fragments.  Restored terrain is explicitly loose, so it remains outside
+ * the player collision class while the ordinary terrain step settles it. */
+static vox_u16 digs_place_loose_material(vox_digs_match *match,
+                                         vox_u16 material,
+                                         vox_i32 center_x,
+                                         vox_i32 center_y, vox_u16 wanted,
+                                         vox_u16 radius_limit,
+                                         vox_u16 preferred_depth)
+{
+    vox_u16 placed = 0U;
+    vox_u16 radius;
+    vox_i32 offset_x;
+    vox_i32 offset_y;
+    vox_u32 depth;
+    if (match == 0 || wanted == 0U || material == VOX_MAT_AIR ||
+        material >= VOX_MAT_COUNT) {
+        return 0U;
+    }
+    for (radius = 0U; radius <= radius_limit && placed < wanted; ++radius) {
+        for (offset_y = -(vox_i32)radius;
+             offset_y <= (vox_i32)radius && placed < wanted; ++offset_y) {
+            for (offset_x = -(vox_i32)radius;
+                 offset_x <= (vox_i32)radius && placed < wanted; ++offset_x) {
+                vox_i32 cell_x;
+                vox_i32 cell_y;
+                if (radius != 0U && offset_x != -(vox_i32)radius &&
+                    offset_x != (vox_i32)radius &&
+                    offset_y != -(vox_i32)radius &&
+                    offset_y != (vox_i32)radius) {
+                    continue;
+                }
+                cell_x = center_x + offset_x;
+                cell_y = center_y + offset_y;
+                if (cell_x < 0L || cell_y < 0L ||
+                    cell_x >= (vox_i32)VOX_WORLD_WIDTH ||
+                    cell_y >= (vox_i32)VOX_WORLD_HEIGHT ||
+                    digs_fragment_cell_overlaps_player(
+                        match, (vox_u32)cell_x, (vox_u32)cell_y)) {
+                    continue;
+                }
+                for (depth = 0U; depth < VOX_WORLD_DEPTH && placed < wanted;
+                     ++depth) {
+                    vox_u16 candidate_depth = digs_loose_depth_candidate(
+                        preferred_depth, (vox_u16)depth);
+                    const vox_cell *cell = vox_world_cell(
+                        &match->world, (vox_u32)cell_x, (vox_u32)cell_y,
+                        candidate_depth);
+                    if (cell == 0 || cell->material != VOX_MAT_AIR) {
+                        continue;
+                    }
+                    if (vox_world_set(&match->world, (vox_u32)cell_x,
+                                      (vox_u32)cell_y, candidate_depth,
+                                      material,
+                                      20L << 16) != VOX_OK ||
+                        vox_world_set_loose(&match->world, (vox_u32)cell_x,
+                                            (vox_u32)cell_y,
+                                            candidate_depth, 1U) !=
+                            VOX_OK) {
+                        continue;
+                    }
+                    placed++;
+                }
+            }
+        }
+    }
+    if (placed != 0U && center_x >= 0L && center_y >= 0L &&
+        center_x < (vox_i32)VOX_WORLD_WIDTH &&
+        center_y < (vox_i32)VOX_WORLD_HEIGHT) {
+        (void)vox_structure_invalidate(&match->structure,
+                                       (vox_u32)center_x,
+                                       (vox_u32)center_y, radius_limit);
+    }
+    return placed;
 }
 
 static void digs_init_anatomy(vox_digs_match *match, vox_u16 player)
@@ -1417,6 +1590,25 @@ static vox_result digs_add_upward_hanger(vox_world *world, vox_u32 x,
     return VOX_OK;
 }
 
+static vox_result digs_mark_fixture_span(vox_world *world, vox_u32 left,
+                                         vox_u32 right, vox_u32 top,
+                                         vox_u32 bottom)
+{
+    vox_u32 x;
+    vox_u32 y;
+    vox_u32 z;
+    for (y = top; y <= bottom; ++y) {
+        for (x = left; x <= right; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                if (vox_world_set_fixture(world, x, y, z, 1U) != VOX_OK) {
+                    return VOX_ERR_INVALID;
+                }
+            }
+        }
+    }
+    return VOX_OK;
+}
+
 static int digs_find_fixture_land(vox_u32 seed, vox_u32 nominal_x,
                                   vox_u16 map_style, vox_u32 half_width,
                                   vox_u32 *fixture_x, vox_u32 *surface_y)
@@ -1506,14 +1698,22 @@ static vox_result digs_add_overhead_fixtures(vox_world *world,
         */
         if (digs_add_metal_span(world, left, right, rail_y) != VOX_OK ||
             digs_add_upward_hanger(world, fixture_x, rail_y,
-                                    hanger_height) != VOX_OK) {
+                                    hanger_height) != VOX_OK ||
+            digs_mark_fixture_span(world, left, right, rail_y, rail_y) !=
+                VOX_OK ||
+            digs_mark_fixture_span(world, fixture_x, fixture_x, cap_y,
+                                   rail_y - 1U) != VOX_OK) {
             return VOX_ERR_INVALID;
         }
         if (map_style == VOX_DIGS_MAP_FURNACE_YARD) {
             if (digs_add_metal_span(world,
                                     fixture_x - DIGS_SCALE(1U),
                                     fixture_x + DIGS_SCALE(1U),
-                                    cap_y) != VOX_OK) {
+                                    cap_y) != VOX_OK ||
+                digs_mark_fixture_span(world,
+                                       fixture_x - DIGS_SCALE(1U),
+                                       fixture_x + DIGS_SCALE(1U), cap_y,
+                                       cap_y) != VOX_OK) {
                 return VOX_ERR_INVALID;
             }
         }
@@ -1661,10 +1861,7 @@ static int digs_cell_is_rope_anchor(const vox_world *world,
 {
     vox_u32 z;
     for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
-        const vox_cell *cell = vox_world_cell(world, x, y, z);
-        if (cell != 0 &&
-            (cell->flags & VOX_CELL_LOOSE) == 0U &&
-            cell->material == VOX_MAT_METAL) {
+        if (vox_world_is_fixture(world, x, y, z)) {
             return 1;
         }
     }
@@ -2117,6 +2314,8 @@ static void digs_rope_hook_player(vox_digs_match *match, vox_u16 owner,
 static void digs_step_rope_cast(vox_digs_match *match, vox_u16 player)
 {
     vox_digs_rope *rope = &match->ropes[player];
+    vox_i32 x_cell;
+    vox_i32 y_cell;
     vox_i32 distance = digs_distance_approx(rope->hook_velocity_x_q16,
                                             rope->hook_velocity_y_q16);
     vox_u32 steps = (vox_u32)(distance / DIGS_SWEEP_STEP_Q16);
@@ -2126,8 +2325,6 @@ static void digs_step_rope_cast(vox_digs_match *match, vox_u16 player)
     }
     if (steps == 0U) steps = 1U;
     for (step = 0U; step < steps; ++step) {
-        vox_i32 x_cell;
-        vox_i32 y_cell;
         vox_u16 victim;
         rope->hook_x_q16 += digs_div_trunc_positive(
             rope->hook_velocity_x_q16, steps);
@@ -2410,15 +2607,14 @@ static int digs_player_on_slippery_material(const vox_digs_match *match,
     for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
         const vox_cell *cell = vox_world_cell(&match->world, (vox_u32)x,
                                                (vox_u32)y, z);
-        if (cell != 0 && (cell->material == VOX_MAT_BLOOD ||
-                          cell->material == VOX_MAT_WATER)) {
+        /* Blood is a visual/fluid overlay, never a traction modifier. */
+        if (cell != 0 && cell->material == VOX_MAT_WATER) {
             return 1;
         }
         {
             const vox_fluid_cell *fluid = vox_fluid_cell_get_at(
                 &match->fluids, (vox_u16)x, (vox_u16)y, (vox_u16)z);
-            if (fluid != 0 && (fluid->material == VOX_FLUID_BLOOD ||
-                               fluid->material == VOX_FLUID_WATER)) {
+            if (fluid != 0 && fluid->material == VOX_FLUID_WATER) {
                 return 1;
             }
         }
@@ -3582,41 +3778,6 @@ static void digs_note_rigid_spawn(vox_digs_match *match, vox_u16 body_index,
          VOX_RIGID_BODY_DEBRIS) != 0U ? loose_cells : 0U;
 }
 
-static void digs_spawn_blast_debris(vox_digs_match *match, vox_u32 x,
-                                    vox_u32 y, vox_u16 radius,
-                                    vox_u16 scrap, vox_u16 source,
-                                    vox_u16 weapon)
-{
-    vox_u16 piece;
-    for (piece = 0U; piece < 4U; ++piece) {
-        vox_u16 body_index;
-        vox_u32 noise = digs_noise(match->rules.seed, match->tick,
-                                   piece, x + y * 17U);
-        vox_i32 offset_x = (vox_i32)(noise % (radius * 2U + 1U)) -
-                           (vox_i32)radius;
-        vox_i32 offset_y = (vox_i32)((noise >> 8) % (radius + 1U));
-        if (vox_rigid_spawn(&match->ragdolls, &body_index,
-                            ((vox_i32)x + offset_x) << 16,
-                            ((vox_i32)y - offset_y) << 16,
-                            scrap != 0U ? 8192L : 12288L,
-                            scrap != 0U ? 8192L : 12288L,
-                            scrap != 0U ? 16384L : 32768L,
-                            scrap != 0U ? VOX_RIGID_BODY_SCRAP :
-                            VOX_RIGID_BODY_DEBRIS) != VOX_OK) {
-            break; /* stable pool order: least-important later pieces drop. */
-        }
-        digs_note_rigid_spawn(match, body_index, source, weapon,
-                              scrap != 0U ? VOX_MAT_METAL : VOX_MAT_STONE,
-                              scrap != 0U ? 0U : 1U);
-        match->ragdolls.bodies[body_index].velocity_x_q16 =
-            ((vox_i32)((noise >> 16) % 9U) - 4L) * 8192L;
-        match->ragdolls.bodies[body_index].velocity_y_q16 =
-            -((vox_i32)((noise >> 20) % 5U) + 1L) * 4096L;
-        match->ragdolls.bodies[body_index].angular_velocity_q16 =
-            ((vox_i32)((noise >> 24) % 17U) - 8L) * 4096L;
-    }
-}
-
 /*
  * Blast terrain and handle overhead hooks as structural objects.  Metal
  * fixtures are found before the blast because the world kernel quite
@@ -3626,9 +3787,10 @@ static void digs_spawn_blast_debris(vox_digs_match *match, vox_u32 x,
  * stable: row-major fixture order wins, and later pieces are discarded when
  * the rigid pool is full rather than being teleported into the sky.
  */
-static vox_result digs_blast(vox_digs_match *match, vox_u32 x, vox_u32 y,
-                             vox_u32 z, vox_u16 radius, vox_i32 heat_q16,
-                             vox_u16 source, vox_u16 weapon)
+static vox_result digs_blast_capture_fragments(
+    vox_digs_match *match, vox_u32 x, vox_u32 y, vox_u32 z,
+    vox_u16 radius, vox_i32 heat_q16, vox_u16 source, vox_u16 weapon,
+    vox_blast_capture *fragment_capture)
 {
     vox_u16 fixture_x[16];
     vox_u16 fixture_y[16];
@@ -3643,6 +3805,9 @@ static vox_result digs_blast(vox_digs_match *match, vox_u32 x, vox_u32 y,
     long fracture_squared;
     vox_result result;
     vox_u16 i;
+    vox_blast_capture capture;
+    int capture_terrain;
+    int structural_removed;
     if (match == 0 || radius == 0U || radius > VOX_BLAST_MAX_RADIUS) {
         return VOX_ERR_INVALID;
     }
@@ -3677,15 +3842,21 @@ static vox_result digs_blast(vox_digs_match *match, vox_u32 x, vox_u32 y,
             }
         }
     }
-    result = vox_world_blast(&match->world, x, y, z, radius, heat_q16);
+    capture_terrain = source != VOX_DIGS_NO_PLAYER &&
+                      source < match->rules.player_count;
+    result = vox_world_blast_capture(&match->world, x, y, z, radius,
+                                     heat_q16, &capture);
     if (result != VOX_OK) return result;
-    /* Every blast invalidates the same deterministic support frontier.  This
-     * lives here rather than only in direct-tool use so fused projectiles,
-     * hitscan bores, and AI weapons cannot bypass cave-in scheduling. */
-    (void)vox_structure_invalidate_with_cause(
-        &match->structure, x, y,
-        (vox_u32)radius + VOX_STRUCTURE_COHESION_CELLS,
-        source, weapon);
+    structural_removed = capture.structural_count != 0U;
+    /* A fixture-only fracture is not structural work.  Capturing the exact
+     * cleared support cells here keeps unrelated unsupported terrain from
+     * acquiring a CAVE-IN attribution merely because it was near an anchor. */
+    if (structural_removed) {
+        (void)vox_structure_invalidate_with_cause(
+            &match->structure, x, y,
+            (vox_u32)radius + VOX_STRUCTURE_COHESION_CELLS,
+            source, weapon);
+    }
     for (i = 0U; i < fixture_count; ++i) {
         vox_u32 depth;
         vox_u32 noise;
@@ -3698,9 +3869,14 @@ static vox_result digs_blast(vox_digs_match *match, vox_u32 x, vox_u32 y,
             const vox_cell *cell = vox_world_cell(&match->world,
                                                    fixture_x[i],
                                                    fixture_y[i], depth);
-            if (cell != 0 && cell->material == VOX_MAT_METAL) {
-                (void)vox_world_set(&match->world, fixture_x[i],
-                                    fixture_y[i], depth, VOX_MAT_AIR, 0L);
+            if (cell != 0 && (cell->flags & VOX_CELL_FIXTURE) != 0U) {
+                if (vox_world_set_fixture(&match->world, fixture_x[i],
+                                          fixture_y[i], depth, 0U) != VOX_OK ||
+                    vox_world_set(&match->world, fixture_x[i],
+                                  fixture_y[i], depth, VOX_MAT_AIR, 0L) !=
+                        VOX_OK) {
+                    return VOX_ERR_INVALID;
+                }
             }
         }
         noise = digs_noise(match->rules.seed, match->tick, i,
@@ -3730,7 +3906,23 @@ static vox_result digs_blast(vox_digs_match *match, vox_u32 x, vox_u32 y,
                         (vox_i32)fixture_y[i] << 16, 1U,
                         (vox_u16)(noise & 15U));
     }
+    if (capture_terrain) {
+        if (fragment_capture != 0) {
+            digs_append_blast_capture(fragment_capture, &capture);
+        } else {
+            digs_spawn_blast_terrain_fragments(match, &capture, x, y, radius,
+                                               source, weapon);
+        }
+    }
     return VOX_OK;
+}
+
+static vox_result digs_blast(vox_digs_match *match, vox_u32 x, vox_u32 y,
+                             vox_u32 z, vox_u16 radius, vox_i32 heat_q16,
+                             vox_u16 source, vox_u16 weapon)
+{
+    return digs_blast_capture_fragments(match, x, y, z, radius, heat_q16,
+                                        source, weapon, 0);
 }
 
 /* Consume a small, stable number of collapse seeds per tick.  The structure
@@ -3815,7 +4007,11 @@ static void digs_step_structural_cascades(vox_digs_match *match)
 static void digs_step_rigid_impacts(vox_digs_match *match)
 {
     vox_u16 body_index;
+    vox_u16 player_hit[VOX_DIGS_MAX_SLOTS];
     if (match == 0 || match->phase != VOX_DIGS_RUNNING) return;
+    for (body_index = 0U; body_index < VOX_DIGS_MAX_SLOTS; ++body_index) {
+        player_hit[body_index] = 0U;
+    }
     for (body_index = 0U; body_index < VOX_RIGID_MAX_BODIES;
          ++body_index) {
         vox_rigid_body *body = &match->ragdolls.bodies[body_index];
@@ -3846,7 +4042,12 @@ static void digs_step_rigid_impacts(vox_digs_match *match)
         } else {
             speed = speed_x + speed_y;
         }
-        if (speed < (vox_u32)DIGS_RIGID_IMPACT_MIN_SPEED_Q16) {
+        if ((body->flags & VOX_RIGID_BODY_SCRAP) != 0U &&
+            speed < (vox_u32)DIGS_SCRAP_IMPACT_MIN_SPEED_Q16) {
+            continue;
+        }
+        if ((body->flags & VOX_RIGID_BODY_SCRAP) == 0U &&
+            speed < (vox_u32)DIGS_RIGID_IMPACT_MIN_SPEED_Q16) {
             continue;
         }
         extent_x = body->half_width_q16 + body->half_height_q16;
@@ -3857,9 +4058,18 @@ static void digs_step_rigid_impacts(vox_digs_match *match)
         mass_units = body->mass_q16 > 0L ?
                      (vox_u32)(body->mass_q16 / 65536L) : 0U;
         if (mass_units > 32U) mass_units = 32U;
-        damage_value = 4U + speed / 16384U + mass_units / 4U;
-        if (damage_value > DIGS_RIGID_IMPACT_MAX_DAMAGE) {
-            damage_value = DIGS_RIGID_IMPACT_MAX_DAMAGE;
+        if ((body->flags & VOX_RIGID_BODY_SCRAP) != 0U) {
+            damage_value = 1U + (speed -
+                (vox_u32)DIGS_SCRAP_IMPACT_MIN_SPEED_Q16) /
+                (vox_u32)DIGS_SCRAP_IMPACT_DAMAGE_STEP_Q16;
+            if (damage_value > DIGS_SCRAP_IMPACT_MAX_DAMAGE) {
+                damage_value = DIGS_SCRAP_IMPACT_MAX_DAMAGE;
+            }
+        } else {
+            damage_value = 4U + speed / 16384U + mass_units / 4U;
+            if (damage_value > DIGS_RIGID_IMPACT_MAX_DAMAGE) {
+                damage_value = DIGS_RIGID_IMPACT_MAX_DAMAGE;
+            }
         }
         source = match->rigid_source[body_index];
         if (!vox_digs_player_is_active(match, source)) {
@@ -3874,7 +4084,8 @@ static void digs_step_rigid_impacts(vox_digs_match *match)
         for (player = 0U; player < match->rules.player_count; ++player) {
             vox_i32 player_extent_x;
             vox_i32 player_extent_y;
-            if (!match->alive[player] || digs_player_extracted(match, player)) {
+            if (!match->alive[player] || digs_player_extracted(match, player) ||
+                player_hit[player] != 0U) {
                 continue;
             }
             player_extent_x = match->players[player].half_width_q16;
@@ -3889,6 +4100,7 @@ static void digs_step_rigid_impacts(vox_digs_match *match)
             }
             match->rigid_impact_cooldown[body_index] =
                 DIGS_RIGID_IMPACT_COOLDOWN_TICKS;
+            player_hit[player] = 1U;
             digs_emit_event(match, VOX_DIGS_EVENT_DEBRIS_IMPACT, source,
                             player, weapon, material,
                             body->position_x_q16, body->position_y_q16,
@@ -3917,11 +4129,6 @@ static vox_u16 digs_settle_rigid_debris(vox_digs_match *match,
     vox_i32 center_y;
     vox_u16 material;
     vox_u16 wanted;
-    vox_u16 placed = 0U;
-    vox_u16 radius;
-    vox_i32 offset_x;
-    vox_i32 offset_y;
-    vox_u32 depth;
     if (match == 0 || body_index >= VOX_RIGID_MAX_BODIES) return 0U;
     body = &match->ragdolls.bodies[body_index];
     material = match->rigid_material[body_index];
@@ -3932,57 +4139,11 @@ static vox_u16 digs_settle_rigid_debris(vox_digs_match *match,
     if (wanted > DIGS_RIGID_SETTLE_MAX_CELLS) {
         wanted = DIGS_RIGID_SETTLE_MAX_CELLS;
     }
-    center_x = body->position_x_q16 >> 16;
-    center_y = body->position_y_q16 >> 16;
-    for (radius = 0U; radius <= DIGS_RIGID_SETTLE_RADIUS && placed < wanted;
-         ++radius) {
-        for (offset_y = -(vox_i32)radius;
-             offset_y <= (vox_i32)radius && placed < wanted; ++offset_y) {
-            for (offset_x = -(vox_i32)radius;
-                 offset_x <= (vox_i32)radius && placed < wanted; ++offset_x) {
-                vox_i32 cell_x;
-                vox_i32 cell_y;
-                if (radius != 0U && offset_x != -(vox_i32)radius &&
-                    offset_x != (vox_i32)radius &&
-                    offset_y != -(vox_i32)radius &&
-                    offset_y != (vox_i32)radius) {
-                    continue;
-                }
-                cell_x = center_x + offset_x;
-                cell_y = center_y + offset_y;
-                if (cell_x < 0L || cell_y < 0L ||
-                    cell_x >= (vox_i32)VOX_WORLD_WIDTH ||
-                    cell_y >= (vox_i32)VOX_WORLD_HEIGHT) {
-                    continue;
-                }
-                for (depth = 0U; depth < VOX_WORLD_DEPTH && placed < wanted;
-                     ++depth) {
-                    const vox_cell *cell = vox_world_cell(
-                        &match->world, (vox_u32)cell_x, (vox_u32)cell_y,
-                        depth);
-                    if (cell == 0 || cell->material != VOX_MAT_AIR) {
-                        continue;
-                    }
-                    if (vox_world_set(&match->world, (vox_u32)cell_x,
-                                      (vox_u32)cell_y, depth, material,
-                                      20L << 16) != VOX_OK ||
-                        vox_world_set_loose(&match->world, (vox_u32)cell_x,
-                                            (vox_u32)cell_y, depth, 1U) !=
-                            VOX_OK) {
-                        continue;
-                    }
-                    placed++;
-                }
-            }
-        }
-    }
-    if (placed != 0U) {
-        (void)vox_structure_invalidate(&match->structure,
-                                       (vox_u32)center_x,
-                                       (vox_u32)center_y,
-                                       DIGS_RIGID_SETTLE_RADIUS);
-    }
-    return placed;
+    center_x = digs_q16_to_cell(body->position_x_q16);
+    center_y = digs_q16_to_cell(body->position_y_q16);
+    return digs_place_loose_material(match, material, center_x, center_y,
+                                     wanted, DIGS_RIGID_SETTLE_RADIUS,
+                                     VOX_WORLD_DEPTH);
 }
 
 static void digs_recycle_sleeping_rigids(vox_digs_match *match)
@@ -4751,11 +4912,11 @@ static void digs_spawn_death_gore(vox_digs_match *match, vox_u16 victim,
     vox_i32 x_q16 = match->players[victim].position_x.value_q16;
     vox_i32 y_q16 = match->players[victim].position_y.value_q16;
     if (match->rules.fx_budget == VOX_DIGS_FX_RETRO) {
-        blood_count = 24U;
+        blood_count = 48U;
     } else if (match->rules.fx_budget == VOX_DIGS_FX_CARNAGE) {
-        blood_count = 72U;
+        blood_count = 192U;
     } else {
-        blood_count = 44U;
+        blood_count = 96U;
     }
     for (part = 0U; part < VOX_DIGS_ANATOMY_PART_COUNT; ++part) {
         vox_u32 noise = digs_noise(match->rules.seed, match->tick,
@@ -4787,9 +4948,9 @@ static void digs_spawn_death_gore(vox_digs_match *match, vox_u16 victim,
                                    (vox_u32)victim,
                                    0xB1000000U +
                                    (vox_u32)match->deaths[victim] * 53U);
-        vox_i32 velocity_x = ((vox_i32)(noise % 25U) - 12L) * 6144L;
-        vox_i32 velocity_y = -8192L -
-            (vox_i32)((noise >> 7) % 18U) * 4608L;
+        vox_i32 velocity_x = ((vox_i32)(noise % 33U) - 16L) * 12288L;
+        vox_i32 velocity_y = -32768L -
+            (vox_i32)((noise >> 7) % 24U) * 8192L;
         digs_spawn_effect_variant(match, VOX_MAT_BLOOD, x_q16, y_q16,
                                   velocity_x, velocity_y,
                                   (vox_u16)(38U + noise % 90U), victim,
@@ -6124,11 +6285,6 @@ vox_result vox_digs_record_kill(vox_digs_match *match, vox_u16 killer,
      * authoritative pool.  Presentation gore remains separate; it cannot
      * replace the body that collides, tumbles, and settles. */
     digs_spawn_corpse_assembly(match, victim, killer);
-    (void)vox_fluid_add_at(
-        &match->fluids,
-        (vox_u16)(match->players[victim].position_x.value_q16 >> 16),
-        (vox_u16)(match->players[victim].position_y.value_q16 >> 16), 0U,
-        VOX_FLUID_BLOOD, 8192L, 37L << 16);
     if (match->last_damage_part[victim] == VOX_DIGS_PART_HEAD) {
         (void)vox_digs_award_note(match, killer,
                                   VOX_DIGS_AWARD_HEADHUNTER, 200U);
@@ -6242,9 +6398,7 @@ vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
 {
     const vox_cell *target;
     vox_u16 target_material;
-    vox_u16 detached_body_index;
-    vox_structure_cluster detached;
-    vox_result cluster_result;
+    vox_u16 target_flags;
     vox_result result;
     if (match == 0 || match->phase != VOX_DIGS_RUNNING ||
         !vox_digs_player_is_active(match, player) || !match->alive[player] ||
@@ -6257,30 +6411,17 @@ vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
         return VOX_ERR_INVALID;
     }
     target_material = target->material;
-    cluster_result = VOX_ERR_INVALID;
-    if (digs_weapons[tool].blast_radius >= 3U &&
-        target_material != VOX_MAT_AIR) {
-        cluster_result = vox_cluster_extract(&match->world, x, y, z,
-                                             &detached);
-        if (cluster_result == VOX_OK) {
-            detached_body_index = digs_rigid_free_slot(match);
-            if (vox_cluster_spawn_debris(&detached, &match->ragdolls,
-                                         0L, -(2L << 16)) != VOX_OK) {
-                /* A full rigid pool cannot make terrain disappear.  Restore
-                 * it before the actual tool operation applies its own bounded
-                 * material damage. */
-                (void)vox_cluster_restore(&match->world, &detached, 0U);
-                cluster_result = VOX_ERR_CAPACITY;
-            } else {
-                digs_note_rigid_spawn(match, detached_body_index, player,
-                                      tool, detached.cells[0].material,
-                                      detached.count);
-            }
-        }
+    target_flags = target->flags;
+    /* Fixtures are intentionally not ordinary terrain.  Only a blast path
+     * reaches the component/scrap handler; picks, deposits, and fluid tools
+     * cannot turn a rope target into anonymous metal or air. */
+    if ((target_flags & VOX_CELL_FIXTURE) != 0U &&
+        digs_weapons[tool].blast_radius == 0U) {
+        return VOX_ERR_INVALID;
     }
     if (tool == VOX_DIGS_TOOL_PICK) {
-        result = vox_world_set(&match->world, x, y, z, VOX_MAT_AIR,
-                               20L << 16);
+        result = digs_remove_player_terrain_cell(match, x, y, z,
+                                                  20L << 16, player, tool);
     } else if (tool == VOX_DIGS_TOOL_BLAST_CHARGE) {
         result = digs_blast(match, x, y, z, DIGS_SCALE(3U),
                             700L << 16, player, tool);
@@ -6312,20 +6453,16 @@ vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
     if (result != VOX_OK) {
         return result;
     }
-    (void)vox_structure_invalidate_with_cause(
-        &match->structure, x, y,
-        digs_weapons[tool].blast_radius > 0U ?
-        digs_weapons[tool].blast_radius + VOX_STRUCTURE_COHESION_CELLS :
-        VOX_STRUCTURE_COHESION_CELLS,
-        player, tool);
-    if (cluster_result == VOX_OK) {
-        digs_emit_event(match, VOX_DIGS_EVENT_CAVE_IN, player,
-                        VOX_DIGS_NO_PLAYER, tool, target_material,
-                        (vox_i32)(x << 16), (vox_i32)(y << 16),
-                        detached.count, detached.load_q8);
-        (void)vox_digs_award_note(match, player,
-                                  VOX_DIGS_AWARD_CAVE_IN_ARTIST,
-                                  detached.count);
+    /* Direct material replacement still changes terrain support.  Excavation
+     * and blasts invalidate inside their exact removal paths, so fixture-only
+     * explosions never arm unrelated structural work here. */
+    if (tool != VOX_DIGS_TOOL_PICK &&
+        digs_weapons[tool].blast_radius == 0U &&
+        (target_flags & VOX_CELL_FIXTURE) == 0U &&
+        digs_structural_terrain_material(target_material)) {
+        (void)vox_structure_invalidate_with_cause(
+            &match->structure, x, y, VOX_STRUCTURE_COHESION_CELLS,
+            player, tool);
     }
     if (tool == VOX_DIGS_TOOL_PICK && target_material != VOX_MAT_AIR) {
         (void)vox_digs_award_note(match, player,
@@ -6334,11 +6471,6 @@ vox_result vox_digs_use_tool(vox_digs_match *match, vox_u16 player,
     if (tool == VOX_DIGS_TOOL_CINDER_FLASK) {
         (void)vox_digs_award_note(match, player,
                                   VOX_DIGS_AWARD_PYROMANIAC, 75U);
-    }
-    if (digs_weapons[tool].blast_radius > 0U) {
-        digs_spawn_blast_debris(match, x, y,
-                                digs_weapons[tool].blast_radius, 0U,
-                                player, tool);
     }
     if (tool == VOX_DIGS_TOOL_CINDER_FLASK ||
         tool == VOX_DIGS_TOOL_PRESSURE_HOSE) {
@@ -6459,7 +6591,9 @@ static void digs_spawn_effect_variant(vox_digs_match *match,
     vox_u16 search;
     vox_u16 slot = match->effect_cursor;
     vox_u16 capacity = match->rules.fx_budget;
+    vox_u16 fallback = VOX_DIGS_MAX_EFFECTS;
     int found = 0;
+    int replacement = 0;
     for (search = 0U; search < capacity; ++search) {
         vox_u16 candidate = (vox_u16)((match->effect_cursor + search) %
                                        capacity);
@@ -6467,6 +6601,37 @@ static void digs_spawn_effect_variant(vox_digs_match *match,
             slot = candidate;
             found = 1;
             break;
+        }
+    }
+    /* Fragments own material until it is placed back in the world, so no
+     * ordinary cosmetic rollover may evict one.  Blood still gets its prior
+     * preference for non-gore presentation, then any non-fragment fallback. */
+    if (!found) {
+        for (search = 0U; search < capacity; ++search) {
+            vox_u16 candidate = (vox_u16)((match->effect_cursor + search) %
+                                           capacity);
+            if ((match->effects[candidate].flags &
+                 VOX_DIGS_EFFECT_TERRAIN_FRAGMENT) != 0U) {
+                continue;
+            }
+            if (fallback == VOX_DIGS_MAX_EFFECTS) {
+                fallback = candidate;
+            }
+            if (material != VOX_MAT_BLOOD ||
+                (match->effects[candidate].material != VOX_MAT_BLOOD &&
+                 match->effects[candidate].material != VOX_MAT_FLESH)) {
+                slot = candidate;
+                replacement = 1;
+                break;
+            }
+        }
+        if (!replacement && material == VOX_MAT_BLOOD &&
+            fallback != VOX_DIGS_MAX_EFFECTS) {
+            slot = fallback;
+            replacement = 1;
+        }
+        if (!replacement) {
+            return;
         }
     }
     if (found) {
@@ -6484,6 +6649,245 @@ static void digs_spawn_effect_variant(vox_digs_match *match,
     match->effects[slot].depth = (vox_u16)(variant % VOX_WORLD_DEPTH);
     match->effects[slot].flags = 0U;
     match->effect_cursor = (vox_u16)((slot + 1U) % capacity);
+}
+
+/* Material fragments are the one bounded visual representation of terrain
+ * removed by a player.  They deliberately use the effect pool rather than
+ * the rigid pool: a blast can make many small visible pieces, while the
+ * rigid solver remains reserved for cave-ins, corpses, and fixture scrap. */
+static int digs_terrain_fragment_material(vox_u16 material)
+{
+    return material == VOX_MAT_SOIL || material == VOX_MAT_STONE ||
+           material == VOX_MAT_COAL || material == VOX_MAT_BIOMASS ||
+           material == VOX_MAT_SAND || material == VOX_MAT_METAL;
+}
+
+static int digs_structural_terrain_material(vox_u16 material)
+{
+    return material == VOX_MAT_SOIL || material == VOX_MAT_STONE ||
+           material == VOX_MAT_COAL || material == VOX_MAT_BIOMASS ||
+           material == VOX_MAT_METAL;
+}
+
+static int digs_spawn_terrain_fragment(vox_digs_match *match,
+                                       vox_u32 x, vox_u32 y, vox_u32 z,
+                                       vox_u16 material, vox_u16 source,
+                                       vox_u16 weapon, vox_u32 origin_x,
+                                       vox_u32 origin_y,
+                                       vox_i32 impulse_q16)
+{
+    static const vox_i16 direction_x[8] = {1, 1, 0, -1, -1, -1, 0, 1};
+    static const vox_i16 direction_y[8] = {0, -1, -1, -1, 0, 1, 1, 1};
+    vox_u16 search;
+    vox_u16 slot;
+    vox_u16 capacity;
+    vox_u16 variant;
+    vox_u32 noise;
+    vox_i32 delta_x;
+    vox_i32 delta_y;
+    vox_u32 distance;
+    vox_i32 spread_x;
+    vox_i32 spread_y;
+    int found = 0;
+    if (match == 0 || !digs_terrain_fragment_material(material) ||
+        x >= VOX_WORLD_WIDTH || y >= VOX_WORLD_HEIGHT ||
+        z >= VOX_WORLD_DEPTH) {
+        return 0;
+    }
+    capacity = match->rules.fx_budget;
+    if (capacity == 0U || capacity > VOX_DIGS_MAX_EFFECTS) {
+        return 0;
+    }
+    slot = match->effect_cursor;
+    for (search = 0U; search < capacity; ++search) {
+        vox_u16 candidate = (vox_u16)((match->effect_cursor + search) %
+                                       capacity);
+        if (!match->effects[candidate].active) {
+            slot = candidate;
+            found = 1;
+            break;
+        }
+    }
+    /* A live fragment owns material that still needs a resting place.  Unlike
+     * ordinary presentation effects, saturation may never evict it. */
+    if (!found) {
+        return 0;
+    }
+    noise = digs_noise(match->rules.seed, match->tick,
+                       (vox_u32)x * 257U + y,
+                       (vox_u32)z * 17U + source + weapon * 31U);
+    delta_x = (vox_i32)x - (vox_i32)origin_x;
+    delta_y = (vox_i32)y - (vox_i32)origin_y;
+    if (delta_x == 0L && delta_y == 0L) {
+        vox_u16 direction = (vox_u16)(noise & 7U);
+        delta_x = direction_x[direction];
+        delta_y = direction_y[direction];
+    }
+    distance = digs_abs_i32(delta_x) + digs_abs_i32(delta_y);
+    if (distance == 0U) {
+        distance = 1U;
+    }
+    spread_x = ((vox_i32)((noise >> 8) % 7U) - 3L) * 2048L;
+    spread_y = ((vox_i32)((noise >> 16) % 7U) - 3L) * 2048L;
+    variant = (vox_u16)((noise >> 24) & 31U);
+    match->effects[slot].position_x_q16 = ((vox_i32)x << 16) + 32768L;
+    match->effects[slot].position_y_q16 = ((vox_i32)y << 16) + 32768L;
+    match->effects[slot].velocity_x_q16 =
+        digs_div_trunc_positive(delta_x * impulse_q16, distance) + spread_x;
+    match->effects[slot].velocity_y_q16 =
+        digs_div_trunc_positive(delta_y * impulse_q16, distance) -
+        impulse_q16 / 2L + spread_y;
+    match->effects[slot].active = 1U;
+    match->effects[slot].material = material;
+    match->effects[slot].ttl_ticks = 0U;
+    match->effects[slot].variant = variant;
+    match->effects[slot].source = source;
+    match->effects[slot].depth = (vox_u16)z;
+    match->effects[slot].flags = VOX_DIGS_EFFECT_TERRAIN_FRAGMENT;
+    match->effect_count++;
+    match->effect_cursor = (vox_u16)((slot + 1U) % capacity);
+    return 1;
+}
+
+static void digs_spawn_blast_terrain_fragments(
+    vox_digs_match *match, const vox_blast_capture *capture,
+    vox_u32 x, vox_u32 y, vox_u16 radius, vox_u16 source, vox_u16 weapon)
+{
+    vox_u16 eligible = 0U;
+    vox_u16 wanted;
+    vox_u16 rank;
+    vox_u16 index;
+    vox_i32 impulse_q16;
+    if (match == 0 || capture == 0 ||
+        source == VOX_DIGS_NO_PLAYER ||
+        source >= match->rules.player_count) {
+        return;
+    }
+    for (index = 0U; index < capture->count; ++index) {
+        const vox_blast_cell *cell = &capture->cells[index];
+        if ((cell->flags & VOX_CELL_FIXTURE) == 0U &&
+            digs_terrain_fragment_material(cell->material)) {
+            eligible++;
+        }
+    }
+    if (eligible == 0U) {
+        return;
+    }
+    /* Keep the old blast's material-debris density, scaled by the selected
+     * effect budget, rather than creating one object for every cleared cell. */
+    wanted = (vox_u16)((vox_u32)radius * radius * 4U + 16U);
+    if (match->rules.fx_budget == VOX_DIGS_FX_RETRO) {
+        wanted = (vox_u16)(wanted * 3U / 4U);
+    } else if (match->rules.fx_budget == VOX_DIGS_FX_CARNAGE) {
+        wanted = (vox_u16)(wanted * 3U / 2U);
+    }
+    if (wanted > VOX_BLAST_CAPTURE_MAX) {
+        wanted = VOX_BLAST_CAPTURE_MAX;
+    }
+    if (wanted > eligible) {
+        wanted = eligible;
+    }
+    impulse_q16 = 32768L + (vox_i32)radius * 4096L;
+    for (rank = 0U; rank < wanted; ++rank) {
+        vox_u16 desired = (vox_u16)(((vox_u32)rank * eligible) / wanted);
+        vox_u16 seen = 0U;
+        for (index = 0U; index < capture->count; ++index) {
+            const vox_blast_cell *cell = &capture->cells[index];
+            if ((cell->flags & VOX_CELL_FIXTURE) != 0U ||
+                !digs_terrain_fragment_material(cell->material)) {
+                continue;
+            }
+            if (seen++ == desired) {
+                (void)digs_spawn_terrain_fragment(
+                    match, cell->x, cell->y, cell->z, cell->material,
+                    source, weapon, x, y, impulse_q16);
+                break;
+            }
+        }
+    }
+}
+
+/* A multi-lobe projectile makes one visual material burst, not a full burst
+ * per fracture lobe.  Keep its capture bounded in deterministic lobe and
+ * fracture order before applying the normal density selection once. */
+static void digs_append_blast_capture(vox_blast_capture *destination,
+                                      const vox_blast_capture *source)
+{
+    vox_u16 index;
+    if (destination == 0 || source == 0) {
+        return;
+    }
+    for (index = 0U; index < source->count; ++index) {
+        if (destination->count >= VOX_BLAST_CAPTURE_MAX) {
+            destination->truncated = 1U;
+            break;
+        }
+        destination->cells[destination->count] = source->cells[index];
+        destination->count++;
+    }
+    if (source->truncated != 0U) {
+        destination->truncated = 1U;
+    }
+    if (source->structural_count >
+        (vox_u16)(65535U - destination->structural_count)) {
+        destination->structural_count = 65535U;
+    } else {
+        destination->structural_count = (vox_u16)(
+            destination->structural_count + source->structural_count);
+    }
+}
+
+/* Direct tools and rail excavation save their source material before the
+ * write, then delegate to the same bounded fragment representation as blast
+ * capture.  Fixtures deliberately remain on their dedicated scrap path. */
+static vox_result digs_remove_player_terrain_cell(
+    vox_digs_match *match, vox_u32 x, vox_u32 y, vox_u32 z,
+    vox_i32 temperature_q16, vox_u16 source, vox_u16 weapon)
+{
+    const vox_cell *cell;
+    vox_u16 material;
+    vox_u16 flags;
+    vox_u32 origin_x = x;
+    vox_u32 origin_y = y;
+    vox_result result;
+    if (match == 0) {
+        return VOX_ERR_INVALID;
+    }
+    cell = vox_world_cell(&match->world, x, y, z);
+    if (cell == 0) {
+        return VOX_ERR_INVALID;
+    }
+    material = cell->material;
+    flags = cell->flags;
+    if ((flags & VOX_CELL_FIXTURE) != 0U) {
+        return VOX_ERR_INVALID;
+    }
+    if (source < match->rules.player_count) {
+        vox_i32 player_x = digs_q16_to_cell(
+            match->players[source].position_x.value_q16);
+        vox_i32 player_y = digs_q16_to_cell(
+            match->players[source].position_y.value_q16);
+        if (player_x >= 0L && player_x < (vox_i32)VOX_WORLD_WIDTH) {
+            origin_x = (vox_u32)player_x;
+        }
+        if (player_y >= 0L && player_y < (vox_i32)VOX_WORLD_HEIGHT) {
+            origin_y = (vox_u32)player_y;
+        }
+    }
+    result = vox_world_set(&match->world, x, y, z, VOX_MAT_AIR,
+                           temperature_q16);
+    if (result == VOX_OK && source < match->rules.player_count &&
+        digs_terrain_fragment_material(material)) {
+        (void)digs_spawn_terrain_fragment(match, x, y, z, material,
+                                          source, weapon, origin_x, origin_y,
+                                          24576L);
+    }
+    if (result == VOX_OK && digs_structural_terrain_material(material)) {
+        (void)vox_structure_invalidate_with_cause(
+            &match->structure, x, y, VOX_STRUCTURE_COHESION_CELLS,
+            source, weapon);
+    }
+    return result;
 }
 
 static void digs_environment_defeat(vox_digs_match *match, vox_u16 victim)
@@ -6686,23 +7090,23 @@ vox_result vox_digs_apply_hit(vox_digs_match *match, vox_u16 attacker,
     }
     match->last_damage_weapon[victim] = weapon;
     match->last_damage_part[victim] = part;
-    particle_count = (vox_u16)(damage / 6U + 3U);
+    particle_count = (vox_u16)(damage / 3U + 6U);
     if (match->rules.fx_budget == VOX_DIGS_FX_CARNAGE) {
-        particle_count = (vox_u16)(particle_count * 2U);
+        particle_count = (vox_u16)(particle_count * 3U);
     } else if (match->rules.fx_budget == VOX_DIGS_FX_RETRO &&
                particle_count > 12U) {
         particle_count = 12U;
     }
-    if (particle_count > 40U) {
-        particle_count = 40U;
+    if (particle_count > 120U) {
+        particle_count = 120U;
     }
     for (i = 0U; i < particle_count; ++i) {
         vox_u32 noise = digs_noise(match->rules.seed, match->tick + i,
                                    (vox_u32)victim,
                                    (vox_u32)part * 257U + damage);
-        vox_i32 spread_x = ((vox_i32)(noise % 17U) - 8L) * 5120L;
-        vox_i32 spread_y = -10240L -
-            (vox_i32)((noise >> 8) % 13U) * 4096L;
+        vox_i32 spread_x = ((vox_i32)(noise % 25U) - 12L) * 10240L;
+        vox_i32 spread_y = -24576L -
+            (vox_i32)((noise >> 8) % 18U) * 7168L;
         digs_spawn_effect_variant(match, VOX_MAT_BLOOD,
             wound_x_q16, wound_y_q16,
             spread_x, spread_y, (vox_u16)(34U + noise % 60U), victim,
@@ -7075,8 +7479,8 @@ static vox_result digs_fire_melee(vox_digs_match *match, vox_u16 player,
     return VOX_OK;
 }
 
-static int digs_rail_terrain(vox_digs_match *match, vox_u32 x, vox_u32 y,
-                             vox_u16 *energy)
+static int digs_rail_terrain(vox_digs_match *match, vox_u16 player,
+                             vox_u32 x, vox_u32 y, vox_u16 *energy)
 {
     vox_u32 z;
     int occupied = 0;
@@ -7093,11 +7497,13 @@ static int digs_rail_terrain(vox_digs_match *match, vox_u32 x, vox_u32 y,
             continue;
         }
         if (cell->material == VOX_MAT_BEDROCK ||
-            cell->material == VOX_MAT_METAL) {
+            (cell->material == VOX_MAT_METAL &&
+             (cell->flags & VOX_CELL_FIXTURE) != 0U)) {
             hard_blocker = 1;
             break;
         }
-        if (cell->material == VOX_MAT_STONE) {
+        if (cell->material == VOX_MAT_STONE ||
+            cell->material == VOX_MAT_METAL) {
             stone = 1;
         }
     }
@@ -7123,9 +7529,11 @@ static int digs_rail_terrain(vox_digs_match *match, vox_u32 x, vox_u32 y,
         const vox_cell *cell = vox_world_cell(&match->world, x, y, z);
         if (cell != 0 && cell->material != VOX_MAT_AIR &&
             cell->material != VOX_MAT_BEDROCK &&
-            cell->material != VOX_MAT_METAL) {
-            (void)vox_world_set(&match->world, x, y, z, VOX_MAT_AIR,
-                                80L << 16);
+            !(cell->material == VOX_MAT_METAL &&
+              (cell->flags & VOX_CELL_FIXTURE) != 0U)) {
+            (void)digs_remove_player_terrain_cell(
+                match, x, y, z, 80L << 16, player,
+                VOX_DIGS_TOOL_RAIL_GUN);
         }
     }
     return 1;
@@ -7201,7 +7609,7 @@ static vox_result digs_fire_rail(vox_digs_match *match, vox_u16 player,
         }
         terrain = 0;
         if (x_cell != last_cell_x || y_cell != last_cell_y) {
-            terrain = digs_rail_terrain(match, (vox_u32)x_cell,
+            terrain = digs_rail_terrain(match, player, (vox_u32)x_cell,
                                         (vox_u32)y_cell, &energy);
             last_cell_x = x_cell;
             last_cell_y = y_cell;
@@ -7412,7 +7820,8 @@ static vox_result digs_fire_hot_rail(vox_digs_match *match, vox_u16 player,
                 const vox_cell *cell = vox_world_cell(&match->world,
                     (vox_u32)x_cell, (vox_u32)y_cell, z);
                 if (cell == 0 || cell->material == VOX_MAT_AIR ||
-                    cell->material == VOX_MAT_BEDROCK) {
+                    cell->material == VOX_MAT_BEDROCK ||
+                    (cell->flags & VOX_CELL_FIXTURE) != 0U) {
                     continue;
                 }
                 /*
@@ -9007,7 +9416,8 @@ static void digs_deposit_projectile(vox_digs_match *match,
             for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
                 const vox_cell *cell = vox_world_cell(
                     &match->world, (vox_u32)sample_x, (vox_u32)sample_y, z);
-                if (cell == 0 || cell->material == VOX_MAT_BEDROCK) {
+                if (cell == 0 || cell->material == VOX_MAT_BEDROCK ||
+                    (cell->flags & VOX_CELL_FIXTURE) != 0U) {
                     continue;
                 }
                 if (projectile->material == VOX_MAT_SMOKE &&
@@ -9051,7 +9461,7 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
         &digs_weapons[projectile.weapon];
     vox_u16 spark;
     vox_u16 particle_count;
-    vox_u16 debris_materials[160];
+    vox_blast_capture terrain_capture;
     vox_u32 explosion_noise = digs_noise(match->rules.seed, match->tick,
                                          slot, projectile.weapon * 97U +
                                          projectile.owner);
@@ -9074,27 +9484,7 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
             terrain_radius = VOX_BLAST_MAX_RADIUS;
         }
     }
-    for (spark = 0U; spark < particle_count; ++spark) {
-        vox_u32 noise = digs_noise(explosion_noise, spark, x, y);
-        vox_u32 span = (vox_u32)terrain_radius * 2U + 5U;
-        long sample_x = (long)x +
-            (long)((vox_i32)(noise % span) - (vox_i32)(span / 2U));
-        long sample_y = (long)y +
-            (long)((vox_i32)((noise >> 9) % span) -
-                   (vox_i32)(span / 2U));
-        const vox_cell *sample = 0;
-        if (sample_x >= 0L && sample_y >= 0L &&
-            sample_x < (long)VOX_WORLD_WIDTH &&
-            sample_y < (long)VOX_WORLD_HEIGHT) {
-            sample = vox_world_cell(&match->world, (vox_u32)sample_x,
-                                    (vox_u32)sample_y,
-                                    VOX_WORLD_DEPTH - 1U);
-        }
-        debris_materials[spark] = sample != 0 &&
-                                  sample->material != VOX_MAT_AIR &&
-                                  sample->material != VOX_MAT_BEDROCK ?
-                                  sample->material : projectile.material;
-    }
+    vox_blast_capture_init(&terrain_capture);
     match->projectiles[slot].active = 0U;
     if (match->projectile_count > 0U) {
         match->projectile_count--;
@@ -9103,9 +9493,9 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
         projectile.blast_radius > 0U) {
         vox_u16 lobe;
         vox_u16 lobe_count = (vox_u16)(2U + explosion_noise % 4U);
-        (void)digs_blast(match, x, y, VOX_WORLD_DEPTH - 1U,
-                         terrain_radius, 700L << 16,
-                         projectile.owner, projectile.weapon);
+        (void)digs_blast_capture_fragments(
+            match, x, y, VOX_WORLD_DEPTH - 1U, terrain_radius, 700L << 16,
+            projectile.owner, projectile.weapon, &terrain_capture);
         for (lobe = 0U; lobe < lobe_count; ++lobe) {
             vox_u32 noise = digs_noise(explosion_noise, lobe, x, y);
             vox_i32 offset_x = (vox_i32)(noise %
@@ -9119,11 +9509,10 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
             if (lobe_x > 0 && lobe_y > 0 &&
                 lobe_x < (vox_i32)VOX_WORLD_WIDTH &&
                 lobe_y < (vox_i32)VOX_WORLD_HEIGHT) {
-                (void)digs_blast(match, (vox_u32)lobe_x,
-                                 (vox_u32)lobe_y,
-                                 VOX_WORLD_DEPTH - 1U,
-                                 lobe_radius, 700L << 16,
-                                 projectile.owner, projectile.weapon);
+                (void)digs_blast_capture_fragments(
+                    match, (vox_u32)lobe_x, (vox_u32)lobe_y,
+                    VOX_WORLD_DEPTH - 1U, lobe_radius, 700L << 16,
+                    projectile.owner, projectile.weapon, &terrain_capture);
             }
         }
         digs_damage_radius(match, projectile.owner, x, y,
@@ -9156,9 +9545,15 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
                                  projectile.damage, damage_flags);
     } else if (projectile.blast_radius > 0U &&
                projectile.weapon == VOX_DIGS_TOOL_BOILER_SHOTGUN) {
-        (void)digs_blast(match, x, y, VOX_WORLD_DEPTH - 1U,
-                         DIGS_SCALE(1U), 100L << 16,
-                         projectile.owner, projectile.weapon);
+        terrain_radius = DIGS_SCALE(1U);
+        (void)digs_blast_capture_fragments(
+            match, x, y, VOX_WORLD_DEPTH - 1U, terrain_radius, 100L << 16,
+            projectile.owner, projectile.weapon, &terrain_capture);
+    }
+    if (terrain_capture.count != 0U) {
+        digs_spawn_blast_terrain_fragments(match, &terrain_capture, x, y,
+                                           terrain_radius, projectile.owner,
+                                           projectile.weapon);
     }
     if (properties->flags & VOX_DIGS_WEAPON_DEPOSIT) {
         digs_deposit_projectile(match, &projectile, x, y);
@@ -9169,16 +9564,18 @@ static void digs_detonate_projectile(vox_digs_match *match, vox_u16 slot,
         vox_i32 velocity_x = ((vox_i32)(noise % 25U) - 12L) * 6656L;
         vox_i32 velocity_y = -6144L -
                              (vox_i32)((noise >> 7) % 20U) * 4608L;
-        vox_u16 material = debris_materials[spark];
-        if (projectile.weapon == VOX_DIGS_TOOL_BORE_DRILL &&
-            (noise & 1U) == 0U) {
-            material = VOX_MAT_METAL;
-        } else if ((properties->flags & VOX_DIGS_WEAPON_EXPLOSIVE) &&
-                   noise % 7U == 0U) {
+        vox_u16 material = VOX_MAT_AIR;
+        /* Terrain already became material-backed fragments in digs_blast.
+         * Keep only non-terrain explosion media on this cosmetic path. */
+        if ((properties->flags & VOX_DIGS_WEAPON_EXPLOSIVE) &&
+            noise % 7U == 0U) {
             material = VOX_MAT_SMOKE;
         } else if ((properties->flags & VOX_DIGS_WEAPON_EXPLOSIVE) &&
                    noise % 17U == 0U) {
             material = VOX_MAT_LAVA;
+        }
+        if (material == VOX_MAT_AIR) {
+            continue;
         }
         digs_spawn_effect_variant(match, material, (vox_i32)(x << 16),
                                   (vox_i32)(y << 16), velocity_x, velocity_y,
@@ -9447,72 +9844,146 @@ static void digs_step_projectiles(vox_digs_match *match)
     }
 }
 
-static int digs_effect_material_deposits(vox_u16 material)
+static int digs_effect_lands(vox_u16 material)
 {
-    return material == VOX_MAT_BLOOD || material == VOX_MAT_SOIL ||
-           material == VOX_MAT_STONE || material == VOX_MAT_COAL ||
-           material == VOX_MAT_SAND || material == VOX_MAT_BIOMASS ||
-           material == VOX_MAT_FLESH;
+    return material == VOX_MAT_SOIL || material == VOX_MAT_STONE ||
+           material == VOX_MAT_COAL || material == VOX_MAT_BIOMASS ||
+           material == VOX_MAT_SAND || material == VOX_MAT_METAL ||
+           material == VOX_MAT_FLESH || material == VOX_MAT_BLOOD;
 }
 
-static int digs_effect_cell_overlaps_player(const vox_digs_match *match,
-                                            vox_i32 x, vox_i32 y)
+static void digs_stain_blood_impact(vox_digs_match *match, vox_u32 x,
+                                    vox_u32 y)
 {
-    vox_i32 point_x = (x << 16) + 32768L;
-    vox_i32 point_y = (y << 16) + 32768L;
-    vox_u16 player;
-    for (player = 0U; player < match->rules.player_count; ++player) {
-        if (digs_point_hits_player(match, player, point_x, point_y, 0)) {
-            return 1;
+    vox_u32 depth;
+    vox_u32 stain_depth = VOX_WORLD_DEPTH;
+    /* Match the renderer's frontmost terrain selection. */
+    for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
+        const vox_cell *cell = vox_world_cell(&match->world, x, y, depth);
+        if (cell != 0 && cell->material != VOX_MAT_AIR &&
+            (cell->flags & VOX_CELL_PHASE_GAS) == 0U) {
+            stain_depth = depth;
         }
     }
-    return 0;
+    if (stain_depth < VOX_WORLD_DEPTH) {
+        /* A blood effect owns the only route into persistent blood.  The
+         * terrain flag gives the surface its dark-red visual read while the
+         * sparse fluid entry is a nonblocking overlay that may later flow.
+         * Do not create either at a wound, death, or airborne TTL expiry. */
+        if (vox_world_set_bloody(&match->world, x, y, stain_depth, 1U) ==
+            VOX_OK) {
+            (void)vox_fluid_add_at(&match->fluids, (vox_u16)x,
+                                   (vox_u16)y, (vox_u16)stain_depth,
+                                   VOX_FLUID_BLOOD, 1024L, 37L << 16);
+        }
+    }
 }
 
-static void digs_deposit_effect_impact(vox_digs_match *match,
-                                       const vox_digs_effect *effect,
-                                       vox_i32 free_x, vox_i32 free_y,
-                                       vox_i32 impact_x,
-                                       vox_i32 impact_y)
+static void digs_retire_effect(vox_digs_match *match,
+                               vox_digs_effect *effect)
 {
-    static const vox_i16 offsets[9][2] = {
-        {0, 0}, {-1, 0}, {1, 0}, {0, -1}, {0, 1},
-        {-1, -1}, {1, -1}, {-1, 1}, {1, 1}
-    };
-    vox_u16 candidate;
-    if (!digs_effect_material_deposits(effect->material)) {
+    if (match == 0 || effect == 0 || !effect->active) {
         return;
     }
-    for (candidate = 0U; candidate < 9U; ++candidate) {
-        vox_i32 x = candidate == 0U ? free_x :
-                    impact_x + offsets[candidate][0];
-        vox_i32 y = candidate == 0U ? free_y :
-                    impact_y + offsets[candidate][1];
-        const vox_cell *cell;
-        const vox_material_properties *properties;
-        if (x < 0 || y < 0 || x >= (vox_i32)VOX_WORLD_WIDTH ||
-            y >= (vox_i32)VOX_WORLD_HEIGHT ||
-            digs_effect_cell_overlaps_player(match, x, y)) {
-            continue;
-        }
-        cell = vox_world_cell(&match->world, (vox_u32)x, (vox_u32)y,
-                              effect->depth);
-        if (cell == 0 || cell->material != VOX_MAT_AIR) {
-            continue;
-        }
-        if (vox_world_set(&match->world, (vox_u32)x, (vox_u32)y,
-                          effect->depth, effect->material,
-                          effect->material == VOX_MAT_BLOOD ?
-                          37L << 16 : 80L << 16) != VOX_OK) {
-            return;
-        }
-        properties = vox_material_get(effect->material);
-        if (properties != 0 &&
-            (properties->flags & VOX_MATERIAL_SOLID) != 0U) {
-            (void)vox_world_set_loose(&match->world, (vox_u32)x,
-                                      (vox_u32)y, effect->depth, 1U);
+    effect->active = 0U;
+    if (match->effect_count > 0U) {
+        match->effect_count--;
+    }
+}
+
+/* Material-backed terrain debris has no airborne lifetime.  It stays in a
+ * bounded effect slot until a collision has bled its speed away and the
+ * original material can re-enter the world as loose, nonblocking terrain. */
+static void digs_step_terrain_fragment(vox_digs_match *match,
+                                       vox_digs_effect *effect)
+{
+    vox_i32 distance;
+    vox_u32 steps;
+    vox_u32 step;
+    int settling = 0;
+    if (match == 0 || effect == 0 || !effect->active) {
+        return;
+    }
+    if ((effect->flags & VOX_DIGS_EFFECT_FRAGMENT_SETTLING) != 0U) {
+        vox_i32 center_x = digs_q16_to_cell(effect->position_x_q16);
+        vox_i32 center_y = digs_q16_to_cell(effect->position_y_q16);
+        if (digs_place_loose_material(match, effect->material, center_x,
+                                      center_y, 1U,
+                                      DIGS_TERRAIN_FRAGMENT_SETTLE_RADIUS,
+                                      effect->depth) !=
+            0U) {
+            digs_retire_effect(match, effect);
         }
         return;
+    }
+    effect->velocity_y_q16 += DIGS_TERRAIN_FRAGMENT_GRAVITY_Q16;
+    if (effect->velocity_y_q16 > DIGS_TERRAIN_FRAGMENT_TERMINAL_FALL_Q16) {
+        effect->velocity_y_q16 = DIGS_TERRAIN_FRAGMENT_TERMINAL_FALL_Q16;
+    }
+    distance = digs_distance_approx(effect->velocity_x_q16,
+                                    effect->velocity_y_q16);
+    steps = (vox_u32)(distance / DIGS_SWEEP_STEP_Q16);
+    if ((vox_i32)(steps * (vox_u32)DIGS_SWEEP_STEP_Q16) < distance) {
+        steps++;
+    }
+    if (steps == 0U) {
+        steps = 1U;
+    }
+    for (step = 0U; step < steps; ++step) {
+        vox_i32 next_x = effect->position_x_q16 +
+            digs_div_trunc_positive(effect->velocity_x_q16, steps);
+        vox_i32 next_y = effect->position_y_q16 +
+            digs_div_trunc_positive(effect->velocity_y_q16, steps);
+        vox_i32 next_cell_x = digs_q16_to_cell(next_x);
+        vox_i32 next_cell_y = digs_q16_to_cell(next_y);
+        if (next_cell_x < 0L || next_cell_y < 0L ||
+            next_cell_x >= (vox_i32)VOX_WORLD_WIDTH ||
+            next_cell_y >= (vox_i32)VOX_WORLD_HEIGHT) {
+            if (next_cell_x < 0L) next_cell_x = 0L;
+            if (next_cell_y < 0L) next_cell_y = 0L;
+            if (next_cell_x >= (vox_i32)VOX_WORLD_WIDTH) {
+                next_cell_x = (vox_i32)VOX_WORLD_WIDTH - 1L;
+            }
+            if (next_cell_y >= (vox_i32)VOX_WORLD_HEIGHT) {
+                next_cell_y = (vox_i32)VOX_WORLD_HEIGHT - 1L;
+            }
+            effect->position_x_q16 = (next_cell_x << 16) + 32768L;
+            effect->position_y_q16 = (next_cell_y << 16) + 32768L;
+            settling = 1;
+            break;
+        }
+        if (digs_projectile_hits_solid(&match->world,
+                                       (vox_u32)next_cell_x,
+                                       (vox_u32)next_cell_y)) {
+            /* Keep the last reachable substep, reverse and damp both axes,
+             * and advance the compact orientation seed for visible tumble. */
+            effect->velocity_x_q16 = -(effect->velocity_x_q16 / 2L);
+            effect->velocity_y_q16 = -(effect->velocity_y_q16 / 2L);
+            effect->variant = (vox_u16)((effect->variant + 1U) & 31U);
+            if (digs_abs_i32(effect->velocity_x_q16) +
+                digs_abs_i32(effect->velocity_y_q16) <=
+                (vox_u32)DIGS_TERRAIN_FRAGMENT_SETTLE_SPEED_Q16) {
+                settling = 1;
+            }
+            break;
+        }
+        effect->position_x_q16 = next_x;
+        effect->position_y_q16 = next_y;
+    }
+    if (settling) {
+        vox_i32 center_x = digs_q16_to_cell(effect->position_x_q16);
+        vox_i32 center_y = digs_q16_to_cell(effect->position_y_q16);
+        effect->velocity_x_q16 = 0L;
+        effect->velocity_y_q16 = 0L;
+        effect->flags = (vox_u16)(effect->flags |
+                                   VOX_DIGS_EFFECT_FRAGMENT_SETTLING);
+        if (digs_place_loose_material(match, effect->material, center_x,
+                                      center_y, 1U,
+                                      DIGS_TERRAIN_FRAGMENT_SETTLE_RADIUS,
+                                      effect->depth) !=
+            0U) {
+            digs_retire_effect(match, effect);
+        }
     }
 }
 
@@ -9521,10 +9992,6 @@ static void digs_step_effects(vox_digs_match *match)
     vox_u16 slot;
     for (slot = 0U; slot < match->rules.fx_budget; ++slot) {
         vox_digs_effect *effect = &match->effects[slot];
-        vox_i32 x_cell;
-        vox_i32 y_cell;
-        vox_i32 previous_x;
-        vox_i32 previous_y;
         vox_i32 distance;
         vox_u32 steps;
         vox_u32 step;
@@ -9533,11 +10000,31 @@ static void digs_step_effects(vox_digs_match *match)
         if (!effect->active) {
             continue;
         }
-        if (effect->material != VOX_MAT_SMOKE) {
+        if ((effect->flags & VOX_DIGS_EFFECT_TERRAIN_FRAGMENT) != 0U) {
+            digs_step_terrain_fragment(match, effect);
+            continue;
+        }
+        if ((effect->flags & VOX_DIGS_EFFECT_LANDED) != 0U) {
+            if (effect->ttl_ticks > 0U) effect->ttl_ticks--;
+            if (effect->ttl_ticks == 0U) {
+                effect->active = 0U;
+                if (match->effect_count > 0U) match->effect_count--;
+            }
+            continue;
+        }
+        if (digs_effect_lands(effect->material)) {
+            effect->velocity_y_q16 += (effect->material == VOX_MAT_BLOOD ||
+                                        effect->material == VOX_MAT_FLESH) ?
+                                       6144L : 4096L;
+            if ((effect->material == VOX_MAT_BLOOD ||
+                 effect->material == VOX_MAT_FLESH) &&
+                effect->velocity_y_q16 > (3L << 16)) {
+                effect->velocity_y_q16 = 3L << 16;
+            }
+        } else if (effect->material != VOX_MAT_SMOKE) {
+            /* Preserve the existing airborne liquid/gas trajectory. */
             effect->velocity_y_q16 += 2048L;
         }
-        previous_x = effect->position_x_q16;
-        previous_y = effect->position_y_q16;
         distance = digs_distance_approx(effect->velocity_x_q16,
                                         effect->velocity_y_q16);
         steps = (vox_u32)(distance / DIGS_SWEEP_STEP_Q16);
@@ -9545,9 +10032,9 @@ static void digs_step_effects(vox_digs_match *match)
             steps++;
         }
         if (steps == 0U) steps = 1U;
-        x_cell = digs_q16_to_cell(previous_x);
-        y_cell = digs_q16_to_cell(previous_y);
         for (step = 0U; step < steps; ++step) {
+            vox_i32 last_x = effect->position_x_q16;
+            vox_i32 last_y = effect->position_y_q16;
             vox_i32 next_x = effect->position_x_q16 +
                 digs_div_trunc_positive(effect->velocity_x_q16, steps);
             vox_i32 next_y = effect->position_y_q16 +
@@ -9560,26 +10047,41 @@ static void digs_step_effects(vox_digs_match *match)
                 outside = 1;
                 break;
             }
-            if (effect->material != VOX_MAT_SMOKE &&
+            if (digs_effect_lands(effect->material) &&
                 digs_projectile_hits_solid(&match->world,
                                            (vox_u32)next_cell_x,
                                            (vox_u32)next_cell_y)) {
                 terrain_hit = 1;
-                digs_deposit_effect_impact(match, effect, x_cell, y_cell,
-                                           next_cell_x, next_cell_y);
+                if (effect->material == VOX_MAT_BLOOD) {
+                    digs_stain_blood_impact(match, (vox_u32)next_cell_x,
+                                            (vox_u32)next_cell_y);
+                    effect->active = 0U;
+                    if (match->effect_count > 0U) match->effect_count--;
+                    break;
+                }
+                /* The next substep is already inside a solid column.  Keep
+                 * the last reachable Q16.16 point for floors, walls, and
+                 * ceilings alike; committing next_x/next_y embedded landed
+                 * gore in a wall or ceiling and made it read as a hover. */
+                effect->position_x_q16 = last_x;
+                effect->position_y_q16 = last_y;
+                effect->velocity_x_q16 = 0L;
+                effect->velocity_y_q16 = 0L;
+                effect->flags = (vox_u16)(effect->flags |
+                                           VOX_DIGS_EFFECT_LANDED);
+                effect->ttl_ticks = DIGS_EFFECT_LANDED_TICKS;
                 break;
             }
             effect->position_x_q16 = next_x;
             effect->position_y_q16 = next_y;
-            previous_x = next_x;
-            previous_y = next_y;
-            x_cell = next_cell_x;
-            y_cell = next_cell_y;
         }
-        if (effect->ttl_ticks > 0U) {
+        /* A terrain impact starts a complete landed lifetime.  Do not spend
+         * one of its 180 visible ticks in the same update that created it. */
+        if (!terrain_hit && effect->ttl_ticks > 0U) {
             effect->ttl_ticks--;
         }
-        if (terrain_hit || outside || effect->ttl_ticks == 0U) {
+        if ((terrain_hit == 0 && outside) ||
+            (terrain_hit == 0 && effect->ttl_ticks == 0U)) {
             effect->active = 0U;
             if (match->effect_count > 0U) {
                 match->effect_count--;
@@ -9638,22 +10140,9 @@ static void digs_step_bleeding(vox_digs_match *match)
             match->bleed_accumulator_q8[player] % 256U);
         if (damage > 0U) {
             vox_u16 drops = damage > 8U ? 8U : damage;
-            vox_i32 blood_x = match->players[player].position_x.value_q16 /
-                              65536L;
-            vox_i32 blood_y = match->players[player].position_y.value_q16 /
-                              65536L;
-            if (blood_x >= 0L && blood_y >= 0L &&
-                blood_x < (vox_i32)VOX_WORLD_WIDTH &&
-                blood_y < (vox_i32)VOX_WORLD_HEIGHT) {
-                /* The visible droplets are bounded presentation.  This
-                 * smaller deposit is the authoritative pool that can later
-                 * run, mix with water, or be sampled by movement. */
-                (void)vox_fluid_add_at(
-                    &match->fluids, (vox_u16)blood_x, (vox_u16)blood_y,
-                    (vox_u16)(match->tick % VOX_WORLD_DEPTH),
-                    VOX_FLUID_BLOOD,
-                    (vox_i32)drops * 1024L, 37L << 16);
-            }
+            /* Droplets remain airborne effects until they really strike a
+             * terrain surface.  The impact path, not this wound tick, owns
+             * the optional fluid overlay and red terrain stain. */
             for (part = 0U; part < drops; ++part) {
                 vox_u32 noise = digs_noise(match->rules.seed,
                                            match->tick, player,

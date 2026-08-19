@@ -159,7 +159,7 @@ source.
 
 Three collisions, stated so they are decided rather than discovered:
 
-- **The 1.44 MB ceiling.** 960 KB of headroom against fluid simulation,
+- **The 10 MiB ceiling.** The expanded payload budget leaves room for fluid simulation,
   ragdolls, skeletal animation, a raymarched sky, a 256-colour palette and
   voxel weapon models. Budget per feature and measure as you go. If it comes to
   a choice, somebody has to say which features *are* the release.

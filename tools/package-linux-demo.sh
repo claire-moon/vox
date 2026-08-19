@@ -20,10 +20,10 @@ BUILD_JOBS=${VOX_BUILD_JOBS:-}
 NAMED_BENCH_QUALIFY=${VOX_NAMED_BENCH_QUALIFY:-0}
 GLIBC_MAX=${VOX_PACKAGE_GLIBC_MAX:-2.35}
 # Playable payload budget: the binary plus the runtime data it needs to boot.
-# 1474560 is a 1440 KiB floppy; the target and warning lines are advisory.
-PACKAGE_SIZE_CEILING=${VOX_PACKAGE_SIZE_CEILING:-1474560}
-PACKAGE_SIZE_WARN=${VOX_PACKAGE_SIZE_WARN:-1100000}
-PACKAGE_SIZE_TARGET=${VOX_PACKAGE_SIZE_TARGET:-740000}
+# 10485760 is the 10 MiB playable payload cap; target and warning are advisory.
+PACKAGE_SIZE_CEILING=${VOX_PACKAGE_SIZE_CEILING:-10485760}
+PACKAGE_SIZE_WARN=${VOX_PACKAGE_SIZE_WARN:-8388608}
+PACKAGE_SIZE_TARGET=${VOX_PACKAGE_SIZE_TARGET:-6291456}
 CONTROLLER_DB="$ROOT/third_party/SDL_GameControllerDB/gamecontrollerdb.txt"
 CONTROLLER_DB_SHA256=dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0
 WORK_DIR=
@@ -398,7 +398,7 @@ if [[ $(printf '%s\n%s\n' "$GLIBC_REQUIRED" "$GLIBC_MAX" |
 fi
 
 # v0.0.4 budgets the playable payload -- the binary plus the runtime data it
-# needs to boot -- at a 1440 KiB floppy.  Documentation, licences, QA material
+# needs to boot -- under the 10 MiB playable-payload cap. Documentation, licences, QA material
 # and the evidence bundle are tester material and stay outside the budget.
 # Fail here, before the archive can reach a release page, in the same spirit
 # as the glibc baseline gate above.

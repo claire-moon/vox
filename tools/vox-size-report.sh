@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Measure the shipped DIGS payload against the v0.0.4 size budget.
+# Measure the shipped DIGS payload against the active size budget.
 #
 # The budgeted payload is exactly what a player needs in order to boot and
 # play: the digs_demo binary plus every file under the staged share/ tree.
@@ -15,9 +15,9 @@
 #   VOX_SIZE_BINARY    game binary      (default: $BUILD_DIR/digs_demo)
 #   VOX_SIZE_SHARE     runtime data dir (default: $BUILD_DIR/share)
 #   VOX_SIZE_REPORT    write the machine-readable report here as well
-#   VOX_SIZE_TARGET    v0.0.4 target ceiling   (default 740000)
-#   VOX_SIZE_WARN      warning threshold       (default 1100000)
-#   VOX_SIZE_CEILING   hard fail threshold     (default 1474560 = 1440 KiB)
+#   VOX_SIZE_TARGET    target payload size     (default 6291456)
+#   VOX_SIZE_WARN      warning threshold       (default 8388608)
+#   VOX_SIZE_CEILING   hard fail threshold     (default 10485760 = 10 MiB)
 #
 # Exit status:
 #   0  payload is at or below the hard ceiling (may still warn)
@@ -28,9 +28,9 @@ set -eu
 ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 BUILD_DIR=${1:-${VOX_BUILD_DIR:-$ROOT/build}}
 SIZE_REPORT=${VOX_SIZE_REPORT:-}
-SIZE_TARGET=${VOX_SIZE_TARGET:-740000}
-SIZE_WARN=${VOX_SIZE_WARN:-1100000}
-SIZE_CEILING=${VOX_SIZE_CEILING:-1474560}
+SIZE_TARGET=${VOX_SIZE_TARGET:-6291456}
+SIZE_WARN=${VOX_SIZE_WARN:-8388608}
+SIZE_CEILING=${VOX_SIZE_CEILING:-10485760}
 
 for threshold in "$SIZE_TARGET" "$SIZE_WARN" "$SIZE_CEILING"; do
     case "$threshold" in

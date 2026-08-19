@@ -53,9 +53,9 @@
 #define VOX_DIGS_DASH_INVULNERABILITY_TICKS 8U
 #define VOX_DIGS_DASH_SPEED_Q16 (5L << 16)
 #define VOX_DIGS_MAX_PROJECTILES 64U
-#define VOX_DIGS_FX_RETRO 768U
-#define VOX_DIGS_FX_STANDARD 1536U
-#define VOX_DIGS_FX_CARNAGE 3072U
+#define VOX_DIGS_FX_RETRO 1024U
+#define VOX_DIGS_FX_STANDARD 4096U
+#define VOX_DIGS_FX_CARNAGE 8192U
 #define VOX_DIGS_MAX_EFFECTS VOX_DIGS_FX_CARNAGE
 #define VOX_DIGS_MAX_EVENTS 128U
 #define VOX_DIGS_ANATOMY_PART_COUNT 15U
@@ -574,6 +574,13 @@ typedef struct vox_digs_effect {
     vox_u16 depth;
     vox_u16 flags;
 } vox_digs_effect;
+
+/* A landed effect remains presentation-only for its remaining TTL. */
+#define VOX_DIGS_EFFECT_LANDED 1U
+/* A terrain fragment owns one removed terrain material until it settles. */
+#define VOX_DIGS_EFFECT_TERRAIN_FRAGMENT 2U
+/* A stopped terrain fragment retries loose-terrain placement each tick. */
+#define VOX_DIGS_EFFECT_FRAGMENT_SETTLING 4U
 
 typedef struct vox_digs_anatomy_part {
     vox_u16 health;

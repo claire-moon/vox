@@ -35,6 +35,7 @@ static vox_light_rgb vox_light_b[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
 static vox_u8 vox_light_solid[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
 /* Reused by the raster pass after vox_build_lightfield scans each column. */
 static vox_u16 vox_surface_material[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
+static vox_u16 vox_surface_flags[VOX_WORLD_WIDTH * VOX_WORLD_HEIGHT];
 
 static vox_u8 vox_clamp_u8(vox_u32 value)
 {
@@ -55,10 +56,12 @@ static vox_u16 vox_light_decay(vox_u16 value, vox_u16 attenuation)
 }
 
 static vox_u16 vox_scan_column(const vox_world *world, vox_u32 x, vox_u32 y,
-                               vox_light_rgb *emission)
+                               vox_light_rgb *emission,
+                               vox_u16 *surface_flags)
 {
     vox_u32 depth;
     vox_u16 surface_material = VOX_MAT_AIR;
+    *surface_flags = 0U;
     emission->red = 0U;
     emission->green = 0U;
     emission->blue = 0U;
@@ -68,6 +71,7 @@ static vox_u16 vox_scan_column(const vox_world *world, vox_u32 x, vox_u32 y,
             continue;
         }
         surface_material = cell->material;
+        *surface_flags = cell->flags;
         if (cell->material == VOX_MAT_LAVA) {
             emission->red = 255U;
             emission->green = vox_light_max(emission->green, 150U);
@@ -107,13 +111,16 @@ static vox_light_rgb *vox_build_lightfield_region(const vox_world *world,
         for (x = minimum_x; x < maximum_x; ++x) {
             vox_u32 index = y * VOX_WORLD_WIDTH + x;
             vox_light_rgb emission;
+            vox_u16 surface_flags;
             vox_u16 surface_material = vox_scan_column(world, x, y,
-                                                        &emission);
+                                                        &emission,
+                                                        &surface_flags);
             vox_u16 sky = (vox_u16)(118U - y * 36U / VOX_WORLD_HEIGHT);
             if (surface_material != VOX_MAT_AIR) {
                 sky = (vox_u16)(sky * 3U / 5U);
             }
             vox_surface_material[index] = surface_material;
+            vox_surface_flags[index] = surface_flags;
             vox_light_solid[index] = surface_material != VOX_MAT_AIR ?
                                      1U : 0U;
             source[index].red = sky;
@@ -332,13 +339,21 @@ vox_result vox_software_render_view_ex(const vox_world *world,
                                                  VOX_WORLD_HEIGHT);
             } else {
                 const vox_rgb *base = &vox_palette[surface_material];
+                vox_u32 red = base->red;
+                vox_u32 green = base->green;
+                vox_u32 blue = base->blue;
+                if ((vox_surface_flags[light_index] & VOX_CELL_BLOODY) !=
+                    0U) {
+                    red = (red + 92U) / 2U;
+                    green = green / 3U;
+                    blue = blue / 3U;
+                }
                 destination_pixel[0] = vox_clamp_u8(
-                    (vox_u32)base->red * lightfield[light_index].red / 128U);
+                    red * lightfield[light_index].red / 128U);
                 destination_pixel[1] = vox_clamp_u8(
-                    (vox_u32)base->green * lightfield[light_index].green /
-                    128U);
+                    green * lightfield[light_index].green / 128U);
                 destination_pixel[2] = vox_clamp_u8(
-                    (vox_u32)base->blue * lightfield[light_index].blue / 128U);
+                    blue * lightfield[light_index].blue / 128U);
             }
             vox_fixed_advance(&world_x_q16, &error_x, step_x_q16,
                               remainder_x, target->width);

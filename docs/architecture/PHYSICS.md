@@ -53,15 +53,29 @@ angular velocity, mass, inertia, friction, restitution, sleep state, and
 bounded joints. Its deterministic solver uses a fixed iteration count, stable
 body-pair ordering, integer angle sectors, terrain contacts, body contacts,
 joint distance/angle limits, and fixed pool overflow. Killed miners become
-connected anatomy assemblies; smoke and tiny particles remain presentation
-effects, while debris and fixture scrap use the rigid pool. A body may sample
-the authoritative fluid pool for bounded drag and buoyancy, and long-sleeping
-corpse/debris/scrap bodies are recycled through a stable release policy;
+connected anatomy assemblies; smoke and gore remain presentation effects,
+player-cut terrain uses material-backed effect fragments, and structural debris
+and fixture scrap use the rigid pool. A body may sample the authoritative fluid
+pool for bounded drag and buoyancy, and long-sleeping corpse/debris/scrap
+bodies are recycled through a stable release policy;
 settled detached terrain restores up to sixteen loose cells of its recorded
 material in stable radius/depth order. Any compact remainder increments the
 authoritative, hashed discard counter instead of silently vanishing. Corpse
 and fixture-scrap slots expire without turning into terrain or new grapple
 anchors.
+
+Authored metal fixtures remain static, collision-solid rope targets until an
+explosive fracture removes them. They are explicitly outside support, terrain
+gravity, and cluster extraction, so fixture-only damage cannot create a
+cave-in. Player-caused removal of soil, stone, coal, biomass, sand, or ordinary
+metal captures real cleared cells into bounded fixed-point fragments. They
+sweep, bounce, and tumble without colliding with miners; once slow, each
+retries deterministic nearby placement as loose terrain while rejecting a
+living miner's bounds. A saturated effect pool skips a new fragment instead of
+evicting a live one. Other solid effects use swept terrain impact and remain as
+nonblocking landed marks for 180 ticks. Blood instead stains the frontmost
+struck terrain voxel dark red without changing its material, collision,
+support, or player rendering; airborne expiry never writes terrain.
 
 `vox_cluster_extract` performs a stable six-neighbour structural extraction and
 `vox_cluster_spawn_debris` hands detached material to the rigid pool. The

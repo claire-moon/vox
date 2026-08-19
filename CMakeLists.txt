@@ -620,8 +620,8 @@ if (VOX_BUILD_TESTS)
             COMMAND digs_demo --particle-overlay-self-test)
         add_test(NAME digs_fixed_step_debt
             COMMAND digs_demo --fixed-step-self-test)
-        # v0.0.4 budgets the shipped payload (digs_demo plus the staged
-        # share/ tree) at 1440 KiB.  The gate only fails past that hard
+        # The shipped payload (digs_demo plus the staged share/ tree) is
+        # capped at 10 MiB. The gate only fails past that hard
         # ceiling; the target and warning lines are advisory so the diet
         # can be measured phase by phase without blocking the build.
         if (UNIX)

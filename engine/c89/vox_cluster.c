@@ -25,9 +25,16 @@ static int cluster_structural(vox_u16 material)
            material == VOX_MAT_METAL || material == VOX_MAT_SAND;
 }
 
-static int structure_bears_load(vox_u16 material)
+static int cluster_structural_cell(const vox_cell *cell)
 {
-    return material == VOX_MAT_BEDROCK || cluster_structural(material);
+    return cell != 0 && (cell->flags & VOX_CELL_FIXTURE) == 0U &&
+           cluster_structural(cell->material);
+}
+
+static int structure_bears_load(const vox_cell *cell)
+{
+    return cell != 0 && (cell->material == VOX_MAT_BEDROCK ||
+                          cluster_structural_cell(cell));
 }
 
 static int structure_supported(const vox_world *world, vox_u32 x,
@@ -45,7 +52,7 @@ static int structure_supported(const vox_world *world, vox_u32 x,
             }
             cell = vox_world_cell(world, (vox_u32)sample_x, y + 1U, z);
             if (cell != 0 && (cell->flags & VOX_CELL_LOOSE) == 0U &&
-                structure_bears_load(cell->material)) return 1;
+                structure_bears_load(cell)) return 1;
         }
     }
     return 0;
@@ -142,7 +149,7 @@ vox_result vox_cluster_extract(vox_world *world, vox_u32 x, vox_u32 y,
         !cluster_in_bounds(x, y, z)) return VOX_ERR_INVALID;
     vox_cluster_init(cluster);
     if (vox_world_cell(world, x, y, z) == 0 ||
-        !cluster_structural(vox_world_cell(world, x, y, z)->material)) {
+        !cluster_structural_cell(vox_world_cell(world, x, y, z))) {
         cluster->complete = 1U;
         return VOX_OK;
     }
@@ -180,7 +187,7 @@ vox_result vox_cluster_extract(vox_world *world, vox_u32 x, vox_u32 y,
                                  (vox_u16)nz)) continue;
             cell = vox_world_cell(world, (vox_u32)nx, (vox_u32)ny,
                                   (vox_u32)nz);
-            if (cell == 0 || !cluster_structural(cell->material)) {
+            if (!cluster_structural_cell(cell)) {
                 if (cell != 0 && cell->material == VOX_MAT_BEDROCK) {
                     cluster->anchored = 1U;
                 }
@@ -219,7 +226,7 @@ vox_result vox_cluster_extract_unsupported(vox_world *world, vox_u32 x,
         !cluster_in_bounds(x, y, z)) return VOX_ERR_INVALID;
     vox_cluster_init(cluster);
     if (vox_world_cell(world, x, y, z) == 0 ||
-        !cluster_structural(vox_world_cell(world, x, y, z)->material)) {
+        !cluster_structural_cell(vox_world_cell(world, x, y, z))) {
         cluster->complete = 1U;
         return VOX_OK;
     }
@@ -262,7 +269,7 @@ vox_result vox_cluster_extract_unsupported(vox_world *world, vox_u32 x,
                                  (vox_u16)nz)) continue;
             cell = vox_world_cell(world, (vox_u32)nx, (vox_u32)ny,
                                   (vox_u32)nz);
-            if (cell == 0 || !cluster_structural(cell->material) ||
+            if (!cluster_structural_cell(cell) ||
                 structure_supported(world, (vox_u32)nx, (vox_u32)ny,
                                     (vox_u32)nz)) {
                 continue;
@@ -469,7 +476,7 @@ vox_result vox_structure_step(vox_structure_state *state,
                  x < (chunk_x + 1U) * VOX_CHUNK_WIDTH; ++x) {
                 for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
                     const vox_cell *cell = vox_world_cell(world, x, y, z);
-                    if (cell == 0 || !cluster_structural(cell->material) ||
+                    if (!cluster_structural_cell(cell) ||
                         (cell->flags & VOX_CELL_LOOSE) != 0U) continue;
                     structural++;
                     if (structure_supported(world, x, y, z)) {

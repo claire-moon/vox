@@ -107,6 +107,54 @@ static int test_validate_world(const vox_world *world)
     return hash == vox_world_hash(world) ? 0 : 8;
 }
 
+static int test_fixture_stays_out_of_structure(void)
+{
+    static vox_world world;
+    vox_u32 tick;
+    const vox_cell *cell;
+    vox_world_init(&world);
+    if (vox_world_set(&world, 120U, 80U, 0U, VOX_MAT_METAL,
+                      TEST_AMBIENT_Q16) != VOX_OK ||
+        vox_world_set_fixture(&world, 120U, 80U, 0U, 1U) != VOX_OK ||
+        vox_world_set(&world, 120U, 80U, 0U, VOX_MAT_METAL,
+                      TEST_AMBIENT_Q16 + 1L) != VOX_OK) {
+        return 1;
+    }
+    if (vox_world_set_loose(&world, 120U, 80U, 0U, 1U) !=
+        VOX_ERR_INVALID ||
+        vox_world_collision_classify(&world, 120U, 80U) !=
+            VOX_WORLD_COLLISION_SOLID ||
+        vox_world_wake(&world, 120U, 80U, 0U) != VOX_OK) {
+        return 2;
+    }
+    for (tick = 0U; tick < 300U; ++tick) {
+        if (vox_world_step(&world, 0) != VOX_OK) return 3;
+    }
+    if (vox_world_set(&world, 120U, 80U, 0U, VOX_MAT_AIR, 0L) !=
+        VOX_ERR_INVALID) return 4;
+    if (vox_world_set(&world, 121U, 80U, 0U, VOX_MAT_STONE,
+                      TEST_AMBIENT_Q16) != VOX_OK ||
+        vox_world_set_bloody(&world, 121U, 80U, 0U, 1U) != VOX_OK ||
+        vox_world_set_layer_quiet_except(&world, 80U, VOX_MAT_LAVA,
+                                         TEST_AMBIENT_Q16,
+                                         VOX_MAT_BEDROCK) != VOX_OK) {
+        return 5;
+    }
+    cell = vox_world_cell(&world, 121U, 80U, 0U);
+    if (cell == 0 || cell->material != VOX_MAT_LAVA ||
+        (cell->flags & VOX_CELL_BLOODY) != 0U) return 6;
+    if (vox_world_blast(&world, 120U, 80U, 0U, 1U, 0L) != VOX_OK) {
+        return 7;
+    }
+    cell = vox_world_cell(&world, 120U, 80U, 0U);
+    if (cell == 0 || cell->material != VOX_MAT_METAL ||
+        !vox_world_is_fixture(&world, 120U, 80U, 0U) ||
+        (cell->flags & VOX_CELL_LOOSE) != 0U ||
+        (cell->flags & VOX_CELL_UNSTABLE) != 0U ||
+        test_validate_world(&world) != 0) return 8;
+    return 0;
+}
+
 static int run_scenario(vox_u32 *hash_out)
 {
     static vox_world world;
@@ -284,6 +332,68 @@ static int test_blast(void)
     if (smoke == 0 || smoke->material != VOX_MAT_SMOKE ||
         test_validate_world(&world) != 0) {
         return 7;
+    }
+    return 0;
+}
+
+static int test_blast_capture(void)
+{
+    static vox_world world;
+    vox_blast_capture capture;
+    const vox_cell *cell;
+    vox_u32 x;
+    vox_u32 y;
+    vox_u32 z;
+    vox_u32 i;
+    vox_u16 expected;
+    vox_world_init(&world);
+    for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+        for (y = 90U; y <= 110U; ++y) {
+            for (x = 90U; x <= 110U; ++x) {
+                expected = (vox_u16)(((x + y + z) % 3U) + VOX_MAT_SOIL);
+                if (vox_world_set(&world, x, y, z, expected,
+                                  TEST_AMBIENT_Q16) != VOX_OK) {
+                    return 1;
+                }
+            }
+        }
+    }
+    if (vox_world_set(&world, 100U, 100U, 0U, VOX_MAT_BEDROCK,
+                      TEST_AMBIENT_Q16) != VOX_OK ||
+        vox_world_sleep_all(&world) != VOX_OK) {
+        return 2;
+    }
+    capture.count = 7U;
+    capture.truncated = 1U;
+    capture.structural_count = 7U;
+    vox_blast_capture_init(&capture);
+    if (capture.count != 0U || capture.truncated != 0U ||
+        capture.structural_count != 0U ||
+        vox_world_blast_capture(&world, 100U, 100U, 0U, 4U,
+                                0L, &capture) != VOX_OK ||
+        capture.count != VOX_BLAST_CAPTURE_MAX || capture.truncated == 0U ||
+        capture.structural_count == 0U) {
+        return 3;
+    }
+    for (i = 0U; i < (vox_u32)capture.count; ++i) {
+        const vox_blast_cell *record = &capture.cells[i];
+        expected = (vox_u16)(((vox_u32)record->x + (vox_u32)record->y +
+                              (vox_u32)record->z) % 3U + VOX_MAT_SOIL);
+        cell = vox_world_cell(&world, (vox_u32)record->x,
+                              (vox_u32)record->y, (vox_u32)record->z);
+        if (record->material != expected || record->material == VOX_MAT_AIR ||
+            record->material == VOX_MAT_BEDROCK || cell == 0 ||
+            cell->material != VOX_MAT_AIR ||
+            (record->flags & VOX_CELL_OCCUPIED) == 0U) {
+            return 4;
+        }
+    }
+    cell = vox_world_cell(&world, 100U, 100U, 0U);
+    if (cell == 0 || cell->material != VOX_MAT_BEDROCK ||
+        vox_world_blast_capture(&world, 100U, 100U, 0U, 4U,
+                                0L, 0) != VOX_ERR_INVALID ||
+        test_validate_world(&world) != 0) {
+        return 5;
     }
     return 0;
 }
@@ -548,6 +658,10 @@ int main(void)
         fprintf(stderr, "material/sleep scenario failed\n");
         return 3;
     }
+    if (test_fixture_stays_out_of_structure() != 0) {
+        fprintf(stderr, "fixture structural-boundary scenario failed\n");
+        return 10;
+    }
     if (test_cellular_motion() != 0) {
         fprintf(stderr, "cellular motion scenario failed\n");
         return 4;
@@ -573,6 +687,10 @@ int main(void)
     if (test_blast() != 0) {
         fprintf(stderr, "blast scenario failed\n");
         return 6;
+    }
+    if (test_blast_capture() != 0) {
+        fprintf(stderr, "blast capture scenario failed\n");
+        return 11;
     }
     if (run_scenario(&first) != 0 || run_scenario(&second) != 0) {
         return 1;
