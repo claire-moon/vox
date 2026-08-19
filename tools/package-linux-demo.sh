@@ -20,7 +20,9 @@ BUILD_JOBS=${VOX_BUILD_JOBS:-}
 NAMED_BENCH_QUALIFY=${VOX_NAMED_BENCH_QUALIFY:-0}
 GLIBC_MAX=${VOX_PACKAGE_GLIBC_MAX:-2.35}
 # Playable payload budget: the binary plus the runtime data it needs to boot.
-# 10485760 is the 10 MiB playable payload cap; target and warning are advisory.
+# 10485760 is the global 10 MiB playable payload cap; target and warning are
+# advisory.  Callers may choose a stricter ceiling, never a larger one.
+GLOBAL_PAYLOAD_CEILING=10485760
 PACKAGE_SIZE_CEILING=${VOX_PACKAGE_SIZE_CEILING:-10485760}
 PACKAGE_SIZE_WARN=${VOX_PACKAGE_SIZE_WARN:-8388608}
 PACKAGE_SIZE_TARGET=${VOX_PACKAGE_SIZE_TARGET:-6291456}
@@ -37,6 +39,20 @@ die()
     printf 'package-linux-demo: %s\n' "$*" >&2
     exit 1
 }
+
+for size_limit in "$PACKAGE_SIZE_TARGET" "$PACKAGE_SIZE_WARN" \
+                  "$PACKAGE_SIZE_CEILING"; do
+    [[ "$size_limit" =~ ^[0-9]+$ ]] || \
+        die 'package size thresholds must be non-negative integers'
+done
+if (( PACKAGE_SIZE_TARGET > PACKAGE_SIZE_WARN ||
+      PACKAGE_SIZE_WARN > PACKAGE_SIZE_CEILING )); then
+    die 'expected VOX_PACKAGE_SIZE_TARGET <= VOX_PACKAGE_SIZE_WARN <= VOX_PACKAGE_SIZE_CEILING'
+fi
+if (( PACKAGE_SIZE_CEILING == 0 ||
+      PACKAGE_SIZE_CEILING > GLOBAL_PAYLOAD_CEILING )); then
+    die "VOX_PACKAGE_SIZE_CEILING must be between 1 and ${GLOBAL_PAYLOAD_CEILING} bytes"
+fi
 
 [[ "$NAMED_BENCH_QUALIFY" == 0 || "$NAMED_BENCH_QUALIFY" == 1 ]] || \
     die 'VOX_NAMED_BENCH_QUALIFY must be 0 or 1'

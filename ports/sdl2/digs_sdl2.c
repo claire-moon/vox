@@ -3850,6 +3850,28 @@ static void demo_render_voxel(int x, int y, vox_u16 material)
     cell->damage_q16 = 0L;
 }
 
+/* Replay terrain stores a blood-stain bit alongside the material without
+ * enlarging the public replay frame.  Apply it after the normal patch path so
+ * overlay restoration remains exact and miners still render above terrain. */
+static void demo_render_bloody_voxel(int x, int y, vox_u16 material)
+{
+    vox_u32 plane_index;
+    vox_u32 cell_index;
+    if (x < 0 || y < 0 || x >= (int)VOX_WORLD_WIDTH ||
+        y >= (int)VOX_WORLD_HEIGHT) {
+        return;
+    }
+    if (material == VOX_MAT_AIR || material >= VOX_MAT_COUNT) {
+        return;
+    }
+    demo_render_voxel(x, y, material);
+    plane_index = (vox_u32)y * VOX_WORLD_WIDTH + (vox_u32)x;
+    cell_index = (VOX_WORLD_DEPTH - 1U) * VOX_WORLD_WIDTH *
+                 VOX_WORLD_HEIGHT + plane_index;
+    demo_match.world.cells[cell_index].flags = (vox_u16)(
+        demo_match.world.cells[cell_index].flags | VOX_CELL_BLOODY);
+}
+
 static void demo_miner_overlay_plot(void *context, int x, int y,
                                     vox_u16 material)
 {
@@ -4259,9 +4281,19 @@ static void demo_build_replay_render_world(const vox_digs_replay_frame *frame)
         for (column = 0U; column < frame->terrain_width; ++column) {
             vox_u16 cell_index = (vox_u16)(row * frame->terrain_width +
                                            column);
-            demo_render_voxel((int)frame->terrain_origin_x + column,
-                              (int)frame->terrain_origin_y + row,
-                              frame->terrain_material[cell_index]);
+            vox_u16 encoded = frame->terrain_material[cell_index];
+            vox_u16 material = (vox_u16)(encoded &
+                (vox_u16)~VOX_DIGS_REPLAY_TERRAIN_BLOODY);
+            if ((encoded & VOX_DIGS_REPLAY_TERRAIN_BLOODY) != 0U) {
+                demo_render_bloody_voxel((int)frame->terrain_origin_x +
+                                         column,
+                                         (int)frame->terrain_origin_y + row,
+                                         material);
+            } else {
+                demo_render_voxel((int)frame->terrain_origin_x + column,
+                                  (int)frame->terrain_origin_y + row,
+                                  material);
+            }
         }
     }
     for (index = 0U; index < frame->fluid_count; ++index) {
@@ -8716,9 +8748,9 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
          * 600-tick input stream; these activity counters are a determinism
          * baseline, not a wall-clock performance claim. */
         } else if (ticks == 600U &&
-                   (fired != 24U || explosions != 16U || crushes != 0U ||
-                    max_effects != 836U || max_awake != 3790U ||
-                    demo_match.state_hash != (vox_u32)0x4F038249UL)) {
+                   (fired != 18U || explosions != 16U || crushes != 0U ||
+                    max_effects != 796U || max_awake != 4294U ||
+                    demo_match.state_hash != (vox_u32)0x3B60903AUL)) {
             fprintf(stderr,
                     "load self-test: canonical 600-tick activity/hash "
                     "mismatch\n");
@@ -9755,6 +9787,7 @@ static int demo_replay_presentation_self_test(void)
     vox_digs_rules rules;
     vox_u32 hash_before;
     vox_u32 hash_after;
+    vox_u32 world_hash_before;
     vox_u16 tick;
     memset(&app, 0, sizeof(app));
     vox_digs_rules_classic(&rules);
@@ -9779,10 +9812,38 @@ static int demo_replay_presentation_self_test(void)
     demo_match.replay.frames[0].player_y_q16[0] = 96L << 16;
     demo_match.replay.frames[0].player_x_q16[1] = 220L << 16;
     demo_match.replay.frames[0].player_y_q16[1] = 96L << 16;
+    demo_match.replay.frames[0].terrain_origin_x = 200U;
+    demo_match.replay.frames[0].terrain_origin_y = 96U;
+    demo_match.replay.frames[0].terrain_width =
+        VOX_DIGS_REPLAY_WINDOW_DIAMETER;
+    demo_match.replay.frames[0].terrain_height =
+        VOX_DIGS_REPLAY_WINDOW_DIAMETER;
+    demo_match.replay.frames[0].terrain_material[0] = (vox_u16)(
+        VOX_MAT_STONE | VOX_DIGS_REPLAY_TERRAIN_BLOODY);
     demo_match.replay.frames[1] = demo_match.replay.frames[0];
     demo_match.replay.frames[1].tick = 124U;
     demo_match.replay.frames[1].player_x_q16[0] = 204L << 16;
     demo_match.replay.frames[1].player_x_q16[1] = 216L << 16;
+    if ((demo_match.replay.frames[0].terrain_material[0] &
+         VOX_DIGS_REPLAY_TERRAIN_BLOODY) == 0U ||
+        (demo_match.replay.frames[0].terrain_material[0] &
+         (vox_u16)~VOX_DIGS_REPLAY_TERRAIN_BLOODY) != VOX_MAT_STONE) {
+        return 2;
+    }
+    world_hash_before = vox_world_hash(&demo_match.world);
+    demo_render_overlay_begin();
+    demo_build_replay_render_world(&demo_match.replay.frames[0]);
+    {
+        const vox_cell *cell = vox_world_cell(
+            &demo_match.world, 200U, 96U, VOX_WORLD_DEPTH - 1U);
+        if (cell == 0 || cell->material != VOX_MAT_STONE ||
+            (cell->flags & VOX_CELL_BLOODY) == 0U) {
+            demo_render_overlay_restore();
+            return 2;
+        }
+    }
+    demo_render_overlay_restore();
+    if (vox_world_hash(&demo_match.world) != world_hash_before) return 2;
     hash_before = vox_digs_hash(&demo_match);
     demo_tick_results(&app);
     if (app.replay_playing == 0U || app.replay_frame_valid == 0U ||

@@ -309,6 +309,10 @@ static void vox_step_reactions(vox_world *world,
         }
     }
     if (firedamp_ignited) {
+        /* This is a kernel-owned material reaction, not a game-routed
+         * qualifying fixture break.  vox_world_blast deliberately retains
+         * authored fixtures because only DIGS can turn one whole component
+         * into attributed physical scrap. */
         (void)vox_world_blast(world, blast_x, blast_y, blast_z, 3U,
                               700L << 16);
     }

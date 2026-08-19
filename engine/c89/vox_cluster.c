@@ -27,7 +27,8 @@ static int cluster_structural(vox_u16 material)
 
 static int cluster_structural_cell(const vox_cell *cell)
 {
-    return cell != 0 && (cell->flags & VOX_CELL_FIXTURE) == 0U &&
+    return cell != 0 &&
+           (cell->flags & (VOX_CELL_FIXTURE | VOX_CELL_LOOSE)) == 0U &&
            cluster_structural(cell->material);
 }
 

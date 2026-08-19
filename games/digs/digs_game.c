@@ -46,6 +46,23 @@
 #define DIGS_TERRAIN_FRAGMENT_TERMINAL_FALL_Q16 (3L << 16)
 #define DIGS_TERRAIN_FRAGMENT_SETTLE_SPEED_Q16 12288L
 #define DIGS_TERRAIN_FRAGMENT_SETTLE_RADIUS 3U
+#define DIGS_CAVE_IN_EVENT_MIN_CELLS 16U
+/* Generated three-dimensional fixture rails can be larger than the bounded
+ * terrain-fracture record (160 cells): the largest Furnace Yard T is 180.
+ * Fixture capture is private game work, so keep a separate fixed bound rather
+ * than silently making a valid rope target indestructible. */
+#define DIGS_FIXTURE_COMPONENT_MAX_CELLS 256U
+#define DIGS_FIXTURE_SETTLE_MIN_CELLS 16U
+#define DIGS_FIXTURE_SETTLE_MAX_CELLS 4U
+#define DIGS_FIXTURE_SETTLE_RADIUS 3U
+#define DIGS_SCRAP_OUTWARD_IMPULSE_Q16 98304L
+#define DIGS_SCRAP_SPREAD_Q16 4096L
+
+typedef struct digs_fixture_component {
+    vox_u16 count;
+    vox_u16 truncated;
+    vox_blast_cell cells[DIGS_FIXTURE_COMPONENT_MAX_CELLS];
+} digs_fixture_component;
 /* A detached cluster can hold 128 cells, but reintroducing all of them in
  * one tick would turn one sleeping rigid body into an unbounded terrain edit.
  * The first sixteen available slots become loose material in stable local
@@ -1130,6 +1147,81 @@ static vox_u16 digs_place_loose_material(vox_digs_match *match,
         (void)vox_structure_invalidate(&match->structure,
                                        (vox_u32)center_x,
                                        (vox_u32)center_y, radius_limit);
+    }
+    return placed;
+}
+
+/* Fixture scrap is the sole rigid remnant allowed to become ordinary terrain.
+ * It lands as a small stable metal pile, never as loose debris, never as a
+ * fixture, and never through a living miner.  This deliberately does not
+ * invalidate structural work: fixture-only destruction must not arm an
+ * unrelated cave-in frontier. */
+static vox_u16 digs_place_stable_fixture_metal(vox_digs_match *match,
+                                               vox_i32 center_x,
+                                               vox_i32 center_y,
+                                               vox_u16 wanted)
+{
+    vox_u16 placed = 0U;
+    vox_u16 radius;
+    vox_i32 offset_x;
+    vox_i32 offset_y;
+    if (match == 0 || wanted == 0U) return 0U;
+    for (radius = 0U;
+         radius <= DIGS_FIXTURE_SETTLE_RADIUS && placed < wanted;
+         ++radius) {
+        for (offset_y = -(vox_i32)radius;
+             offset_y <= (vox_i32)radius && placed < wanted; ++offset_y) {
+            for (offset_x = -(vox_i32)radius;
+                 offset_x <= (vox_i32)radius && placed < wanted;
+                 ++offset_x) {
+                vox_i32 cell_x;
+                vox_i32 cell_y;
+                vox_u32 depth_loop;
+                if (radius != 0U && offset_x != -(vox_i32)radius &&
+                    offset_x != (vox_i32)radius &&
+                    offset_y != -(vox_i32)radius &&
+                    offset_y != (vox_i32)radius) {
+                    continue;
+                }
+                cell_x = center_x + offset_x;
+                cell_y = center_y + offset_y;
+                if (cell_x < 0L || cell_y < 0L ||
+                    cell_x >= (vox_i32)VOX_WORLD_WIDTH ||
+                    cell_y + 1L >= (vox_i32)VOX_WORLD_HEIGHT ||
+                    digs_fragment_cell_overlaps_player(
+                        match, (vox_u32)cell_x, (vox_u32)cell_y)) {
+                    continue;
+                }
+                for (depth_loop = VOX_WORLD_DEPTH;
+                     depth_loop > 0U && placed < wanted; --depth_loop) {
+                    vox_u16 depth = (vox_u16)(depth_loop - 1U);
+                    const vox_cell *cell = vox_world_cell(
+                        &match->world, (vox_u32)cell_x, (vox_u32)cell_y,
+                        depth);
+                    const vox_cell *support = vox_world_cell(
+                        &match->world, (vox_u32)cell_x,
+                        (vox_u32)(cell_y + 1L), depth);
+                    const vox_material_properties *properties;
+                    if (cell == 0 || support == 0 ||
+                        cell->material != VOX_MAT_AIR ||
+                        (support->flags & (VOX_CELL_FIXTURE |
+                                            VOX_CELL_LOOSE |
+                                            VOX_CELL_PHASE_GAS)) != 0U) {
+                        continue;
+                    }
+                    properties = vox_material_get(support->material);
+                    if (properties == 0 ||
+                        (properties->flags & VOX_MATERIAL_SOLID) == 0U) {
+                        continue;
+                    }
+                    if (vox_world_set(&match->world, (vox_u32)cell_x,
+                                      (vox_u32)cell_y, depth, VOX_MAT_METAL,
+                                      20L << 16) == VOX_OK) {
+                        placed++;
+                    }
+                }
+            }
+        }
     }
     return placed;
 }
@@ -2409,8 +2501,13 @@ static void digs_step_rope_cast(vox_digs_match *match, vox_u16 player)
                 rope->point_count = 1U;
                 rope->state = VOX_DIGS_ROPE_ATTACHED;
                 rope->tension_q16 = 0L;
-                rope->flags = digs_cell_is_rope_anchor(
-                    &match->world, (vox_u32)x_cell, (vox_u32)y_cell) ?
+                /* The target class follows the actual frontmost hit cell,
+                 * not merely another depth layer in the same projected
+                 * column.  Otherwise a terrain rope could inherit a hidden
+                 * fixture's identity and break when that unrelated target
+                 * is destroyed. */
+                rope->flags = target_cell != 0 &&
+                    (target_cell->flags & VOX_CELL_FIXTURE) != 0U ?
                     VOX_DIGS_ROPE_TARGET_FIXTURE :
                     VOX_DIGS_ROPE_TARGET_TERRAIN;
                 rope->target_x = (vox_u16)x_cell;
@@ -2477,13 +2574,21 @@ static void digs_step_rope(vox_digs_match *match, vox_u16 player)
             match->dropship.position_y_q16);
         rope->points[0].position_x_q16 = rope->anchor_x_q16;
         rope->points[0].position_y_q16 = rope->anchor_y_q16;
-    } else if (anchor_x < 0 || anchor_y < 0 ||
-               anchor_x >= (vox_i32)VOX_WORLD_WIDTH ||
-               anchor_y >= (vox_i32)VOX_WORLD_HEIGHT ||
-               digs_cell_is_solid(&match->world, (vox_u32)anchor_x,
-                                  (vox_u32)anchor_y) == 0) {
-        digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_BREAK);
-        return;
+    } else {
+        int anchor_exists = 0;
+        if (anchor_x >= 0 && anchor_y >= 0 &&
+            anchor_x < (vox_i32)VOX_WORLD_WIDTH &&
+            anchor_y < (vox_i32)VOX_WORLD_HEIGHT) {
+            anchor_exists = rope->flags == VOX_DIGS_ROPE_TARGET_FIXTURE ?
+                digs_cell_is_rope_anchor(&match->world, (vox_u32)anchor_x,
+                                         (vox_u32)anchor_y) :
+                digs_cell_is_solid(&match->world, (vox_u32)anchor_x,
+                                   (vox_u32)anchor_y);
+        }
+        if (!anchor_exists) {
+            digs_detach_rope(match, player, VOX_DIGS_EVENT_ROPE_BREAK);
+            return;
+        }
     }
     if (reel < -4096) {
         vox_i32 amount = (DIGS_ROPE_REEL_SPEED_Q16 *
@@ -3635,7 +3740,9 @@ static void digs_replay_capture(vox_digs_match *match)
                 (vox_u32)(origin_y + row), VOX_WORLD_DEPTH - 1U);
             frame->terrain_material[row * VOX_DIGS_REPLAY_WINDOW_DIAMETER +
                                     column] = cell == 0 ? VOX_MAT_AIR :
-                                    cell->material;
+                                    (vox_u16)(cell->material |
+                                    ((cell->flags & VOX_CELL_BLOODY) != 0U ?
+                                     VOX_DIGS_REPLAY_TERRAIN_BLOODY : 0U));
         }
     }
     for (index = 0U; index < match->ragdolls.body_count &&
@@ -3775,16 +3882,142 @@ static void digs_note_rigid_spawn(vox_digs_match *match, vox_u16 body_index,
                                         material : VOX_MAT_STONE;
     match->rigid_loose_cells[body_index] =
         (match->ragdolls.bodies[body_index].flags &
-         VOX_RIGID_BODY_DEBRIS) != 0U ? loose_cells : 0U;
+         (VOX_RIGID_BODY_DEBRIS | VOX_RIGID_BODY_SCRAP)) != 0U ?
+        loose_cells : 0U;
+}
+
+static void digs_account_rigid_settle_discarded(vox_digs_match *match,
+                                                vox_u16 discarded)
+{
+    if (match == 0 || discarded == 0U) return;
+    if ((vox_u32)discarded > 4294967295U -
+        match->rigid_settle_discarded) {
+        match->rigid_settle_discarded = 4294967295U;
+    } else {
+        match->rigid_settle_discarded += discarded;
+    }
+}
+
+/* Fixtures are authored as small connected metal assemblies.  Capture one
+ * complete six-neighbour component before clearing it so a qualifying blast
+ * cannot turn adjacent rails and hangers into a row of unrelated anchors.
+ * The authored map generator keeps each assembly below the private fixture
+ * component bound; refusing an oversize component is safer than silently
+ * deleting it only in part. */
+static int digs_collect_fixture_component(const vox_world *world,
+                                          vox_u32 seed_x, vox_u32 seed_y,
+                                          vox_u32 seed_z,
+                                          digs_fixture_component *component)
+{
+    static const vox_i16 neighbor_x[6] = {-1, 1, 0, 0, 0, 0};
+    static const vox_i16 neighbor_y[6] = {0, 0, -1, 1, 0, 0};
+    static const vox_i16 neighbor_z[6] = {0, 0, 0, 0, -1, 1};
+    vox_u16 read;
+    vox_u16 neighbor;
+    vox_u16 seen;
+    if (world == 0 || component == 0 ||
+        !vox_world_is_fixture(world, seed_x, seed_y, seed_z)) {
+        return 0;
+    }
+    component->count = 0U;
+    component->truncated = 0U;
+    component->cells[0].x = (vox_u16)seed_x;
+    component->cells[0].y = (vox_u16)seed_y;
+    component->cells[0].z = (vox_u16)seed_z;
+    component->cells[0].material = VOX_MAT_METAL;
+    component->cells[0].flags = VOX_CELL_FIXTURE;
+    component->count = 1U;
+    for (read = 0U; read < component->count; ++read) {
+        const vox_blast_cell *cell = &component->cells[read];
+        for (neighbor = 0U; neighbor < 6U; ++neighbor) {
+            vox_i32 next_x = (vox_i32)cell->x + neighbor_x[neighbor];
+            vox_i32 next_y = (vox_i32)cell->y + neighbor_y[neighbor];
+            vox_i32 next_z = (vox_i32)cell->z + neighbor_z[neighbor];
+            const vox_cell *next;
+            if (next_x < 0L || next_y < 0L || next_z < 0L ||
+                next_x >= (vox_i32)VOX_WORLD_WIDTH ||
+                next_y >= (vox_i32)VOX_WORLD_HEIGHT ||
+                next_z >= (vox_i32)VOX_WORLD_DEPTH) {
+                continue;
+            }
+            next = vox_world_cell(world, (vox_u32)next_x,
+                                  (vox_u32)next_y, (vox_u32)next_z);
+            if (next == 0 || !vox_world_is_fixture(
+                world, (vox_u32)next_x, (vox_u32)next_y,
+                (vox_u32)next_z)) {
+                continue;
+            }
+            for (seen = 0U; seen < component->count; ++seen) {
+                if (component->cells[seen].x == (vox_u16)next_x &&
+                    component->cells[seen].y == (vox_u16)next_y &&
+                    component->cells[seen].z == (vox_u16)next_z) {
+                    break;
+                }
+            }
+            if (seen != component->count) continue;
+            if (component->count >= DIGS_FIXTURE_COMPONENT_MAX_CELLS) {
+                component->truncated = 1U;
+                return 0;
+            }
+            component->cells[component->count].x = (vox_u16)next_x;
+            component->cells[component->count].y = (vox_u16)next_y;
+            component->cells[component->count].z = (vox_u16)next_z;
+            component->cells[component->count].material = next->material;
+            component->cells[component->count].flags = next->flags;
+            component->count++;
+        }
+    }
+    return 1;
+}
+
+static vox_result digs_clear_fixture_component(vox_world *world,
+                                               const digs_fixture_component *component)
+{
+    vox_u16 index;
+    if (world == 0 || component == 0) return VOX_ERR_INVALID;
+    for (index = 0U; index < component->count; ++index) {
+        const vox_blast_cell *cell = &component->cells[index];
+        const vox_cell *current = vox_world_cell(world, cell->x, cell->y,
+                                                  cell->z);
+        if (current == 0 || (current->flags & VOX_CELL_FIXTURE) == 0U) {
+            continue;
+        }
+        if (vox_world_set_fixture(world, cell->x, cell->y, cell->z, 0U) !=
+                VOX_OK ||
+            vox_world_set(world, cell->x, cell->y, cell->z, VOX_MAT_AIR,
+                          0L) != VOX_OK) {
+            return VOX_ERR_INVALID;
+        }
+    }
+    return VOX_OK;
+}
+
+static void digs_fixture_component_center(const digs_fixture_component *component,
+                                          vox_i32 *center_x,
+                                          vox_i32 *center_y)
+{
+    vox_u32 sum_x = 0U;
+    vox_u32 sum_y = 0U;
+    vox_u16 index;
+    if (center_x == 0 || center_y == 0) return;
+    *center_x = 0L;
+    *center_y = 0L;
+    if (component == 0 || component->count == 0U) return;
+    for (index = 0U; index < component->count; ++index) {
+        sum_x += component->cells[index].x;
+        sum_y += component->cells[index].y;
+    }
+    *center_x = (vox_i32)(sum_x / component->count);
+    *center_y = (vox_i32)(sum_y / component->count);
 }
 
 /*
  * Blast terrain and handle overhead hooks as structural objects.  Metal
  * fixtures are found before the blast because the world kernel quite
  * correctly has no knowledge of grappling semantics.  A fixture hit by the
- * fracture envelope loses every remaining anchor cell in its column and
- * becomes a bounded radial scrap body.  The scan and pool insertion are
- * stable: row-major fixture order wins, and later pieces are discarded when
+ * fracture envelope loses its whole connected component and becomes one
+ * bounded radial scrap body.  The scan and pool insertion are stable:
+ * row-major seed order wins, and later pieces are explicitly accounted when
  * the rigid pool is full rather than being teleported into the sky.
  */
 static vox_result digs_blast_capture_fragments(
@@ -3792,9 +4025,7 @@ static vox_result digs_blast_capture_fragments(
     vox_u16 radius, vox_i32 heat_q16, vox_u16 source, vox_u16 weapon,
     vox_blast_capture *fragment_capture)
 {
-    vox_u16 fixture_x[16];
-    vox_u16 fixture_y[16];
-    vox_u16 fixture_count = 0U;
+    vox_u16 fixture_index;
     long min_x;
     long max_x;
     long min_y;
@@ -3804,10 +4035,19 @@ static vox_result digs_blast_capture_fragments(
     long fracture_radius;
     long fracture_squared;
     vox_result result;
-    vox_u16 i;
     vox_blast_capture capture;
     int capture_terrain;
     int structural_removed;
+    static const vox_i16 direct_x[8] = {1, 1, 0, -1, -1, -1, 0, 1};
+    static const vox_i16 direct_y[8] = {0, -1, -1, -1, 0, 1, 1, 1};
+    static const vox_i16 offset_x[16] = {
+        -2, -1, 0, 1, -2, -1, 0, 1,
+        -2, -1, 0, 1, -2, -1, 0, 1
+    };
+    static const vox_i16 offset_y[16] = {
+        -2, -2, -2, -2, -1, -1, -1, -1,
+         0,  0,  0,  0,  1,  1,  1,  1
+    };
     if (match == 0 || radius == 0U || radius > VOX_BLAST_MAX_RADIUS) {
         return VOX_ERR_INVALID;
     }
@@ -3825,23 +4065,6 @@ static vox_result digs_blast_capture_fragments(
     if (max_y >= (long)VOX_WORLD_HEIGHT) {
         max_y = (long)VOX_WORLD_HEIGHT - 1L;
     }
-    for (sample_y = min_y; sample_y <= max_y; ++sample_y) {
-        for (sample_x = min_x; sample_x <= max_x; ++sample_x) {
-            long delta_x = sample_x - (long)x;
-            long delta_y = sample_y - (long)y;
-            if (delta_x * delta_x + delta_y * delta_y > fracture_squared ||
-                !digs_cell_is_rope_anchor(&match->world,
-                                           (vox_u32)sample_x,
-                                           (vox_u32)sample_y)) {
-                continue;
-            }
-            if (fixture_count < 16U) {
-                fixture_x[fixture_count] = (vox_u16)sample_x;
-                fixture_y[fixture_count] = (vox_u16)sample_y;
-                fixture_count++;
-            }
-        }
-    }
     capture_terrain = source != VOX_DIGS_NO_PLAYER &&
                       source < match->rules.player_count;
     result = vox_world_blast_capture(&match->world, x, y, z, radius,
@@ -3857,54 +4080,97 @@ static vox_result digs_blast_capture_fragments(
             (vox_u32)radius + VOX_STRUCTURE_COHESION_CELLS,
             source, weapon);
     }
-    for (i = 0U; i < fixture_count; ++i) {
-        vox_u32 depth;
-        vox_u32 noise;
-        vox_u16 body_index;
-        vox_i32 delta_x = (vox_i32)fixture_x[i] - (vox_i32)x;
-        vox_i32 delta_y = (vox_i32)fixture_y[i] - (vox_i32)y;
-        /* The fracture mask may leave an outer metal cell intact.  It is
-         * still part of the destroyed fixture, so remove it explicitly. */
-        for (depth = 0U; depth < VOX_WORLD_DEPTH; ++depth) {
-            const vox_cell *cell = vox_world_cell(&match->world,
-                                                   fixture_x[i],
-                                                   fixture_y[i], depth);
-            if (cell != 0 && (cell->flags & VOX_CELL_FIXTURE) != 0U) {
-                if (vox_world_set_fixture(&match->world, fixture_x[i],
-                                          fixture_y[i], depth, 0U) != VOX_OK ||
-                    vox_world_set(&match->world, fixture_x[i],
-                                  fixture_y[i], depth, VOX_MAT_AIR, 0L) !=
-                        VOX_OK) {
-                    return VOX_ERR_INVALID;
+    fixture_index = 0U;
+    for (sample_y = min_y; sample_y <= max_y; ++sample_y) {
+        for (sample_x = min_x; sample_x <= max_x; ++sample_x) {
+            long delta_sample_x = sample_x - (long)x;
+            long delta_sample_y = sample_y - (long)y;
+            vox_u32 seed_depth;
+            if (delta_sample_x * delta_sample_x +
+                delta_sample_y * delta_sample_y > fracture_squared ||
+                !digs_cell_is_rope_anchor(&match->world,
+                                           (vox_u32)sample_x,
+                                           (vox_u32)sample_y)) {
+                continue;
+            }
+            for (seed_depth = 0U; seed_depth < VOX_WORLD_DEPTH;
+                 ++seed_depth) {
+                if (vox_world_is_fixture(&match->world, (vox_u32)sample_x,
+                                         (vox_u32)sample_y, seed_depth)) {
+                    break;
                 }
             }
+            if (seed_depth < VOX_WORLD_DEPTH) {
+                digs_fixture_component component;
+                vox_u32 noise;
+                vox_u16 body_index;
+                vox_i32 center_x;
+                vox_i32 center_y;
+                vox_i32 delta_x;
+                vox_i32 delta_y;
+                vox_u32 distance;
+                vox_i32 impulse_x;
+                vox_i32 impulse_y;
+                if (!digs_collect_fixture_component(
+                    &match->world, (vox_u32)sample_x, (vox_u32)sample_y,
+                    seed_depth, &component)) {
+                    continue;
+                }
+                digs_fixture_component_center(&component, &center_x,
+                                              &center_y);
+                if (digs_clear_fixture_component(&match->world, &component) !=
+                    VOX_OK) {
+                    return VOX_ERR_INVALID;
+                }
+                noise = digs_noise(match->rules.seed, match->tick,
+                                   fixture_index,
+                                   (vox_u32)center_x * 17U +
+                                   (vox_u32)center_y);
+                delta_x = center_x - (vox_i32)x;
+                delta_y = center_y - (vox_i32)y;
+                if (delta_x == 0L && delta_y == 0L) {
+                    vox_u16 direction = (vox_u16)(noise & 7U);
+                    delta_x = direct_x[direction];
+                    delta_y = direct_y[direction];
+                }
+                distance = digs_abs_i32(delta_x) + digs_abs_i32(delta_y);
+                if (distance == 0U) distance = 1U;
+                impulse_x = digs_div_trunc_positive(
+                    delta_x * DIGS_SCRAP_OUTWARD_IMPULSE_Q16, distance) +
+                    ((vox_i32)((noise >> 8) % 5U) - 2L) *
+                    DIGS_SCRAP_SPREAD_Q16;
+                impulse_y = digs_div_trunc_positive(
+                    delta_y * DIGS_SCRAP_OUTWARD_IMPULSE_Q16, distance) +
+                    ((vox_i32)((noise >> 12) % 5U) - 2L) *
+                    DIGS_SCRAP_SPREAD_Q16;
+                if (vox_rigid_spawn(&match->ragdolls, &body_index,
+                                    (center_x << 16) + 32768L +
+                                    (vox_i32)(offset_x[fixture_index % 16U]) *
+                                    4096L,
+                                    (center_y << 16) + 32768L +
+                                    (vox_i32)(offset_y[fixture_index % 16U]) *
+                                    4096L,
+                                    8192L, 8192L, 16384L,
+                                    VOX_RIGID_BODY_SCRAP) == VOX_OK) {
+                    digs_note_rigid_spawn(match, body_index, source, weapon,
+                                          VOX_MAT_METAL, component.count);
+                    (void)vox_rigid_apply_impulse(&match->ragdolls,
+                                                   body_index, impulse_x,
+                                                   impulse_y);
+                    match->ragdolls.bodies[body_index].angular_velocity_q16 =
+                        ((vox_i32)((noise >> 16) % 17U) - 8L) * 4096L;
+                } else {
+                    digs_account_rigid_settle_discarded(match,
+                                                        component.count);
+                }
+                digs_emit_event(match, VOX_DIGS_EVENT_FIXTURE_BREAK, source,
+                                VOX_DIGS_NO_PLAYER, weapon, VOX_MAT_METAL,
+                                (center_x << 16) + 32768L,
+                                (center_y << 16) + 32768L, component.count,
+                                (vox_u16)(noise & 15U));
+                fixture_index++;
+            }
         }
-        noise = digs_noise(match->rules.seed, match->tick, i,
-                           (vox_u32)fixture_x[i] * 17U + fixture_y[i]);
-        if (delta_x == 0L && delta_y == 0L) {
-            delta_x = (noise & 1U) != 0U ? 1L : -1L;
-        }
-        if (vox_rigid_spawn(&match->ragdolls, &body_index,
-                            ((vox_i32)fixture_x[i] << 16) + 32768L,
-                            ((vox_i32)fixture_y[i] << 16) + 32768L,
-                            8192L, 8192L, 16384L,
-                            VOX_RIGID_BODY_SCRAP) == VOX_OK) {
-            digs_note_rigid_spawn(match, body_index, source, weapon,
-                                  VOX_MAT_METAL, 0U);
-            match->ragdolls.bodies[body_index].velocity_x_q16 =
-                delta_x * 8192L +
-                ((vox_i32)((noise >> 8) % 5U) - 2L) * 2048L;
-            match->ragdolls.bodies[body_index].velocity_y_q16 =
-                delta_y * 8192L - 32768L -
-                (vox_i32)((noise >> 12) % 4U) * 2048L;
-            match->ragdolls.bodies[body_index].angular_velocity_q16 =
-                ((vox_i32)((noise >> 16) % 17U) - 8L) * 4096L;
-        }
-        digs_emit_event(match, VOX_DIGS_EVENT_FIXTURE_BREAK, source,
-                        VOX_DIGS_NO_PLAYER, weapon, VOX_MAT_METAL,
-                        (vox_i32)fixture_x[i] << 16,
-                        (vox_i32)fixture_y[i] << 16, 1U,
-                        (vox_u16)(noise & 15U));
     }
     if (capture_terrain) {
         if (fragment_capture != 0) {
@@ -3951,6 +4217,18 @@ static void digs_step_structural_cascades(vox_digs_match *match)
                                                  collapse.y, collapse.z,
                                                  &detached);
         if (result != VOX_OK || detached.count == 0U) {
+            continue;
+        }
+        /* A scheduler seed only says that some terrain lost support.  The
+         * game-facing CAVE-IN event, rigid body, award, and attribution are
+         * reserved for one independently detached terrain component large
+         * enough to read as a real collapse.  Smaller pieces return as loose
+         * nonblocking material: their source is preserved, but they cannot
+         * turn a fixture-only or minor fracture into structural drama. */
+        if (detached.count < DIGS_CAVE_IN_EVENT_MIN_CELLS) {
+            if (vox_cluster_restore(&match->world, &detached, 1U) == VOX_OK) {
+                match->structure.discarded_collapse++;
+            }
             continue;
         }
         weapon = collapse.weapon < VOX_DIGS_TOOL_COUNT ? collapse.weapon :
@@ -4000,6 +4278,49 @@ static void digs_step_structural_cascades(vox_digs_match *match)
     }
 }
 
+/* Fixture scrap is a fast, minor blunt hazard rather than a normal weapon.
+ * Keep it out of anatomy/burial/kill routing so a single loose piece can
+ * never sever a limb or finish a miner who is already at one health. */
+static vox_u16 digs_apply_scrap_impact(vox_digs_match *match,
+                                       vox_u16 source, vox_u16 target,
+                                       vox_u16 weapon, vox_u16 damage)
+{
+    vox_u16 applied;
+    if (match == 0 || damage == 0U ||
+        !vox_digs_player_is_active(match, target) || !match->alive[target] ||
+        digs_player_extracted(match, target)) {
+        return 0U;
+    }
+    if (match->spawn_shield_ticks[target] > 0U ||
+        match->dash_invulnerability[target] > 0U) {
+        digs_emit_event(match, VOX_DIGS_EVENT_SHIELD_BLOCK, source, target,
+                        weapon, VOX_MAT_METAL,
+                        match->players[target].position_x.value_q16,
+                        match->players[target].position_y.value_q16,
+                        damage, match->spawn_shield_ticks[target] > 0U ?
+                        1U : 2U);
+        return 0U;
+    }
+    if (match->health[target] <= 1U) return 0U;
+    applied = damage < match->health[target] ? damage :
+              (vox_u16)(match->health[target] - 1U);
+    if (applied == 0U) return 0U;
+    match->health[target] = (vox_u16)(match->health[target] - applied);
+    if (source != VOX_DIGS_NO_PLAYER && source != target &&
+        vox_digs_player_is_active(match, source)) {
+        match->last_attacker[target] = source;
+        match->last_attacker_tick[target] = match->tick;
+    }
+    match->last_damage_weapon[target] = weapon;
+    match->last_damage_part[target] = VOX_DIGS_PART_TORSO;
+    digs_emit_event(match, VOX_DIGS_EVENT_DAMAGE, source, target, weapon,
+                    VOX_MAT_METAL,
+                    match->players[target].position_x.value_q16,
+                    match->players[target].position_y.value_q16, applied,
+                    VOX_DIGS_DAMAGE_BLUNT);
+    return applied;
+}
+
 /* Rigid terrain stays in the generic physics pool, so collision with miners
  * is resolved here in stable body/slot order.  This makes a falling cave-in
  * consequential without teaching the C89 physics library about game rules or
@@ -4026,6 +4347,7 @@ static void digs_step_rigid_impacts(vox_digs_match *match)
         vox_u16 source;
         vox_u16 weapon;
         vox_u16 material;
+        vox_u16 applied_damage;
         if (match->rigid_impact_cooldown[body_index] > 0U) {
             match->rigid_impact_cooldown[body_index]--;
         }
@@ -4101,14 +4423,22 @@ static void digs_step_rigid_impacts(vox_digs_match *match)
             match->rigid_impact_cooldown[body_index] =
                 DIGS_RIGID_IMPACT_COOLDOWN_TICKS;
             player_hit[player] = 1U;
+            if ((body->flags & VOX_RIGID_BODY_SCRAP) != 0U) {
+                applied_damage = digs_apply_scrap_impact(
+                    match, source, player, weapon, (vox_u16)damage_value);
+            } else {
+                applied_damage = (vox_u16)damage_value;
+            }
             digs_emit_event(match, VOX_DIGS_EVENT_DEBRIS_IMPACT, source,
                             player, weapon, material,
                             body->position_x_q16, body->position_y_q16,
-                            (vox_u16)damage_value, body_index);
-            (void)vox_digs_apply_hit(match, source, player, weapon,
-                                     VOX_DIGS_PART_TORSO,
-                                     (vox_u16)damage_value,
-                                     VOX_DIGS_DAMAGE_BLUNT);
+                            applied_damage, body_index);
+            if ((body->flags & VOX_RIGID_BODY_SCRAP) == 0U) {
+                (void)vox_digs_apply_hit(match, source, player, weapon,
+                                         VOX_DIGS_PART_TORSO,
+                                         (vox_u16)damage_value,
+                                         VOX_DIGS_DAMAGE_BLUNT);
+            }
             body->velocity_x_q16 /= 2L;
             body->velocity_y_q16 /= 2L;
             if (match->phase != VOX_DIGS_RUNNING) return;
@@ -4146,6 +4476,26 @@ static vox_u16 digs_settle_rigid_debris(vox_digs_match *match,
                                      VOX_WORLD_DEPTH);
 }
 
+static vox_u16 digs_settle_fixture_scrap(vox_digs_match *match,
+                                         vox_u16 body_index)
+{
+    vox_rigid_body *body;
+    vox_i32 center_x;
+    vox_i32 center_y;
+    vox_u16 source_cells;
+    if (match == 0 || body_index >= VOX_RIGID_MAX_BODIES) return 0U;
+    source_cells = match->rigid_loose_cells[body_index];
+    if (source_cells < DIGS_FIXTURE_SETTLE_MIN_CELLS ||
+        match->rigid_material[body_index] != VOX_MAT_METAL) {
+        return 0U;
+    }
+    body = &match->ragdolls.bodies[body_index];
+    center_x = digs_q16_to_cell(body->position_x_q16);
+    center_y = digs_q16_to_cell(body->position_y_q16);
+    return digs_place_stable_fixture_metal(match, center_x, center_y,
+                                           DIGS_FIXTURE_SETTLE_MAX_CELLS);
+}
+
 static void digs_recycle_sleeping_rigids(vox_digs_match *match)
 {
     vox_u16 body_index;
@@ -4174,15 +4524,13 @@ static void digs_recycle_sleeping_rigids(vox_digs_match *match)
         if ((body->flags & VOX_RIGID_BODY_DEBRIS) != 0U) {
             settle_total = match->rigid_loose_cells[body_index];
             settle_placed = digs_settle_rigid_debris(match, body_index);
-            if (settle_placed < settle_total) {
-                settle_discarded = (vox_u16)(settle_total - settle_placed);
-                if ((vox_u32)settle_discarded >
-                    4294967295U - match->rigid_settle_discarded) {
-                    match->rigid_settle_discarded = 4294967295U;
-                } else {
-                    match->rigid_settle_discarded += settle_discarded;
-                }
-            }
+        } else if ((body->flags & VOX_RIGID_BODY_SCRAP) != 0U) {
+            settle_total = match->rigid_loose_cells[body_index];
+            settle_placed = digs_settle_fixture_scrap(match, body_index);
+        }
+        if (settle_placed < settle_total) {
+            settle_discarded = (vox_u16)(settle_total - settle_placed);
+            digs_account_rigid_settle_discarded(match, settle_discarded);
         }
         digs_emit_event(match, VOX_DIGS_EVENT_DEBRIS_IMPACT,
                         VOX_DIGS_NO_PLAYER, VOX_DIGS_NO_PLAYER,

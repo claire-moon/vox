@@ -16,8 +16,8 @@ rather than quietly resolved.
 | | |
 |---|---|
 | Tests | 23, all green |
-| Payload | 514,063 B — **34.8 %** of the 1,474,560 B ceiling |
-| Headroom | **960,497 B** |
+| Payload | 514,063 B — **4.9 %** of the active 10,485,760 B (10 MiB) ceiling |
+| Headroom | **9,971,697 B** |
 | ABI | 11 |
 | Settings schema | 6 |
 | Chronicle format | 1 |
@@ -49,13 +49,21 @@ The following decisions are locked for v0.0.5:
   deterministic seeds remain in rules, diagnostics, and replay metadata.
 - Grapple is always-toggle: press to cast/attach, press again to retarget,
   jump to cancel, and arbitrary solid terrain is valid. Metal fixtures are a
-  special target class and destroyed fixtures produce non-anchor scrap.
+  special static target class: they stay collision-solid and rope-targetable
+  until a game-routed qualifying explosion destroys them. Kernel-owned
+  material-reaction blasts are nonqualifying and leave them intact. Fixtures
+  never bear structure, fall, join a cave-in, or become replacement fixture
+  rope anchors as scrap.
 - The authoritative core now has bounded fixed-point fluid, oriented rigid-body,
   structural-cluster, award, replay-selection, dash, and dropship interfaces.
   Water, lava, and blood share the persistent fluid path; corpses and detached
   debris share the rigid pool; and headshots, kill healing, cave-ins, grapple
   targeting, and dropship events are hashed through the match state where
   appropriate.
+- Solid and gore effects make a real swept terrain impact before becoming a
+  nonblocking landed remnant. Blood stains the struck terrain surface and adds
+  its nonblocking fluid residue only on that impact; it never deposits from an
+  airborne TTL expiry or draws over a miner.
 - The current implementation increment is covered by strict C90 builds, 31
   CTest tests including the long deterministic match gate, focused
   fluid/rigid/cluster/gameplay tests, and SDL settings/chronicle/haptic
@@ -77,9 +85,9 @@ From the lead's notes, unchanged since v0.0.4:
 
 - **ISO C only.** Strict C89 for every first-party translation unit, including
   ports, tools and tests. No C++, no Rust, no embedded scripting.
-- **The game must not exceed 10 MiB.** The gate is enforced inside
-  `tools/package-linux-demo.sh`, so a bundle that outgrows it fails rather
-  than ships.
+- **The game must not exceed 10 MiB.** The gate is enforced by the Linux and
+  Windows release packagers, so a bundle that outgrows it fails rather than
+  ships.
 - **Performance must hold at all framerates regardless of device.**
 - **Determinism is the foundation.** Fixed 60 Hz, integer-only, no allocation
   in the sim, no wall clock, one noise function. A wall-clock value may be read
@@ -178,9 +186,15 @@ explosion with smoke wisps and a light flash on the shooter.
   own state so clusters behave as clusters. Craters should pool debris rather
   than leaving Worms-style circles.
 - **Today:** blasts invalidate a hashed, match-owned chunk support/load frontier,
-  extract bounded six-neighbour clusters, emit cave-in awards/events, and hand
-  detached material to rigid debris. Detached bodies settle up to sixteen loose
-  cells of their recorded material and hash any explicit remainder. A
+  extract bounded six-neighbour clusters, and hand qualifying detached terrain
+  to rigid debris. A `CAVE-IN!`, its award, attribution, and debris require one
+  independently detached non-fixture terrain component of at least sixteen
+  cells; smaller fractures return as loose nonblocking material, and a
+  fixture-only blast produces none of those structural results. Detached
+  terrain bodies settle up to sixteen loose cells of their recorded material
+  and hash any explicit remainder. A sleeping fixture-scrap component with at
+  least sixteen source metal cells may instead place at most four ordinary,
+  stable metal cells; smaller fixture scraps remain visual and recycle. A
   cross-chunk regression proves a wide roof proceeds as multiple fragments;
   whole-world extraction and large-cascade presentation remain open.
 

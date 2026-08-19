@@ -17,6 +17,50 @@ static int saw_event(const vox_digs_match *match, vox_u16 type)
     return 0;
 }
 
+static vox_u16 count_events(const vox_digs_match *match, vox_u16 type)
+{
+    vox_u16 i;
+    vox_u16 count = 0U;
+    for (i = 0U; i < match->event_count; ++i) {
+        const vox_digs_event *event = &match->events[
+            (match->event_head + i) % VOX_DIGS_MAX_EVENTS];
+        if (event->type == type) count++;
+    }
+    return count;
+}
+
+static int cell_overlaps_living_player(const vox_digs_match *match,
+                                       vox_u32 x, vox_u32 y)
+{
+    vox_i32 cell_min_x;
+    vox_i32 cell_min_y;
+    vox_i32 cell_max_x;
+    vox_i32 cell_max_y;
+    vox_u16 player;
+    if (match == 0) return 0;
+    cell_min_x = (vox_i32)x << 16;
+    cell_min_y = (vox_i32)y << 16;
+    cell_max_x = cell_min_x + 65535L;
+    cell_max_y = cell_min_y + 65535L;
+    for (player = 0U; player < match->rules.player_count; ++player) {
+        const vox_physics_body *body = &match->players[player];
+        vox_i32 player_min_x;
+        vox_i32 player_min_y;
+        vox_i32 player_max_x;
+        vox_i32 player_max_y;
+        if (!match->alive[player]) continue;
+        player_min_x = body->position_x.value_q16 - body->half_width_q16;
+        player_min_y = body->position_y.value_q16 - body->half_height_q16;
+        player_max_x = body->position_x.value_q16 + body->half_width_q16;
+        player_max_y = body->position_y.value_q16 + body->half_height_q16;
+        if (cell_max_x >= player_min_x && cell_min_x <= player_max_x &&
+            cell_max_y >= player_min_y && cell_min_y <= player_max_y) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static vox_u16 last_bark_stimulus(const vox_digs_match *match,
                                   vox_u16 player)
 {
@@ -94,10 +138,27 @@ int main(void)
     vox_u16 fixture_events;
     vox_u16 scrap_bodies;
     vox_u16 filled_bodies;
+    vox_u16 generated_fixture_found;
+    vox_u16 stable_metal;
+    vox_u16 loose_metal;
+    vox_u16 debris_bodies;
+    vox_u16 body_index_second;
+    vox_u16 anatomy_before;
+    vox_i32 first_scrap_x;
+    vox_i32 second_scrap_x;
+    vox_i32 first_scrap_velocity_x;
+    vox_i32 second_scrap_velocity_x;
+    vox_u32 generated_fixture_x;
+    vox_u32 generated_fixture_y;
+    vox_u32 generated_fixture_z;
     vox_digs_rules_classic(&rules);
     rules.player_count = 2U;
     rules.bot_mask = 0U;
     rules.score_limit = 0U;
+    if (VOX_ABI_VERSION != 11U || VOX_DIGS_FX_RETRO != 768U ||
+        VOX_DIGS_FX_STANDARD != 1536U || VOX_DIGS_FX_CARNAGE != 3072U) {
+        return 92;
+    }
     if (vox_digs_match_init(&match, &rules) != VOX_OK) return 1;
     input.abi_version = VOX_ABI_VERSION;
     input.struct_size = (vox_u32)sizeof(input);
@@ -146,10 +207,9 @@ int main(void)
     }
     if (i == VOX_RIGID_MAX_BODIES) return 5;
     if (!saw_event(&match, VOX_DIGS_EVENT_FIXTURE_BREAK)) return 32;
-    /* Two fixtures inside one grenade fracture must each lose anchor
-     * capability and create radial non-anchor scrap.  Repeat with a full
-     * rigid pool to prove the stable overflow rule removes the fixture
-     * without conjuring a replacement hook at a ceiling or spare slot. */
+    /* Fixtures are static, non-structural rope targets.  Keep one generated
+     * target and one hand-built suspended target alive through four seconds
+     * of ordinary simulation and a nearby non-qualifying blast. */
     vox_digs_rules_classic(&fixture_rules);
     fixture_rules.player_count = 1U;
     fixture_rules.bot_mask = 0U;
@@ -157,12 +217,89 @@ int main(void)
     if (vox_digs_match_init(&fixture_match, &fixture_rules) != VOX_OK) {
         return 80;
     }
+    generated_fixture_found = 0U;
+    generated_fixture_x = 0U;
+    generated_fixture_y = 0U;
+    generated_fixture_z = 0U;
+    for (y = 0L; y < (vox_i32)VOX_WORLD_HEIGHT &&
+         generated_fixture_found == 0U; ++y) {
+        for (x = 0L; x < (vox_i32)VOX_WORLD_WIDTH &&
+             generated_fixture_found == 0U; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                if (vox_world_is_fixture(&fixture_match.world, (vox_u32)x,
+                                         (vox_u32)y, z)) {
+                    generated_fixture_x = (vox_u32)x;
+                    generated_fixture_y = (vox_u32)y;
+                    generated_fixture_z = z;
+                    generated_fixture_found = 1U;
+                    break;
+                }
+            }
+        }
+    }
+    if (generated_fixture_found == 0U) return 81;
+    source_x = 64L;
+    source_y = 100L;
+    if (generated_fixture_x >= 40U && generated_fixture_x <= 80U &&
+        generated_fixture_y >= 80U && generated_fixture_y <= 120U) {
+        source_x = (vox_i32)VOX_WORLD_WIDTH - 64L;
+    }
+    for (y = 80L; y <= 120L; ++y) {
+        for (x = source_x - 28L; x <= source_x + 16L; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                if (clear_test_cell(&fixture_match.world, (vox_u32)x,
+                                    (vox_u32)y, z) != VOX_OK) {
+                    return 82;
+                }
+            }
+        }
+    }
+    if (vox_world_set(&fixture_match.world, (vox_u32)source_x,
+                      (vox_u32)source_y, 0U,
+                      VOX_MAT_METAL, 20L << 16) != VOX_OK ||
+        vox_world_set_fixture(&fixture_match.world, (vox_u32)source_x,
+                              (vox_u32)source_y, 0U, 1U) != VOX_OK ||
+        /* Concussion's radius is ten and its fixture-fracture envelope is
+         * twelve.  A nonstructural impact thirteen cells away is therefore
+         * a real nearby blast that must leave this fixture untouched. */
+        vox_world_set(&fixture_match.world, (vox_u32)(source_x - 13L),
+                      (vox_u32)source_y, 0U,
+                      VOX_MAT_SMOKE, 20L << 16) != VOX_OK ||
+        vox_digs_use_tool(&fixture_match, 0U,
+                          VOX_DIGS_TOOL_CONCUSSION_GRENADE,
+                          (vox_u32)(source_x - 13L),
+                          (vox_u32)source_y, 0U) != VOX_OK ||
+        vox_world_sleep_all(&fixture_match.world) != VOX_OK) {
+        return 83;
+    }
+    for (i = 0U; i < 240U; ++i) {
+        if (vox_digs_match_step(&fixture_match) != VOX_OK) return 84;
+    }
+    if (!vox_world_is_fixture(&fixture_match.world, generated_fixture_x,
+                              generated_fixture_y, generated_fixture_z) ||
+        !vox_world_is_fixture(&fixture_match.world, (vox_u32)source_x,
+                              (vox_u32)source_y, 0U) ||
+        vox_world_cell(&fixture_match.world, generated_fixture_x,
+                       generated_fixture_y, generated_fixture_z)->material !=
+            VOX_MAT_METAL ||
+        vox_world_cell(&fixture_match.world, (vox_u32)source_x,
+                       (vox_u32)source_y, 0U)->material != VOX_MAT_METAL ||
+        saw_event(&fixture_match, VOX_DIGS_EVENT_CAVE_IN)) {
+        return 85;
+    }
+    /* Two disconnected components inside one offset blast must become two
+     * pieces with distinct starting points and outward velocity.  A
+     * connected pair is one component, not two accidental replacement
+     * anchors. */
+    if (vox_digs_match_init(&fixture_match, &fixture_rules) != VOX_OK) {
+        return 86;
+    }
     for (y = 80L; y <= 120L; ++y) {
         for (x = 80L; x <= 120L; ++x) {
             for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
                 if (clear_test_cell(&fixture_match.world, (vox_u32)x,
                                     (vox_u32)y, z) != VOX_OK) {
-                    return 81;
+                    return 87;
                 }
             }
         }
@@ -171,29 +308,47 @@ int main(void)
                       VOX_MAT_STONE, 0L) != VOX_OK ||
         vox_world_set(&fixture_match.world, 101U, 100U, 0U,
                       VOX_MAT_METAL, 0L) != VOX_OK ||
-        vox_world_set(&fixture_match.world, 103U, 100U, 0U,
+        vox_world_set(&fixture_match.world, 102U, 100U, 0U,
+                      VOX_MAT_METAL, 0L) != VOX_OK ||
+        vox_world_set(&fixture_match.world, 104U, 100U, 0U,
+                      VOX_MAT_METAL, 0L) != VOX_OK ||
+        vox_world_set(&fixture_match.world, 105U, 100U, 0U,
                       VOX_MAT_METAL, 0L) != VOX_OK ||
         vox_world_set_fixture(&fixture_match.world, 101U, 100U, 0U, 1U) !=
             VOX_OK ||
-        vox_world_set_fixture(&fixture_match.world, 103U, 100U, 0U, 1U) !=
+        vox_world_set_fixture(&fixture_match.world, 102U, 100U, 0U, 1U) !=
+            VOX_OK ||
+        vox_world_set_fixture(&fixture_match.world, 104U, 100U, 0U, 1U) !=
+            VOX_OK ||
+        vox_world_set_fixture(&fixture_match.world, 105U, 100U, 0U, 1U) !=
             VOX_OK ||
         vox_digs_use_tool(&fixture_match, 0U,
                           VOX_DIGS_TOOL_FIRECRACKER,
                           96U, 100U, 0U) != VOX_OK) {
-        return 82;
+        return 88;
     }
-    fixture_events = 0U;
+    fixture_events = count_events(&fixture_match, VOX_DIGS_EVENT_FIXTURE_BREAK);
     scrap_bodies = 0U;
-    for (i = 0U; i < fixture_match.event_count; ++i) {
-        const vox_digs_event *event = &fixture_match.events[
-            (fixture_match.event_head + i) % VOX_DIGS_MAX_EVENTS];
-        if (event->type == VOX_DIGS_EVENT_FIXTURE_BREAK) fixture_events++;
-    }
+    first_scrap_x = 0L;
+    second_scrap_x = 0L;
+    first_scrap_velocity_x = 0L;
+    second_scrap_velocity_x = 0L;
     for (i = 0U; i < VOX_RIGID_MAX_BODIES; ++i) {
         if ((fixture_match.ragdolls.bodies[i].flags &
              VOX_RIGID_BODY_SCRAP) != 0U) {
             if (fixture_match.rigid_material[i] != VOX_MAT_METAL ||
-                fixture_match.rigid_loose_cells[i] != 0U) return 83;
+                fixture_match.rigid_loose_cells[i] != 2U) return 89;
+            if (scrap_bodies == 0U) {
+                first_scrap_x =
+                    fixture_match.ragdolls.bodies[i].position_x_q16;
+                first_scrap_velocity_x =
+                    fixture_match.ragdolls.bodies[i].velocity_x_q16;
+            } else if (scrap_bodies == 1U) {
+                second_scrap_x =
+                    fixture_match.ragdolls.bodies[i].position_x_q16;
+                second_scrap_velocity_x =
+                    fixture_match.ragdolls.bodies[i].velocity_x_q16;
+            }
             scrap_bodies++;
         }
     }
@@ -201,14 +356,34 @@ int main(void)
         const vox_cell *first_fixture = vox_world_cell(&fixture_match.world,
                                                         101U, 100U, z);
         const vox_cell *second_fixture = vox_world_cell(&fixture_match.world,
-                                                         103U, 100U, z);
+                                                         105U, 100U, z);
         if (first_fixture == 0 || second_fixture == 0 ||
-            first_fixture->material == VOX_MAT_METAL ||
-            second_fixture->material == VOX_MAT_METAL) {
-            return 84;
+            vox_world_is_fixture(&fixture_match.world, 101U, 100U, z) ||
+            vox_world_is_fixture(&fixture_match.world, 102U, 100U, z) ||
+            vox_world_is_fixture(&fixture_match.world, 104U, 100U, z) ||
+            vox_world_is_fixture(&fixture_match.world, 105U, 100U, z)) {
+            return 90;
         }
     }
-    if (fixture_events != 2U || scrap_bodies != 2U) return 85;
+    if (fixture_events != 2U || scrap_bodies != 2U ||
+        first_scrap_x == second_scrap_x || first_scrap_velocity_x <= 0L ||
+        second_scrap_velocity_x <= 0L) return 91;
+    for (i = 0U; i < 16U; ++i) {
+        if (vox_digs_match_step(&fixture_match) != VOX_OK) return 93;
+    }
+    debris_bodies = 0U;
+    for (i = 0U; i < VOX_RIGID_MAX_BODIES; ++i) {
+        if ((fixture_match.ragdolls.bodies[i].flags &
+             VOX_RIGID_BODY_DEBRIS) != 0U) {
+            debris_bodies++;
+        }
+    }
+    if (saw_event(&fixture_match, VOX_DIGS_EVENT_CAVE_IN) ||
+        debris_bodies != 0U ||
+        (fixture_match.awards[0] &
+         (1U << VOX_DIGS_AWARD_CAVE_IN_ARTIST)) != 0U) return 94;
+    /* Repeat with a full rigid pool to prove overflow removes the fixture
+     * without inventing a new anchor, and accounts its source material. */
     filled_bodies = 0U;
     while (vox_rigid_spawn(&fixture_match.ragdolls, &body_index,
                            80L << 16, 80L << 16,
@@ -226,25 +401,229 @@ int main(void)
         vox_digs_use_tool(&fixture_match, 0U,
                           VOX_DIGS_TOOL_FIRECRACKER,
                           106U, 100U, 0U) != VOX_OK) {
-        return 86;
+        return 95;
     }
     if (vox_world_cell(&fixture_match.world, 111U, 100U, 0U) == 0 ||
         vox_world_cell(&fixture_match.world, 111U, 100U, 0U)->material ==
-        VOX_MAT_METAL) return 87;
-    fixture_events = 0U;
+        VOX_MAT_METAL ||
+        vox_world_is_fixture(&fixture_match.world, 111U, 100U, 0U)) return 96;
+    fixture_events = count_events(&fixture_match, VOX_DIGS_EVENT_FIXTURE_BREAK);
     scrap_bodies = 0U;
-    for (i = 0U; i < fixture_match.event_count; ++i) {
-        const vox_digs_event *event = &fixture_match.events[
-            (fixture_match.event_head + i) % VOX_DIGS_MAX_EVENTS];
-        if (event->type == VOX_DIGS_EVENT_FIXTURE_BREAK) fixture_events++;
-    }
     for (i = 0U; i < VOX_RIGID_MAX_BODIES; ++i) {
         if ((fixture_match.ragdolls.bodies[i].flags &
              VOX_RIGID_BODY_SCRAP) != 0U) {
             scrap_bodies++;
         }
     }
-    if (fixture_events != 3U || scrap_bodies != 2U) return 88;
+    if (fixture_events != 3U || scrap_bodies != 2U ||
+        fixture_match.rigid_settle_discarded != 1U) return 97;
+    /* A direct blast through a 17-by-10 connected rail proves the private
+     * fixture component bound, rather than the smaller terrain-fracture
+     * record, owns fixture destruction.  It must become one 170-cell scrap
+     * body with a deterministic fallback direction, never a cave-in. */
+    if (vox_digs_match_init(&fixture_match, &fixture_rules) != VOX_OK) {
+        return 98;
+    }
+    for (y = 80L; y <= 120L; ++y) {
+        for (x = 80L; x <= 130L; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                if (clear_test_cell(&fixture_match.world, (vox_u32)x,
+                                    (vox_u32)y, z) != VOX_OK) {
+                    return 99;
+                }
+            }
+        }
+    }
+    for (x = 100L; x <= 116L; ++x) {
+        for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+            if (vox_world_set(&fixture_match.world, (vox_u32)x, 100U, z,
+                              VOX_MAT_METAL, 20L << 16) != VOX_OK ||
+                vox_world_set_fixture(&fixture_match.world, (vox_u32)x,
+                                      100U, z, 1U) != VOX_OK) {
+                return 100;
+            }
+        }
+    }
+    if (vox_digs_use_tool(&fixture_match, 0U,
+                          VOX_DIGS_TOOL_FIRECRACKER,
+                          108U, 100U, 0U) != VOX_OK) {
+        return 101;
+    }
+    scrap_bodies = 0U;
+    body_index = VOX_RIGID_MAX_BODIES;
+    for (i = 0U; i < VOX_RIGID_MAX_BODIES; ++i) {
+        if ((fixture_match.ragdolls.bodies[i].flags &
+             VOX_RIGID_BODY_SCRAP) != 0U) {
+            if (fixture_match.rigid_material[i] != VOX_MAT_METAL ||
+                fixture_match.rigid_loose_cells[i] != 170U ||
+                (fixture_match.ragdolls.bodies[i].velocity_x_q16 == 0L &&
+                 fixture_match.ragdolls.bodies[i].velocity_y_q16 == 0L)) {
+                return 102;
+            }
+            body_index = i;
+            scrap_bodies++;
+        }
+    }
+    for (x = 100L; x <= 116L; ++x) {
+        for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+            if (vox_world_is_fixture(&fixture_match.world, (vox_u32)x,
+                                     100U, z)) {
+                return 103;
+            }
+        }
+    }
+    if (count_events(&fixture_match, VOX_DIGS_EVENT_FIXTURE_BREAK) != 1U ||
+        scrap_bodies != 1U || body_index == VOX_RIGID_MAX_BODIES) return 104;
+    for (i = 0U; i < 16U; ++i) {
+        if (vox_digs_match_step(&fixture_match) != VOX_OK) return 105;
+    }
+    debris_bodies = 0U;
+    for (i = 0U; i < VOX_RIGID_MAX_BODIES; ++i) {
+        if ((fixture_match.ragdolls.bodies[i].flags &
+             VOX_RIGID_BODY_DEBRIS) != 0U) debris_bodies++;
+    }
+    if (saw_event(&fixture_match, VOX_DIGS_EVENT_CAVE_IN) ||
+        debris_bodies != 0U ||
+        (fixture_match.awards[0] &
+         (1U << VOX_DIGS_AWARD_CAVE_IN_ARTIST)) != 0U) return 106;
+    for (x = 96L; x <= 120L; ++x) {
+        for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+            if (vox_world_set(&fixture_match.world, (vox_u32)x, 101U, z,
+                              VOX_MAT_BEDROCK, 0L) != VOX_OK) {
+                return 107;
+            }
+        }
+    }
+    fixture_match.ragdolls.bodies[body_index].position_x_q16 = 108L << 16;
+    fixture_match.ragdolls.bodies[body_index].position_y_q16 = 100L << 16;
+    fixture_match.ragdolls.bodies[body_index].velocity_x_q16 = 0L;
+    fixture_match.ragdolls.bodies[body_index].velocity_y_q16 = 0L;
+    fixture_match.ragdolls.bodies[body_index].angular_velocity_q16 = 0L;
+    fixture_match.ragdolls.bodies[body_index].flags = (vox_u16)(
+        fixture_match.ragdolls.bodies[body_index].flags |
+        VOX_RIGID_BODY_SLEEPING);
+    fixture_match.ragdolls.bodies[body_index].sleep_ticks = 180U;
+    if (vox_digs_match_step(&fixture_match) != VOX_OK) return 108;
+    stable_metal = 0U;
+    loose_metal = 0U;
+    for (y = 96L; y <= 104L; ++y) {
+        for (x = 96L; x <= 120L; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                const vox_cell *cell = vox_world_cell(
+                    &fixture_match.world, (vox_u32)x, (vox_u32)y, z);
+                if (cell != 0 && cell->material == VOX_MAT_METAL) {
+                    stable_metal++;
+                    if ((cell->flags & (VOX_CELL_FIXTURE | VOX_CELL_LOOSE)) !=
+                        0U || cell_overlaps_living_player(
+                            &fixture_match, (vox_u32)x, (vox_u32)y)) {
+                        loose_metal++;
+                    }
+                }
+            }
+        }
+    }
+    if ((fixture_match.ragdolls.bodies[body_index].flags &
+         VOX_RIGID_BODY_ACTIVE) != 0U) return 109;
+    if (stable_metal != 4U) return 145;
+    if (loose_metal != 0U) return 146;
+    if (fixture_match.rigid_settle_discarded != 166U) return 147;
+    if (fixture_match.rigid_material[body_index] != VOX_MAT_AIR ||
+        fixture_match.rigid_loose_cells[body_index] != 0U) return 148;
+    /* Fifteen source cells remain a visual/nonblocking remnant and recycle;
+     * they may not turn into traversal-changing metal. */
+    if (vox_digs_match_init(&fixture_match, &fixture_rules) != VOX_OK) {
+        return 110;
+    }
+    for (y = 96L; y <= 104L; ++y) {
+        for (x = 96L; x <= 120L; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                if (clear_test_cell(&fixture_match.world, (vox_u32)x,
+                                    (vox_u32)y, z) != VOX_OK ||
+                    vox_world_set(&fixture_match.world, (vox_u32)x, 101U, z,
+                                  VOX_MAT_BEDROCK, 0L) != VOX_OK) {
+                    return 111;
+                }
+            }
+        }
+    }
+    if (vox_rigid_spawn(&fixture_match.ragdolls, &body_index,
+                        108L << 16, 100L << 16,
+                        8192L, 8192L, 16384L,
+                        VOX_RIGID_BODY_SCRAP) != VOX_OK) return 112;
+    fixture_match.ragdolls.bodies[body_index].flags = (vox_u16)(
+        fixture_match.ragdolls.bodies[body_index].flags |
+        VOX_RIGID_BODY_SLEEPING);
+    fixture_match.ragdolls.bodies[body_index].sleep_ticks = 180U;
+    fixture_match.rigid_material[body_index] = VOX_MAT_METAL;
+    fixture_match.rigid_loose_cells[body_index] = 15U;
+    if (vox_digs_match_step(&fixture_match) != VOX_OK) return 113;
+    stable_metal = 0U;
+    for (y = 96L; y <= 104L; ++y) {
+        for (x = 96L; x <= 120L; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                const vox_cell *cell = vox_world_cell(
+                    &fixture_match.world, (vox_u32)x, (vox_u32)y, z);
+                if (cell != 0 && cell->material == VOX_MAT_METAL) {
+                    stable_metal++;
+                }
+            }
+        }
+    }
+    if ((fixture_match.ragdolls.bodies[body_index].flags &
+         VOX_RIGID_BODY_ACTIVE) != 0U || stable_metal != 0U ||
+        fixture_match.rigid_settle_discarded != 15U) return 114;
+    /* A qualifying scrap may leave ordinary metal around a living miner, but
+     * never in that miner's swept body footprint. */
+    if (vox_digs_match_init(&fixture_match, &fixture_rules) != VOX_OK) {
+        return 115;
+    }
+    for (y = 98L; y <= 110L; ++y) {
+        for (x = 96L; x <= 120L; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                if (clear_test_cell(&fixture_match.world, (vox_u32)x,
+                                    (vox_u32)y, z) != VOX_OK ||
+                    vox_world_set(&fixture_match.world, (vox_u32)x, 105U, z,
+                                  VOX_MAT_BEDROCK, 0L) != VOX_OK) {
+                    return 116;
+                }
+            }
+        }
+    }
+    fixture_match.players[0].position_x.value_q16 = 108L << 16;
+    fixture_match.players[0].position_y.value_q16 = 104L << 16;
+    fixture_match.players[0].velocity_x.value_q16 = 0L;
+    fixture_match.players[0].velocity_y.value_q16 = 0L;
+    if (vox_rigid_spawn(&fixture_match.ragdolls, &body_index,
+                        108L << 16, 104L << 16,
+                        8192L, 8192L, 16384L,
+                        VOX_RIGID_BODY_SCRAP) != VOX_OK) return 117;
+    fixture_match.ragdolls.bodies[body_index].flags = (vox_u16)(
+        fixture_match.ragdolls.bodies[body_index].flags |
+        VOX_RIGID_BODY_SLEEPING);
+    fixture_match.ragdolls.bodies[body_index].sleep_ticks = 180U;
+    fixture_match.rigid_material[body_index] = VOX_MAT_METAL;
+    fixture_match.rigid_loose_cells[body_index] = 16U;
+    if (vox_digs_match_step(&fixture_match) != VOX_OK) return 118;
+    stable_metal = 0U;
+    for (y = 98L; y <= 110L; ++y) {
+        for (x = 96L; x <= 120L; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                const vox_cell *cell = vox_world_cell(
+                    &fixture_match.world, (vox_u32)x, (vox_u32)y, z);
+                if (cell != 0 && cell->material == VOX_MAT_METAL) {
+                    if ((cell->flags & (VOX_CELL_FIXTURE | VOX_CELL_LOOSE)) !=
+                        0U || cell_overlaps_living_player(
+                            &fixture_match, (vox_u32)x, (vox_u32)y)) {
+                        return 119;
+                    }
+                    stable_metal++;
+                }
+            }
+        }
+    }
+    if (stable_metal != 4U || fixture_match.rigid_settle_discarded != 12U ||
+        (fixture_match.ragdolls.bodies[body_index].flags &
+         VOX_RIGID_BODY_ACTIVE) != 0U) return 120;
     vox_digs_rules_classic(&rope_rules);
     rope_rules.player_count = 1U;
     rope_rules.bot_mask = 0U;
@@ -284,12 +663,12 @@ int main(void)
             }
         }
     }
-    for (x = 80L; x <= 84L; ++x) {
+    for (x = 80L; x <= 95L; ++x) {
         if (vox_world_set(&collapse_match.world, (vox_u32)x, 60U, 0U,
                           VOX_MAT_STONE, 0L) != VOX_OK) return 37;
     }
     if (vox_structure_invalidate_with_cause(&collapse_match.structure,
-                                            82U, 60U, 6U, 0U,
+                                            87U, 60U, 6U, 0U,
                                             VOX_DIGS_TOOL_FIRECRACKER) !=
         VOX_OK) return 38;
     for (i = 0U; i < 12U &&
@@ -306,6 +685,56 @@ int main(void)
         }
     }
     if (i == VOX_RIGID_MAX_BODIES) return 41;
+    /* Fifteen genuine terrain cells, even when touching a fixture, do not
+     * qualify as a cave-in.  The fixture must not pad the cluster count or
+     * turn an ordinary unsupported fragment into debris, attribution, or an
+     * award. */
+    if (vox_digs_match_init(&collapse_match, &collapse_rules) != VOX_OK ||
+        vox_structure_step(&collapse_match.structure, &collapse_match.world,
+                           VOX_STRUCTURE_FRONTIER_CAPACITY) != VOX_OK) {
+        return 121;
+    }
+    for (y = 54L; y <= 68L; ++y) {
+        for (x = 76L; x <= 96L; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                if (clear_test_cell(&collapse_match.world, (vox_u32)x,
+                                    (vox_u32)y, z) != VOX_OK) {
+                    return 122;
+                }
+            }
+        }
+    }
+    for (x = 80L; x <= 94L; ++x) {
+        if (vox_world_set(&collapse_match.world, (vox_u32)x, 60U, 0U,
+                          VOX_MAT_STONE, 0L) != VOX_OK) return 123;
+    }
+    if (vox_world_set(&collapse_match.world, 95U, 60U, 0U,
+                      VOX_MAT_METAL, 20L << 16) != VOX_OK ||
+        vox_world_set_fixture(&collapse_match.world, 95U, 60U, 0U, 1U) !=
+            VOX_OK ||
+        vox_structure_invalidate_with_cause(&collapse_match.structure,
+                                            87U, 60U, 6U, 0U,
+                                            VOX_DIGS_TOOL_FIRECRACKER) !=
+            VOX_OK) {
+        return 124;
+    }
+    for (i = 0U; i < 32U; ++i) {
+        if (vox_digs_match_step(&collapse_match) != VOX_OK) return 125;
+    }
+    debris_bodies = 0U;
+    for (i = 0U; i < VOX_RIGID_MAX_BODIES; ++i) {
+        if ((collapse_match.ragdolls.bodies[i].flags &
+             VOX_RIGID_BODY_DEBRIS) != 0U) {
+            debris_bodies++;
+        }
+    }
+    if (saw_event(&collapse_match, VOX_DIGS_EVENT_CAVE_IN) ||
+        debris_bodies != 0U ||
+        (collapse_match.awards[0] &
+         (1U << VOX_DIGS_AWARD_CAVE_IN_ARTIST)) != 0U ||
+        !vox_world_is_fixture(&collapse_match.world, 95U, 60U, 0U)) {
+        return 126;
+    }
     /* A roof wider than one detached-body capacity must travel through the
      * bounded support frontier as multiple fragments.  This is deliberately
      * cross-chunk: a local invalidation may not leave the far half floating
@@ -399,6 +828,155 @@ int main(void)
         impact_match.last_attacker[1] != 0U ||
         impact_match.rigid_impact_cooldown[body_index] == 0U ||
         !saw_event(&impact_match, VOX_DIGS_EVENT_DEBRIS_IMPACT)) return 45;
+    /* Scrap is not ordinary cave-in terrain: only a body travelling at least
+     * one cell per tick may hurt, it deals minor direct health damage, and
+     * two scraps cannot stack a second hit onto the same miner in one tick. */
+    if (vox_digs_match_init(&impact_match, &impact_rules) != VOX_OK) {
+        return 127;
+    }
+    impact_match.spawn_shield_ticks[0] = 0U;
+    impact_match.spawn_shield_ticks[1] = 0U;
+    impact_match.players[1].position_x.value_q16 = 200L << 16;
+    impact_match.players[1].position_y.value_q16 = 80L << 16;
+    impact_match.players[1].velocity_x.value_q16 = 0L;
+    impact_match.players[1].velocity_y.value_q16 = 0L;
+    for (y = 70L; y <= 90L; ++y) {
+        for (x = 190L; x <= 210L; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                if (clear_test_cell(&impact_match.world, (vox_u32)x,
+                                    (vox_u32)y, z) != VOX_OK) {
+                    return 128;
+                }
+            }
+        }
+    }
+    anatomy_before = impact_match.anatomy[1][VOX_DIGS_PART_TORSO].health;
+    if (vox_rigid_spawn(&impact_match.ragdolls, &body_index,
+                        (199L << 16) + 16384L, 80L << 16,
+                        32768L, 32768L, 16384L,
+                        VOX_RIGID_BODY_SCRAP) != VOX_OK ||
+        vox_rigid_spawn(&impact_match.ragdolls, &body_index_second,
+                        (199L << 16) + 16384L, 80L << 16,
+                        32768L, 32768L, 16384L,
+                        VOX_RIGID_BODY_SCRAP) != VOX_OK) {
+        return 129;
+    }
+    impact_match.ragdolls.bodies[body_index].velocity_x_q16 = 65536L;
+    impact_match.ragdolls.bodies[body_index_second].velocity_x_q16 = 65536L;
+    impact_match.rigid_source[body_index] = 0U;
+    impact_match.rigid_source[body_index_second] = 0U;
+    impact_match.rigid_weapon[body_index] = VOX_DIGS_TOOL_FIRECRACKER;
+    impact_match.rigid_weapon[body_index_second] = VOX_DIGS_TOOL_FIRECRACKER;
+    impact_match.rigid_material[body_index] = VOX_MAT_METAL;
+    impact_match.rigid_material[body_index_second] = VOX_MAT_METAL;
+    if (vox_digs_match_step(&impact_match) != VOX_OK ||
+        impact_match.health[1] != VOX_DIGS_MAX_HEALTH - 1U ||
+        impact_match.alive[1] == 0U ||
+        impact_match.anatomy[1][VOX_DIGS_PART_TORSO].health != anatomy_before ||
+        impact_match.rigid_impact_cooldown[body_index] == 0U ||
+        impact_match.rigid_impact_cooldown[body_index_second] != 0U ||
+        count_events(&impact_match, VOX_DIGS_EVENT_DEBRIS_IMPACT) != 1U ||
+        saw_event(&impact_match, VOX_DIGS_EVENT_KILL)) return 130;
+    /* Every additional half-cell per tick rises by one damage, bounded at
+     * ten; even the cap cannot finish a miner already at one health. */
+    if (vox_digs_match_init(&impact_match, &impact_rules) != VOX_OK) {
+        return 131;
+    }
+    impact_match.spawn_shield_ticks[0] = 0U;
+    impact_match.spawn_shield_ticks[1] = 0U;
+    impact_match.players[1].position_x.value_q16 = 200L << 16;
+    impact_match.players[1].position_y.value_q16 = 80L << 16;
+    impact_match.players[1].velocity_x.value_q16 = 0L;
+    impact_match.players[1].velocity_y.value_q16 = 0L;
+    for (y = 70L; y <= 90L; ++y) {
+        for (x = 190L; x <= 210L; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                if (clear_test_cell(&impact_match.world, (vox_u32)x,
+                                    (vox_u32)y, z) != VOX_OK) {
+                    return 132;
+                }
+            }
+        }
+    }
+    anatomy_before = impact_match.anatomy[1][VOX_DIGS_PART_TORSO].health;
+    if (vox_rigid_spawn(&impact_match.ragdolls, &body_index,
+                        (194L << 16) + 16384L, 80L << 16,
+                        32768L, 32768L, 16384L,
+                        VOX_RIGID_BODY_SCRAP) != VOX_OK) return 133;
+    impact_match.ragdolls.bodies[body_index].velocity_x_q16 = 360448L;
+    impact_match.rigid_source[body_index] = 0U;
+    impact_match.rigid_weapon[body_index] = VOX_DIGS_TOOL_FIRECRACKER;
+    impact_match.rigid_material[body_index] = VOX_MAT_METAL;
+    if (vox_digs_match_step(&impact_match) != VOX_OK ||
+        impact_match.health[1] != VOX_DIGS_MAX_HEALTH - 10U ||
+        impact_match.alive[1] == 0U ||
+        impact_match.anatomy[1][VOX_DIGS_PART_TORSO].health != anatomy_before ||
+        !saw_event(&impact_match, VOX_DIGS_EVENT_DEBRIS_IMPACT) ||
+        saw_event(&impact_match, VOX_DIGS_EVENT_KILL)) return 134;
+    if (vox_digs_match_init(&impact_match, &impact_rules) != VOX_OK) {
+        return 135;
+    }
+    impact_match.spawn_shield_ticks[0] = 0U;
+    impact_match.spawn_shield_ticks[1] = 0U;
+    impact_match.health[1] = 1U;
+    impact_match.players[1].position_x.value_q16 = 200L << 16;
+    impact_match.players[1].position_y.value_q16 = 80L << 16;
+    impact_match.players[1].velocity_x.value_q16 = 0L;
+    impact_match.players[1].velocity_y.value_q16 = 0L;
+    for (y = 70L; y <= 90L; ++y) {
+        for (x = 190L; x <= 210L; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                if (clear_test_cell(&impact_match.world, (vox_u32)x,
+                                    (vox_u32)y, z) != VOX_OK) {
+                    return 136;
+                }
+            }
+        }
+    }
+    if (vox_rigid_spawn(&impact_match.ragdolls, &body_index,
+                        (194L << 16) + 16384L, 80L << 16,
+                        32768L, 32768L, 16384L,
+                        VOX_RIGID_BODY_SCRAP) != VOX_OK) return 137;
+    impact_match.ragdolls.bodies[body_index].velocity_x_q16 = 360448L;
+    impact_match.rigid_source[body_index] = 0U;
+    impact_match.rigid_weapon[body_index] = VOX_DIGS_TOOL_FIRECRACKER;
+    impact_match.rigid_material[body_index] = VOX_MAT_METAL;
+    if (vox_digs_match_step(&impact_match) != VOX_OK ||
+        impact_match.health[1] != 1U || impact_match.alive[1] == 0U ||
+        saw_event(&impact_match, VOX_DIGS_EVENT_KILL) ||
+        saw_event(&impact_match, VOX_DIGS_EVENT_DAMAGE)) return 138;
+    /* A stationary scrap is pass-through: walking into it cannot deal a
+     * contact hit merely because a rigid body is overlapping the miner. */
+    if (vox_digs_match_init(&impact_match, &impact_rules) != VOX_OK) {
+        return 139;
+    }
+    impact_match.spawn_shield_ticks[0] = 0U;
+    impact_match.spawn_shield_ticks[1] = 0U;
+    impact_match.players[1].position_x.value_q16 = 200L << 16;
+    impact_match.players[1].position_y.value_q16 = 80L << 16;
+    impact_match.players[1].velocity_x.value_q16 = 0L;
+    impact_match.players[1].velocity_y.value_q16 = 0L;
+    for (y = 70L; y <= 90L; ++y) {
+        for (x = 190L; x <= 210L; ++x) {
+            for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                if (clear_test_cell(&impact_match.world, (vox_u32)x,
+                                    (vox_u32)y, z) != VOX_OK) {
+                    return 140;
+                }
+            }
+        }
+    }
+    if (vox_rigid_spawn(&impact_match.ragdolls, &body_index,
+                        200L << 16, 80L << 16,
+                        32768L, 32768L, 16384L,
+                        VOX_RIGID_BODY_SCRAP) != VOX_OK) return 141;
+    impact_match.rigid_source[body_index] = 0U;
+    impact_match.rigid_weapon[body_index] = VOX_DIGS_TOOL_FIRECRACKER;
+    impact_match.rigid_material[body_index] = VOX_MAT_METAL;
+    if (vox_digs_match_step(&impact_match) != VOX_OK ||
+        impact_match.health[1] != VOX_DIGS_MAX_HEALTH ||
+        impact_match.rigid_impact_cooldown[body_index] != 0U ||
+        saw_event(&impact_match, VOX_DIGS_EVENT_DEBRIS_IMPACT)) return 142;
     /* A settled terrain fragment returns a bounded compact set of loose
      * material, then records every unmerged cell rather than silently losing
      * it.  This runs after the rigid step, so the new loose cells remain in
@@ -727,6 +1305,12 @@ int main(void)
         vox_world_set(&rope_match.world, (vox_u32)second_x,
                       (vox_u32)second_y, 0U, VOX_MAT_METAL, 20L << 16) !=
             VOX_OK ||
+        /* The fixture shares its collision column with durable terrain.  A
+         * later fixture-only blast must sever a fixture rope rather than
+         * silently downgrading it into a terrain rope. */
+        vox_world_set(&rope_match.world, (vox_u32)second_x,
+                      (vox_u32)second_y, 1U, VOX_MAT_BEDROCK, 0L) !=
+            VOX_OK ||
         vox_world_set_fixture(&rope_match.world, (vox_u32)second_x,
                               (vox_u32)second_y, 0U, 1U) != VOX_OK ||
         vox_world_sleep_all(&rope_match.world) != VOX_OK) return 9;
@@ -767,6 +1351,20 @@ int main(void)
     if (rope_match.ropes[0].state != VOX_DIGS_ROPE_ATTACHED ||
         rope_match.ropes[0].target_x != (vox_u16)second_x ||
         (rope_match.ropes[0].flags & VOX_DIGS_ROPE_TARGET_FIXTURE) == 0U) return 17;
+    if (vox_digs_use_tool(&rope_match, 0U, VOX_DIGS_TOOL_FIRECRACKER,
+                          (vox_u32)second_x, (vox_u32)second_y, 0U) !=
+            VOX_OK ||
+        vox_world_is_fixture(&rope_match.world, (vox_u32)second_x,
+                             (vox_u32)second_y, 0U) ||
+        vox_world_cell(&rope_match.world, (vox_u32)second_x,
+                       (vox_u32)second_y, 1U)->material != VOX_MAT_BEDROCK) {
+        return 143;
+    }
+    rope_input.actions = 0U;
+    if (vox_digs_submit_input(&rope_match, &rope_input) != VOX_OK ||
+        vox_digs_match_step(&rope_match) != VOX_OK ||
+        rope_match.ropes[0].state != VOX_DIGS_ROPE_IDLE ||
+        !saw_event(&rope_match, VOX_DIGS_EVENT_ROPE_BREAK)) return 144;
     rope_input.actions = VOX_DIGS_ACTION_JUMP;
     if (vox_digs_submit_input(&rope_match, &rope_input) != VOX_OK ||
         vox_digs_match_step(&rope_match) != VOX_OK ||

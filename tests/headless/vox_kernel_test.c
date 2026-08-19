@@ -155,6 +155,105 @@ static int test_fixture_stays_out_of_structure(void)
     return 0;
 }
 
+/* A map fixture is authored scenery, not a small suspended terrain cluster.
+ * Keep this deliberately kernel-only: the fixture must survive both ordinary
+ * awake/sleep work and a fixture-only blast before the game layer decides
+ * whether a qualifying explosion should turn it into scrap. */
+static int test_static_fixture_kernel_regression(void)
+{
+    static vox_world world;
+    vox_blast_capture capture;
+    const vox_cell *cell;
+    vox_u32 x;
+    vox_u32 y;
+    vox_u32 tick;
+    vox_u32 fixture_count = 0U;
+    vox_world_init(&world);
+
+    /* Hand-build a suspended two-column hook target with no terrain support.
+     * The nearby blast is centered in air but overlaps its right column. */
+    for (y = 76U; y <= 81U; ++y) {
+        for (x = 120U; x <= 121U; ++x) {
+            if (vox_world_set(&world, x, y, 0U, VOX_MAT_METAL,
+                              TEST_AMBIENT_Q16) != VOX_OK ||
+                vox_world_set_fixture(&world, x, y, 0U, 1U) != VOX_OK) {
+                return 1;
+            }
+            fixture_count++;
+        }
+    }
+    if (vox_world_sleep_all(&world) != VOX_OK) {
+        return 2;
+    }
+    for (y = 76U; y <= 81U; ++y) {
+        for (x = 120U; x <= 121U; ++x) {
+            if (vox_world_wake(&world, x, y, 0U) != VOX_OK) {
+                return 3;
+            }
+        }
+    }
+
+    /* Exercise the structural and falling schedulers while every fixture is
+     * awake.  Any fixture-as-terrain regression would show up as an unstable
+     * or moved cell long before this finishes. */
+    for (tick = 0U; tick < 240U; ++tick) {
+        if (vox_world_step(&world, 0) != VOX_OK) {
+            return 4;
+        }
+    }
+    for (y = 76U; y <= 81U; ++y) {
+        for (x = 120U; x <= 121U; ++x) {
+            cell = vox_world_cell(&world, x, y, 0U);
+            if (cell == 0 || cell->material != VOX_MAT_METAL ||
+                !vox_world_is_fixture(&world, x, y, 0U) ||
+                (cell->flags & (VOX_CELL_LOOSE | VOX_CELL_UNSTABLE |
+                                VOX_CELL_MOVED)) != 0U ||
+                (cell->flags & VOX_CELL_OCCUPIED) == 0U ||
+                vox_world_collision_classify(&world, x, y) !=
+                    VOX_WORLD_COLLISION_SOLID) {
+                return 5;
+            }
+        }
+    }
+    if (world.occupied_cells != fixture_count) {
+        return 6;
+    }
+
+    vox_blast_capture_init(&capture);
+    if (vox_world_blast_capture(&world, 122U, 79U, 0U, 1U, 0L,
+                                &capture) != VOX_OK ||
+        capture.count != 0U || capture.structural_count != 0U ||
+        capture.truncated != 0U || world.occupied_cells != fixture_count) {
+        return 7;
+    }
+
+    /* A fixture-only, non-qualifying blast must not seed an extracted terrain
+     * fragment or later turn the suspended target into falling terrain. */
+    for (tick = 0U; tick < 240U; ++tick) {
+        if (vox_world_step(&world, 0) != VOX_OK) {
+            return 8;
+        }
+    }
+    for (y = 76U; y <= 81U; ++y) {
+        for (x = 120U; x <= 121U; ++x) {
+            cell = vox_world_cell(&world, x, y, 0U);
+            if (cell == 0 || cell->material != VOX_MAT_METAL ||
+                !vox_world_is_fixture(&world, x, y, 0U) ||
+                (cell->flags & (VOX_CELL_LOOSE | VOX_CELL_UNSTABLE |
+                                VOX_CELL_MOVED)) != 0U ||
+                vox_world_collision_classify(&world, x, y) !=
+                    VOX_WORLD_COLLISION_SOLID) {
+                return 9;
+            }
+        }
+    }
+    if (world.occupied_cells != fixture_count ||
+        test_validate_world(&world) != 0) {
+        return 10;
+    }
+    return 0;
+}
+
 static int run_scenario(vox_u32 *hash_out)
 {
     static vox_world world;
@@ -661,6 +760,10 @@ int main(void)
     if (test_fixture_stays_out_of_structure() != 0) {
         fprintf(stderr, "fixture structural-boundary scenario failed\n");
         return 10;
+    }
+    if (test_static_fixture_kernel_regression() != 0) {
+        fprintf(stderr, "static fixture kernel regression failed\n");
+        return 12;
     }
     if (test_cellular_motion() != 0) {
         fprintf(stderr, "cellular motion scenario failed\n");

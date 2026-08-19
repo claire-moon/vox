@@ -64,6 +64,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Parse the Windows release packager
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD 'tools\package-windows-demo.ps1'),
+            [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
       - name: Configure portable scalar core
         run: >-
           cmake -S . -B build

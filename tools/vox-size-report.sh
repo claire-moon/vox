@@ -17,7 +17,8 @@
 #   VOX_SIZE_REPORT    write the machine-readable report here as well
 #   VOX_SIZE_TARGET    target payload size     (default 6291456)
 #   VOX_SIZE_WARN      warning threshold       (default 8388608)
-#   VOX_SIZE_CEILING   hard fail threshold     (default 10485760 = 10 MiB)
+#   VOX_SIZE_CEILING   hard fail threshold (default 10485760 = 10 MiB;
+#                      may be made stricter but cannot exceed that global max)
 #
 # Exit status:
 #   0  payload is at or below the hard ceiling (may still warn)
@@ -31,6 +32,7 @@ SIZE_REPORT=${VOX_SIZE_REPORT:-}
 SIZE_TARGET=${VOX_SIZE_TARGET:-6291456}
 SIZE_WARN=${VOX_SIZE_WARN:-8388608}
 SIZE_CEILING=${VOX_SIZE_CEILING:-10485760}
+SIZE_GLOBAL_MAX=10485760
 
 for threshold in "$SIZE_TARGET" "$SIZE_WARN" "$SIZE_CEILING"; do
     case "$threshold" in
@@ -42,6 +44,10 @@ for threshold in "$SIZE_TARGET" "$SIZE_WARN" "$SIZE_CEILING"; do
 done
 if [ "$SIZE_TARGET" -gt "$SIZE_WARN" ] || [ "$SIZE_WARN" -gt "$SIZE_CEILING" ]; then
     echo "expected VOX_SIZE_TARGET <= VOX_SIZE_WARN <= VOX_SIZE_CEILING" >&2
+    exit 2
+fi
+if [ "$SIZE_CEILING" -gt "$SIZE_GLOBAL_MAX" ]; then
+    echo "VOX_SIZE_CEILING may not exceed the $SIZE_GLOBAL_MAX-byte global maximum" >&2
     exit 2
 fi
 

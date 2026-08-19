@@ -35,8 +35,8 @@ emit metal scrap, and submerged miners receive hashed drowning damage. The new
 headless gates cover conservation, deterministic body order, cluster debris,
 fixture and drowning events, dropship route transitions, and replay selection.
 The current 600-tick SDL load gate begins the interactive dropship sequence and
-records fired 24, explosions 16, crushes 0, effects 836, awake 3790, and
-canonical hash `4f038249`; the same result was
+records fired 18, explosions 16, crushes 0, effects 796, awake 4294, and
+canonical hash `3b60903a`; the same result was
 recaptured in strict `-O0` and `-O2` builds.
 
 This is engineering evidence, not a v0.0.5 release claim. The current source

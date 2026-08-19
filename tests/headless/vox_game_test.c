@@ -4858,6 +4858,77 @@ static int test_v005_terrain_fragment_pool_saturation(void)
     return 0;
 }
 
+/*
+ * Replay keeps its ABI-11 frame compact by carrying the presentation-only
+ * blood stain in the high bit of its existing terrain material word.  Drive
+ * the capture through the public match step so this catches a capture path
+ * that accidentally drops the stain while preserving the material itself.
+ */
+static int test_v005_replay_bloody_terrain_capture(void)
+{
+    vox_digs_rules rules;
+    const vox_cell *cell;
+    const vox_digs_replay_frame *frame;
+    vox_u16 column;
+    vox_u16 row;
+    vox_u16 encoded;
+    if (VOX_ABI_VERSION != 11U ||
+        VOX_DIGS_FX_CARNAGE != 3072U ||
+        VOX_DIGS_MAX_EFFECTS != VOX_DIGS_FX_CARNAGE ||
+        VOX_DIGS_REPLAY_TERRAIN_BLOODY != 32768U) {
+        return 1;
+    }
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 1U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    if (vox_digs_match_init(&v003_match_a, &rules) != VOX_OK ||
+        !v003_clear_box(&v003_match_a.world, 92U, 92U, 108U, 108U)) {
+        return 2;
+    }
+    v003_place_player(&v003_match_a, 0U, 100U, 100U);
+    /* Bedrock is a known solid that cannot fall away before the first
+     * capture; the requested flag lives on the front-most depth slice. */
+    if (vox_world_set(&v003_match_a.world, 104U, 100U,
+                      VOX_WORLD_DEPTH - 1U, VOX_MAT_BEDROCK,
+                      20L << 16) != VOX_OK ||
+        vox_world_set_bloody(&v003_match_a.world, 104U, 100U,
+                              VOX_WORLD_DEPTH - 1U, 1U) != VOX_OK ||
+        vox_world_sleep_all(&v003_match_a.world) != VOX_OK) {
+        return 3;
+    }
+    cell = vox_world_cell(&v003_match_a.world, 104U, 100U,
+                          VOX_WORLD_DEPTH - 1U);
+    if (cell == 0 || cell->material != VOX_MAT_BEDROCK ||
+        (cell->flags & VOX_CELL_BLOODY) == 0U) {
+        return 4;
+    }
+    if (vox_digs_match_step(&v003_match_a) != VOX_OK ||
+        v003_match_a.replay.frame_count != 1U ||
+        v003_match_a.replay.capture_cursor != 1U) {
+        return 5;
+    }
+    frame = &v003_match_a.replay.frames[0];
+    if (frame->terrain_width != VOX_DIGS_REPLAY_WINDOW_DIAMETER ||
+        frame->terrain_height != VOX_DIGS_REPLAY_WINDOW_DIAMETER ||
+        frame->terrain_origin_x > 104U || frame->terrain_origin_y > 100U) {
+        return 6;
+    }
+    column = (vox_u16)(104U - frame->terrain_origin_x);
+    row = (vox_u16)(100U - frame->terrain_origin_y);
+    if (column >= frame->terrain_width || row >= frame->terrain_height) {
+        return 7;
+    }
+    encoded = frame->terrain_material[
+        row * VOX_DIGS_REPLAY_WINDOW_DIAMETER + column];
+    if ((encoded & VOX_DIGS_REPLAY_TERRAIN_BLOODY) == 0U ||
+        (encoded & (vox_u16)~VOX_DIGS_REPLAY_TERRAIN_BLOODY) !=
+            VOX_MAT_BEDROCK) {
+        return 8;
+    }
+    return 0;
+}
+
 static int test_v003_rope_strike_cover_and_shield(void)
 {
     vox_digs_rules rules;
@@ -5398,6 +5469,14 @@ int main(void)
             fprintf(stderr, "DIGS landed-effect surface mismatch (%d)\n",
                     result);
             return 86;
+        }
+    }
+    {
+        int result = test_v005_replay_bloody_terrain_capture();
+        if (result != 0) {
+            fprintf(stderr, "DIGS replay-bloody capture mismatch (%d)\n",
+                    result);
+            return 87;
         }
     }
     {

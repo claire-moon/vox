@@ -169,7 +169,7 @@ jobs:
           "$RUNNER_TEMP/vox-python/bin/python" -m pip install --disable-pip-version-check \
             'openpyxl==3.1.2' 'lxml==5.2.1'
           echo "$RUNNER_TEMP/vox-python/bin" >> "$GITHUB_PATH"
-      # package-linux-demo.sh enforces the 1440 KiB playable-payload ceiling
+      # package-linux-demo.sh enforces the 10 MiB playable-payload ceiling
       # itself, so a bundle that outgrew the budget fails here rather than
       # being discovered by whoever downloads it.
       - name: Build and verify Linux release bundle

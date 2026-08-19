@@ -53,9 +53,11 @@
 #define VOX_DIGS_DASH_INVULNERABILITY_TICKS 8U
 #define VOX_DIGS_DASH_SPEED_Q16 (5L << 16)
 #define VOX_DIGS_MAX_PROJECTILES 64U
-#define VOX_DIGS_FX_RETRO 1024U
-#define VOX_DIGS_FX_STANDARD 4096U
-#define VOX_DIGS_FX_CARNAGE 8192U
+/* Fixed public match storage remains ABI 11.  Carnage is achieved through
+ * deterministic pool reuse and broader spray, not a larger public array. */
+#define VOX_DIGS_FX_RETRO 768U
+#define VOX_DIGS_FX_STANDARD 1536U
+#define VOX_DIGS_FX_CARNAGE 3072U
 #define VOX_DIGS_MAX_EFFECTS VOX_DIGS_FX_CARNAGE
 #define VOX_DIGS_MAX_EVENTS 128U
 #define VOX_DIGS_ANATOMY_PART_COUNT 15U
@@ -73,6 +75,9 @@
     (VOX_DIGS_REPLAY_WINDOW_RADIUS * 2U + 1U)
 #define VOX_DIGS_REPLAY_WINDOW_CELLS \
     (VOX_DIGS_REPLAY_WINDOW_DIAMETER * VOX_DIGS_REPLAY_WINDOW_DIAMETER)
+/* terrain_material[] carries this presentation flag in addition to its
+ * low-bit material identifier, avoiding a replay-frame ABI expansion. */
+#define VOX_DIGS_REPLAY_TERRAIN_BLOODY 32768U
 #define VOX_DIGS_REPLAY_MAX_RIGIDS 24U
 #define VOX_DIGS_REPLAY_MAX_FLUIDS 32U
 #define VOX_DIGS_REPLAY_MAX_EFFECTS 24U
