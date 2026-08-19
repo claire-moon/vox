@@ -6658,6 +6658,55 @@ static const char *demo_award_name(vox_u16 award)
     }
 }
 
+/* Death wording belongs to the SDL presentation layer.  It deliberately
+ * describes the event without changing its authoritative kill, score,
+ * relationship, or audio semantics. */
+static void demo_format_killfeed_line(const demo_app *app,
+                                      vox_u16 player_count,
+                                      const vox_digs_event *event,
+                                      char *line)
+{
+    if (event->source < player_count && event->source != event->target) {
+        sprintf(line, "%s FIRED %s", demo_player_name(app, event->source),
+                demo_player_name(app, event->target));
+    } else if (event->target < player_count) {
+        sprintf(line, "%s CLOCKED OUT!",
+                demo_player_name(app, event->target));
+    } else {
+        strcpy(line, "CLOCKED OUT!");
+    }
+}
+
+static int demo_format_kill_banner_line(const demo_app *app,
+                                        vox_u16 player_count,
+                                        const vox_digs_event *event,
+                                        int source_local, int target_local,
+                                        char *line)
+{
+    if (source_local && event->source != event->target) {
+        if (target_local) {
+            sprintf(line, "%s FIRED %s",
+                    demo_player_name(app, event->source),
+                    demo_player_name(app, event->target));
+        } else {
+            sprintf(line, "YOU FIRED %s",
+                    demo_player_name(app, event->target));
+        }
+        return 1;
+    }
+    if (target_local) {
+        if (event->source < player_count &&
+            event->source != event->target) {
+            sprintf(line, "FIRED BY %s",
+                    demo_player_name(app, event->source));
+        } else {
+            strcpy(line, "YOU CLOCKED OUT!");
+        }
+        return 1;
+    }
+    return 0;
+}
+
 static void demo_add_killfeed(demo_app *app, const char *text_value)
 {
     int line;
@@ -6697,16 +6746,7 @@ static void demo_register_kill(demo_app *app,
     char line[48];
     int source_local = event->source < (vox_u16)app->local_players;
     int target_local = event->target < (vox_u16)app->local_players;
-    if (event->source < demo_match.rules.player_count &&
-        event->source != event->target) {
-        sprintf(line, "%s > %s", demo_player_name(app, event->source),
-                demo_player_name(app, event->target));
-    } else if (event->target < demo_match.rules.player_count) {
-        sprintf(line, "%s LOST TO THE MINE",
-                demo_player_name(app, event->target));
-    } else {
-        strcpy(line, "THE MINE CLAIMED ANOTHER");
-    }
+    demo_format_killfeed_line(app, demo_match.rules.player_count, event, line);
     demo_add_killfeed(app, line);
     if (event->target < DEMO_LOCAL_MAX) {
         app->spree_count[event->target] = 0U;
@@ -6724,14 +6764,9 @@ static void demo_register_kill(demo_app *app,
         }
         app->last_kill_tick[source] = event->tick;
         ++app->spree_count[source];
-        if (target_local) {
-            sprintf(line, "%s KILLED %s",
-                    demo_player_name(app, event->source),
-                    demo_player_name(app, event->target));
-        } else {
-            sprintf(line, "YOU KILLED %s",
-                    demo_player_name(app, event->target));
-        }
+        (void)demo_format_kill_banner_line(app, demo_match.rules.player_count,
+                                           event, source_local, target_local,
+                                           line);
         demo_set_banner(app, line, 0);
         if (app->multikill_count[source] == 2U) {
             demo_set_banner(app, "DOUBLE KILL!", 1);
@@ -6745,20 +6780,68 @@ static void demo_register_kill(demo_app *app,
         }
         demo_audio_emit(app, VOX_AUDIO_PRESET_KILL_CONFIRM,
                         event->variant, VOX_AUDIO_PAN_CENTER);
-    } else if (target_local) {
-        if (event->source < demo_match.rules.player_count &&
-            event->source != event->target) {
-            sprintf(line, "KILLED BY %s",
-                    demo_player_name(app, event->source));
-        } else {
-            strcpy(line, "THE MINE GOT YOU");
-        }
+    } else if (demo_format_kill_banner_line(app, demo_match.rules.player_count,
+                                             event, source_local, target_local,
+                                             line)) {
         demo_set_banner(app, line, 0);
     }
     if (target_local) {
         app->death_camera_hold = 72U;
         app->death_camera_player = event->target;
     }
+}
+
+static int demo_killfeed_self_test(void)
+{
+    static demo_app app;
+    vox_digs_event event;
+    char line[48];
+
+    memset(&app, 0, sizeof(app));
+    strcpy(app.player_names[0], "MINER");
+    strcpy(app.player_names[1], "RIVET");
+    strcpy(app.player_names[2], "CINDER");
+    strcpy(app.player_names[3], "FLAMEY");
+    app.local_players = 1;
+
+    memset(&event, 0, sizeof(event));
+    event.source = 2U;
+    event.target = 3U;
+    demo_format_killfeed_line(&app, 4U, &event, line);
+    if (strcmp(line, "CINDER FIRED FLAMEY") != 0) return 1;
+
+    event.source = VOX_DIGS_NO_PLAYER;
+    event.target = 3U;
+    demo_format_killfeed_line(&app, 4U, &event, line);
+    if (strcmp(line, "FLAMEY CLOCKED OUT!") != 0) return 2;
+
+    event.target = VOX_DIGS_NO_PLAYER;
+    demo_format_killfeed_line(&app, 4U, &event, line);
+    if (strcmp(line, "CLOCKED OUT!") != 0) return 3;
+
+    event.source = 0U;
+    event.target = 1U;
+    if (!demo_format_kill_banner_line(&app, 4U, &event, 1, 0, line) ||
+        strcmp(line, "YOU FIRED RIVET") != 0) {
+        return 4;
+    }
+
+    event.source = 1U;
+    event.target = 0U;
+    if (!demo_format_kill_banner_line(&app, 4U, &event, 0, 1, line) ||
+        strcmp(line, "FIRED BY RIVET") != 0) {
+        return 5;
+    }
+
+    event.source = VOX_DIGS_NO_PLAYER;
+    event.target = 0U;
+    if (!demo_format_kill_banner_line(&app, 4U, &event, 0, 1, line) ||
+        strcmp(line, "YOU CLOCKED OUT!") != 0) {
+        return 6;
+    }
+
+    printf("DIGS kill-feed self-test passed\n");
+    return 0;
 }
 
 static void demo_process_events(demo_app *app)
@@ -10609,7 +10692,7 @@ static int demo_screenshot(const char *screen_name, const char *path)
  * renders a flat panel because a helper returned early, looks exactly like a
  * screen that is fine until somebody opens it.
  */
-static int demo_menu_self_test(void)
+static int demo_menu_self_test(const char *path)
 {
     static const char *screens[12] = {
         "title", "setup", "options", "options2", "inbox", "inbox-read",
@@ -10623,13 +10706,16 @@ static int demo_menu_self_test(void)
     static const int rows_expected[12] = {
         1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1
     };
-    const char *path = "/tmp/digs-menu-self-test.ppm";
+    const char *output_path = path;
     int i;
+    if (output_path == 0 || output_path[0] == '\0') {
+        output_path = "/tmp/digs-menu-self-test.ppm";
+    }
     for (i = 0; i < 12; ++i) {
         vox_u32 x;
         vox_u32 distinct = 0U;
         vox_u8 seen[8];
-        int result = demo_screenshot(screens[i], path);
+        int result = demo_screenshot(screens[i], output_path);
         if (result != 0) {
             fprintf(stderr, "menu self-test: %s did not render\n",
                     screens[i]);
@@ -10682,7 +10768,7 @@ static int demo_menu_self_test(void)
             }
         }
     }
-    (void)remove(path);
+    (void)remove(output_path);
     printf("DIGS menu self-test passed screens=12\n");
     return 0;
 }
@@ -10797,12 +10883,17 @@ int main(int argc, char **argv)
     if (argc >= 2 && strcmp(argv[1], "--particle-overlay-self-test") == 0) {
         return demo_particle_overlay_self_test();
     }
+    if (argc >= 2 && strcmp(argv[1], "--killfeed-self-test") == 0) {
+        return demo_killfeed_self_test();
+    }
     if (argc >= 2 && strcmp(argv[1], "--fixed-step-self-test") == 0) {
         return demo_fixed_step_self_test();
     }
     if (argc >= 2 && strcmp(argv[1], "--menu-self-test") == 0) {
+        const char *path = argc >= 3 ? argv[2] :
+                           "/tmp/digs-menu-self-test.ppm";
         demo_prepare_targets();
-        return demo_menu_self_test();
+        return demo_menu_self_test(path);
     }
     if (argc >= 4 && strcmp(argv[1], "--shot") == 0) {
         demo_prepare_targets();

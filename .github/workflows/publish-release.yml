@@ -223,6 +223,7 @@ jobs:
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ needs.guard.outputs.version }}
+          VCPKG_INSTALLATION_ROOT: C:\vcpkg
         run: >-
           powershell -NoProfile -ExecutionPolicy Bypass -File
           .\tools\package-windows-demo.ps1 -Version $env:RELEASE_VERSION

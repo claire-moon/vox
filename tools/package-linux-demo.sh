@@ -241,6 +241,9 @@ else
 fi
 
 mkdir -p -- "$EVIDENCE_DIR"
+# Keep the archive rooted in the checkout's declared product version.  CI
+# suffixes name the artifact, not a separate feedback form.
+CURRENT_FEEDBACK_FORM="V$("$ROOT/tools/vox-version.sh")-QUICK-FEEDBACK.txt"
 capture_evidence ctest "$BUILD_DIR" \
     ctest -C Release --output-on-failure
 capture_evidence qa-workbook-current "$ROOT" \
@@ -271,14 +274,17 @@ capture_evidence digs-camera-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --camera-self-test
 capture_evidence digs-fixed-step-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --fixed-step-self-test
-# v0.0.4 adds a save layer and a window widget every screen draws through.
-# Both can fail in ways the simulation tests cannot see, so both are shipped
-# as package evidence alongside the determinism logs.
+capture_evidence digs-killfeed-self-test "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --killfeed-self-test
+# The save layer and a window widget every screen draws through both can fail
+# in ways the simulation tests cannot see, so both ship evidence alongside the
+# determinism logs.
 capture_evidence digs-chronicle-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --chronicle-self-test \
         "$EVIDENCE_DIR/digs-chronicle-self-test.dat"
 capture_evidence digs-menu-self-test "$EVIDENCE_DIR" \
-    "$BUILD_DIR/digs_demo" --menu-self-test
+    "$BUILD_DIR/digs_demo" --menu-self-test \
+    "$EVIDENCE_DIR/digs-menu-self-test.ppm"
 capture_evidence digs-session-evidence "$EVIDENCE_DIR" \
     env VOX_SESSION_DEMO="$BUILD_DIR/digs_demo" \
         "$ROOT/tools/vox-session-evidence.sh"
@@ -337,7 +343,7 @@ install -m 0644 -- "$ROOT/packaging/linux/libexec/vox-runtime.sh" \
     "$STAGE_DIR/libexec/vox-runtime.sh"
 copy_file "$ROOT/packaging/linux/START-HERE.txt" "$STAGE_DIR/START-HERE.txt"
 copy_file "$ROOT/CG-README.TXT" "$STAGE_DIR/CG-README.TXT"
-copy_file "$ROOT/qa/V0.0.4-QUICK-FEEDBACK.txt" \
+copy_file "$ROOT/qa/$CURRENT_FEEDBACK_FORM" \
     "$STAGE_DIR/QUICK-FEEDBACK.txt"
 
 copy_file "$ROOT/LICENSE" "$STAGE_DIR/LICENSE"
@@ -362,7 +368,6 @@ if [[ -d "$ROOT/qa" ]]; then
     # Derived from the VERSION file, not from $VERSION: the latter carries
     # suffixes like -ci and -dev, which name no form and would fail the
     # check below on every CI package run.
-    CURRENT_FEEDBACK_FORM="V$("$ROOT/tools/vox-version.sh")-QUICK-FEEDBACK.txt"
     for form in "$STAGE_DIR"/qa/V*-QUICK-FEEDBACK.txt; do
         [[ -e "$form" ]] || continue
         if [[ "$(basename -- "$form")" != "$CURRENT_FEEDBACK_FORM" ]]; then
