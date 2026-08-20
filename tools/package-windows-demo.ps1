@@ -110,9 +110,11 @@ if ($Triplet -notmatch '^[A-Za-z0-9_-]+$') {
     Stop-Package 'Vcpkg triplet may contain only letters, digits, underscore, and hyphen'
 }
 
-& $vcpkgExe install ("sdl2:" + $Triplet)
-if ($LASTEXITCODE -ne 0) {
-    Stop-Package "vcpkg could not install SDL2:$Triplet"
+$manifest = Join-Path $Root 'vcpkg.json'
+$configuration = Join-Path $Root 'vcpkg-configuration.json'
+if (-not (Test-Path -LiteralPath $manifest -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $configuration -PathType Leaf)) {
+    Stop-Package 'vcpkg.json and vcpkg-configuration.json are required for the pinned Windows dependency set'
 }
 
 $stamp = (& git -C $Root show -s --format=%ct HEAD).Trim()
@@ -130,13 +132,26 @@ $work = Join-Path ([System.IO.Path]::GetTempPath()) (
     "vox-windows-package-" + [System.Guid]::NewGuid().ToString('N'))
 $build = Join-Path $work 'build'
 $stage = Join-Path $work $stem
+$vcpkgInstalled = Join-Path $work 'vcpkg_installed'
 
 try {
-    New-Item -ItemType Directory -Force -Path $DistDir, $work, $stage | Out-Null
+    New-Item -ItemType Directory -Force -Path $DistDir, $work, $stage, $vcpkgInstalled | Out-Null
+
+    # Manifest mode is rooted at the checked-in dependency record.  Its
+    # installed tree stays disposable, so a packaging run never mutates or
+    # reuses a global dependency payload.
+    & $vcpkgExe install "--x-manifest-root=$Root" `
+        "--x-install-root=$vcpkgInstalled" "--triplet=$Triplet"
+    if ($LASTEXITCODE -ne 0) {
+        Stop-Package "vcpkg could not install the pinned manifest dependencies for $Triplet"
+    }
 
     & cmake -S $Root -B $build -A x64 `
         "-DCMAKE_TOOLCHAIN_FILE=$toolchain" `
         "-DVCPKG_TARGET_TRIPLET=$Triplet" `
+        "-DVCPKG_MANIFEST_DIR=$Root" `
+        "-DVCPKG_INSTALLED_DIR=$vcpkgInstalled" `
+        '-DVCPKG_MANIFEST_INSTALL=OFF' `
         '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>' `
         '-DVOX_BUILD_TESTS=ON' `
         '-DVOX_BUILD_SDL2_DEMO=ON' `
@@ -157,7 +172,7 @@ try {
     if (-not (Test-Path -LiteralPath $demo -PathType Leaf)) {
         Stop-Package 'the Release digs_demo.exe was not produced'
     }
-    # This named the Lua catalog manifest, which v0.0.4 removed. Check that
+    # This used to name a removed Lua catalog manifest. Check that
     # CMake staged a share tree at all, rather than one file inside it that
     # may come and go.
     if (-not (Test-Path -LiteralPath (Join-Path $share 'digs') -PathType Container)) {

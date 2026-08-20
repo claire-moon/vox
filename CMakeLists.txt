@@ -608,7 +608,8 @@ if (VOX_BUILD_TESTS)
         add_test(NAME digs_dropship_start
             COMMAND digs_demo --dropship-start-self-test)
         add_test(NAME digs_menu_screens
-            COMMAND digs_demo --menu-self-test)
+            COMMAND digs_demo --menu-self-test
+                    ${CMAKE_CURRENT_BINARY_DIR}/digs-menu-self-test.ppm)
         add_test(NAME digs_chronicle_persistence
             COMMAND digs_demo --chronicle-self-test
                     ${CMAKE_CURRENT_BINARY_DIR}/digs-chronicle-self-test.dat)
@@ -628,6 +629,8 @@ if (VOX_BUILD_TESTS)
             COMMAND digs_demo --rigid-overlay-self-test)
         add_test(NAME digs_particle_overlay
             COMMAND digs_demo --particle-overlay-self-test)
+        add_test(NAME digs_killfeed_presentation
+            COMMAND digs_demo --killfeed-self-test)
         add_test(NAME digs_fixed_step_debt
             COMMAND digs_demo --fixed-step-self-test)
         # The shipped payload (digs_demo plus the staged share/ tree) is
