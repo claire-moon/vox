@@ -20,13 +20,18 @@ CONTROLLER_DB_COMMIT = "8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5"
 CONTROLLER_DB_LICENSE = "Zlib"
 
 
-def is_controller_db_file(relative: str) -> bool:
+def is_controller_db_data_file(relative: str) -> bool:
     return relative in {
-        "LICENSES/SDL_GameControllerDB.txt",
+        "extras/gamecontrollerdb.txt",
         "share/digs/controllers/gamecontrollerdb.txt",
-        "third_party/SDL_GameControllerDB/LICENSE",
         "third_party/SDL_GameControllerDB/gamecontrollerdb.txt",
     }
+
+
+def is_controller_db_file(relative: str) -> bool:
+    return (relative == "LICENSES/SDL_GameControllerDB.txt" or
+            relative == "third_party/SDL_GameControllerDB/LICENSE" or
+            is_controller_db_data_file(relative))
 
 
 def is_sdl2_notice_file(relative: str) -> bool:
@@ -163,6 +168,12 @@ def main() -> int:
         for item, path in zip(files, paths)
         if is_controller_db_file(path.relative_to(root).as_posix())
     ]
+    controller_db_data_file_ids = [
+        item["SPDXID"]
+        for item, path in zip(files, paths)
+        if is_controller_db_data_file(path.relative_to(root).as_posix())
+    ]
+    include_controller_db = bool(controller_db_data_file_ids)
     sdl_comment = (
         "Bundled as a statically linked component of the Windows executable."
         if args.bundled_sdl2
@@ -226,7 +237,7 @@ def main() -> int:
                 "comment": sdl_comment,
             }
         ] if include_sdl2 else [])
-        + [
+        + ([
             {
                 "name": "SDL GameControllerDB",
                 "SPDXID": controller_db_id,
@@ -246,7 +257,7 @@ def main() -> int:
                     f"included in this {distribution_kind}."
                 ),
             }
-        ],
+        ] if include_controller_db else []),
         "files": files,
         "relationships": [
             {
@@ -263,22 +274,22 @@ def main() -> int:
                 "comment": sdl_relationship_comment,
             }
         ] if include_sdl2 else [])
-        + [
+        + ([
             {
                 "spdxElementId": project_id,
                 "relationshipType": "DEPENDS_ON",
                 "relatedSpdxElement": controller_db_id,
                 "comment": "Pinned controller mapping data; bundled.",
             }
-        ]
-        + [
+        ] if include_controller_db else [])
+        + ([
             {
                 "spdxElementId": controller_db_id,
                 "relationshipType": "CONTAINS",
                 "relatedSpdxElement": identifier,
             }
             for identifier in controller_db_file_ids
-        ]
+        ] if include_controller_db else [])
         + [
             {
                 "spdxElementId": project_id,

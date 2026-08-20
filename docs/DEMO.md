@@ -26,7 +26,8 @@ human release work and presentation features that remain open.
 
 The strict-C90 build now includes bounded, integer-authoritative pools for
 persistent water/lava/blood volumes, oriented rigid bodies and joints, corpse
-assemblies, blast debris, structural cluster extraction, always-toggle grapple
+assemblies, material-backed terrain fragments, structural cluster extraction,
+always-toggle grapple
 targeting, forward dash and invulnerability, headshots, kill healing, awards,
 the moving dropship, and a render-only best-kill replay ledger. Fluid flow uses
 gravity-increasing y coordinates and exact 3-D terrain blocking; fixture blasts
@@ -34,8 +35,8 @@ emit metal scrap, and submerged miners receive hashed drowning damage. The new
 headless gates cover conservation, deterministic body order, cluster debris,
 fixture and drowning events, dropship route transitions, and replay selection.
 The current 600-tick SDL load gate begins the interactive dropship sequence and
-records fired 23, explosions 16, crushes 0, effects 978, awake 4616, and
-canonical hash `c53b59d9`; the same result was
+records fired 18, explosions 16, crushes 0, effects 796, awake 4294, and
+canonical hash `3b60903a`; the same result was
 recaptured in strict `-O0` and `-O2` builds.
 
 This is engineering evidence, not a v0.0.5 release claim. The current source
@@ -126,10 +127,13 @@ Numeric slots are stable across releases; the names are v0.0.4 gameplay names
 layered over them, so a saved binding or a replay does not break when a weapon
 is renamed.
 
-The pools are fixed and bounded: up to 64 authoritative projectiles and 768
-transient voxel effects. A stable slot order, integer positions and velocities,
-and bounded projectile substeps make exhaustion and collision behavior
-repeatable.
+The pools are fixed and bounded: up to 64 authoritative projectiles and 1,024,
+4,096, or 8,192 effects according to the selected FX budget. Player-cut soil,
+stone, coal, biomass, sand, and ordinary metal use those effect slots as
+material-backed fragments: their actual source material flies, bounces, and
+returns as loose terrain instead of expiring as invented dust. A stable slot
+order, integer positions and velocities, and bounded projectile substeps make
+exhaustion and collision behavior repeatable.
 
 ## The miners
 
@@ -216,6 +220,12 @@ The host builds a render-only snapshot for miners and projectiles so they
 receive the same Lightfield treatment without mutating authoritative terrain or
 replay hashes. Transient gore, smoke, sparks, and dust are then blended as
 compact screen-space marks, so they cannot overwrite terrain as opaque blocks.
+Material-backed terrain fragments are voxelized into the terrain overlay before
+miners, pass through them while airborne, bounce with fixed-point sweeps, and
+restore only as loose nonblocking terrain. Other solid marks settle only after
+a swept terrain hit and remain nonblocking.
+Blood impacts stain the struck terrain surface without becoming material or
+blocking a miner; airborne TTL expiry does not create a stain.
 SDL2 uploads the completed RGB texture and scales it to the window with
 letterboxing.
 

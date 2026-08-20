@@ -20,10 +20,12 @@ BUILD_JOBS=${VOX_BUILD_JOBS:-}
 NAMED_BENCH_QUALIFY=${VOX_NAMED_BENCH_QUALIFY:-0}
 GLIBC_MAX=${VOX_PACKAGE_GLIBC_MAX:-2.35}
 # Playable payload budget: the binary plus the runtime data it needs to boot.
-# 1474560 is a 1440 KiB floppy; the target and warning lines are advisory.
-PACKAGE_SIZE_CEILING=${VOX_PACKAGE_SIZE_CEILING:-1474560}
-PACKAGE_SIZE_WARN=${VOX_PACKAGE_SIZE_WARN:-1100000}
-PACKAGE_SIZE_TARGET=${VOX_PACKAGE_SIZE_TARGET:-740000}
+# 10485760 is the global 10 MiB playable payload cap; target and warning are
+# advisory.  Callers may choose a stricter ceiling, never a larger one.
+GLOBAL_PAYLOAD_CEILING=10485760
+PACKAGE_SIZE_CEILING=${VOX_PACKAGE_SIZE_CEILING:-10485760}
+PACKAGE_SIZE_WARN=${VOX_PACKAGE_SIZE_WARN:-8388608}
+PACKAGE_SIZE_TARGET=${VOX_PACKAGE_SIZE_TARGET:-6291456}
 CONTROLLER_DB="$ROOT/third_party/SDL_GameControllerDB/gamecontrollerdb.txt"
 CONTROLLER_DB_SHA256=dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0
 WORK_DIR=
@@ -37,6 +39,20 @@ die()
     printf 'package-linux-demo: %s\n' "$*" >&2
     exit 1
 }
+
+for size_limit in "$PACKAGE_SIZE_TARGET" "$PACKAGE_SIZE_WARN" \
+                  "$PACKAGE_SIZE_CEILING"; do
+    [[ "$size_limit" =~ ^[0-9]+$ ]] || \
+        die 'package size thresholds must be non-negative integers'
+done
+if (( PACKAGE_SIZE_TARGET > PACKAGE_SIZE_WARN ||
+      PACKAGE_SIZE_WARN > PACKAGE_SIZE_CEILING )); then
+    die 'expected VOX_PACKAGE_SIZE_TARGET <= VOX_PACKAGE_SIZE_WARN <= VOX_PACKAGE_SIZE_CEILING'
+fi
+if (( PACKAGE_SIZE_CEILING == 0 ||
+      PACKAGE_SIZE_CEILING > GLOBAL_PAYLOAD_CEILING )); then
+    die "VOX_PACKAGE_SIZE_CEILING must be between 1 and ${GLOBAL_PAYLOAD_CEILING} bytes"
+fi
 
 [[ "$NAMED_BENCH_QUALIFY" == 0 || "$NAMED_BENCH_QUALIFY" == 1 ]] || \
     die 'VOX_NAMED_BENCH_QUALIFY must be 0 or 1'
@@ -303,6 +319,10 @@ install -D -m 0644 -- "$CONTROLLER_DB" \
     "$STAGE_DIR/extras/gamecontrollerdb.txt"
 [[ -r "$STAGE_DIR/extras/gamecontrollerdb.txt" ]] || \
     die 'the optional controller database was not packaged'
+CONTROLLER_DB_STAGED_SHA256=$(sha256sum \
+    "$STAGE_DIR/extras/gamecontrollerdb.txt" | awk '{print $1}')
+[[ "$CONTROLLER_DB_STAGED_SHA256" == "$CONTROLLER_DB_SHA256" ]] || \
+    die "packaged SDL GameControllerDB checksum mismatch: $CONTROLLER_DB_STAGED_SHA256"
 install -m 0755 -- "$ROOT/packaging/linux/run-digs.sh" \
     "$STAGE_DIR/run-digs.sh"
 install -m 0755 -- "$ROOT/packaging/linux/smoke-test.sh" \
@@ -398,7 +418,7 @@ if [[ $(printf '%s\n%s\n' "$GLIBC_REQUIRED" "$GLIBC_MAX" |
 fi
 
 # v0.0.4 budgets the playable payload -- the binary plus the runtime data it
-# needs to boot -- at a 1440 KiB floppy.  Documentation, licences, QA material
+# needs to boot -- under the 10 MiB playable-payload cap. Documentation, licences, QA material
 # and the evidence bundle are tester material and stay outside the budget.
 # Fail here, before the archive can reach a release page, in the same spirit
 # as the glibc baseline gate above.
@@ -498,6 +518,13 @@ tar -xzf "$BINARY_ARCHIVE" -C "$PACKAGED_CHECK_DIR"
 PACKAGED_ROOT="$PACKAGED_CHECK_DIR/$ARCHIVE_STEM"
 [[ -x "$PACKAGED_ROOT/run-digs.sh" ]] || \
     die 'the packaged Linux launcher is missing or not executable'
+PACKAGED_CONTROLLER_DB="$PACKAGED_ROOT/extras/gamecontrollerdb.txt"
+[[ -r "$PACKAGED_CONTROLLER_DB" ]] || \
+    die 'the packaged Linux controller database is missing'
+PACKAGED_CONTROLLER_DB_SHA256=$(sha256sum "$PACKAGED_CONTROLLER_DB" | \
+    awk '{print $1}')
+[[ "$PACKAGED_CONTROLLER_DB_SHA256" == "$CONTROLLER_DB_SHA256" ]] || \
+    die "packaged Linux SDL GameControllerDB checksum mismatch: $PACKAGED_CONTROLLER_DB_SHA256"
 # Assert the property, not one payload file.  This check named the Lua
 # catalog manifest, which v0.0.4 removed, so it failed on a package that was
 # perfectly good.  Comparing the two trees keeps it testing what it is for --

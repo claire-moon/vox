@@ -37,8 +37,10 @@ Local modifications:
   are VOX additions.
 
 Distribution:
-  The database is copied into share/digs/controllers/gamecontrollerdb.txt
-  for SDL2 to load before controller enumeration. The license is reproduced
+  The database is copied into extras/gamecontrollerdb.txt in desktop binary
+  bundles. It is an opt-in drop-in: copy it to
+  share/digs/controllers/gamecontrollerdb.txt, or set DIGS_GAMECONTROLLERDB,
+  before SDL2 loads it during controller enumeration. The license is reproduced
   in LICENSES/SDL_GameControllerDB.txt in binary bundles. Corresponding Source
   archives retain this complete vendored directory.
 

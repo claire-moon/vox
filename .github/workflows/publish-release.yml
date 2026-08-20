@@ -9,7 +9,7 @@ name: publish-release
 # very bad way to find out you have just overwritten the assets of a release
 # that has been public for months.
 #
-# Two guards make that outcome unreachable rather than merely unlikely:
+# Three guards make that outcome unreachable rather than merely unlikely:
 #
 #   1. The tag must equal `v` plus the VERSION file at the tagged commit.
 #      A tag naming a tree that does not agree with it is refused. Older tags
@@ -20,6 +20,10 @@ name: publish-release
 #      Replacing published assets requires a manual dispatch that names the
 #      tag and types the confirmation, so it cannot happen as a side effect
 #      of pushing anything.
+#
+#   3. The tagged commit must already be reachable from protected main. A
+#      feature-branch tag is not release authority, even if its VERSION text
+#      happens to agree with the tag name.
 #
 # The Win32 legacy addendum has its own workflow and is deliberately not
 # invoked from here. It augments an existing release in place, which is
@@ -81,6 +85,23 @@ jobs:
         with:
           ref: ${{ steps.resolve.outputs.version }}
           fetch-depth: 0
+      - name: The tagged commit must already be on protected main
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin \
+              +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+              cat >&2 <<'EOF'
+          Refusing to publish a tag whose commit is not reachable from main.
+
+          A feature/review branch can carry a VERSION-consistent tag, but it
+          has not passed the protected-main integration boundary required for
+          a release. Merge it through reviewed main first, then create the
+          release tag from that accepted history.
+          EOF
+              exit 1
+          fi
+          printf 'tagged commit is reachable from origin/main\n'
       - name: The tag must agree with the tree it names
         env:
           RELEASE_VERSION: ${{ steps.resolve.outputs.version }}
@@ -169,7 +190,7 @@ jobs:
           "$RUNNER_TEMP/vox-python/bin/python" -m pip install --disable-pip-version-check \
             'openpyxl==3.1.2' 'lxml==5.2.1'
           echo "$RUNNER_TEMP/vox-python/bin" >> "$GITHUB_PATH"
-      # package-linux-demo.sh enforces the 1440 KiB playable-payload ceiling
+      # package-linux-demo.sh enforces the 10 MiB playable-payload ceiling
       # itself, so a bundle that outgrew the budget fails here rather than
       # being discovered by whoever downloads it.
       - name: Build and verify Linux release bundle

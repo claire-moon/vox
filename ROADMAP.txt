@@ -52,7 +52,9 @@ v0.0.4 THE BOTS REMEMBER:
     them;
   - a standard window widget with scrolling and wrapping used by every screen;
   - removal of the Rust boundary, the C++98 translation unit, and the Lua
-    catalog sandbox: v0.0.4 is ISO C90 only, under a 1440 KiB payload ceiling.
+    catalog sandbox: v0.0.4 is ISO C90 only. Its former 1440 KiB ceiling is
+    superseded for current development by the repository-wide 10 MiB playable
+    payload ceiling enforced by tools/vox-size-report.sh and packaging.
 
   ABI 10, settings schema 5, and chronicle format 1 are intentional
   compatibility boundaries; see docs/rfcs/0003. The portable-core CI matrix is

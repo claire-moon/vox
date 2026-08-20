@@ -9,6 +9,7 @@
 #include "digs_miner_art.h"
 #include "vox/vox_audio.h"
 #include "vox/vox_game.h"
+#include "vox_digs_private.h"
 #include "digs_lines.h"
 #include "digs_chronicle.h"
 #include "vox/vox_render.h"
@@ -74,7 +75,7 @@
 #define DEMO_HAPTIC_LEVEL_COUNT 4
 #define DEMO_COSMETIC_COLOR_COUNT 6
 #define DEMO_RIGID_DEBRIS_VISUAL_CAP 32U
-#define DEMO_EFFECT_PARTICLE_CAP 320U
+#define DEMO_EFFECT_PARTICLE_CAP 2048U
 /* Replay frames are captured every four simulation ticks.  Holding each
  * picture for a bounded six presentation ticks makes the result reel read as
  * a deliberate slow-motion recap rather than racing through its ledger. */
@@ -3850,6 +3851,28 @@ static void demo_render_voxel(int x, int y, vox_u16 material)
     cell->damage_q16 = 0L;
 }
 
+/* Replay terrain stores a blood-stain bit alongside the material without
+ * enlarging the public replay frame.  Apply it after the normal patch path so
+ * overlay restoration remains exact and miners still render above terrain. */
+static void demo_render_bloody_voxel(int x, int y, vox_u16 material)
+{
+    vox_u32 plane_index;
+    vox_u32 cell_index;
+    if (x < 0 || y < 0 || x >= (int)VOX_WORLD_WIDTH ||
+        y >= (int)VOX_WORLD_HEIGHT) {
+        return;
+    }
+    if (material == VOX_MAT_AIR || material >= VOX_MAT_COUNT) {
+        return;
+    }
+    demo_render_voxel(x, y, material);
+    plane_index = (vox_u32)y * VOX_WORLD_WIDTH + (vox_u32)x;
+    cell_index = (VOX_WORLD_DEPTH - 1U) * VOX_WORLD_WIDTH *
+                 VOX_WORLD_HEIGHT + plane_index;
+    demo_match.world.cells[cell_index].flags = (vox_u16)(
+        demo_match.world.cells[cell_index].flags | VOX_CELL_BLOODY);
+}
+
 static void demo_miner_overlay_plot(void *context, int x, int y,
                                     vox_u16 material)
 {
@@ -4157,16 +4180,48 @@ static void demo_voxelize_rigid_bodies(void)
     }
 }
 
-static void demo_build_render_world(demo_app *app)
+/* Terrain fragments are authoritative effects, not terrain cells while they
+ * are in flight.  Put their temporary visual marks into the render overlay
+ * before miners so a passing fragment cannot be painted over a character.
+ * The low three variant bits carry the deterministic tumble orientation. */
+static void demo_voxelize_terrain_fragment(int center_x, int center_y,
+                                           vox_u16 material,
+                                           vox_u16 variant)
+{
+    static const int direction_x[8] = {1, 1, 0, -1, -1, -1, 0, 1};
+    static const int direction_y[8] = {0, 1, 1, 1, 0, -1, -1, -1};
+    vox_u16 direction;
+    if (material == VOX_MAT_AIR || material >= VOX_MAT_COUNT) return;
+    direction = (vox_u16)(variant & 7U);
+    demo_render_voxel(center_x, center_y, material);
+    demo_render_voxel(center_x + direction_x[direction],
+                      center_y + direction_y[direction], material);
+}
+
+static void demo_voxelize_terrain_fragment_effects(void)
+{
+    vox_u16 index;
+    vox_u16 drawn = 0U;
+    for (index = 0U; index < demo_match.rules.fx_budget &&
+         index < VOX_DIGS_MAX_EFFECTS; ++index) {
+        const vox_digs_effect *effect = &demo_match.effects[index];
+        if (drawn >= DEMO_EFFECT_PARTICLE_CAP) break;
+        if (effect->active == 0U ||
+            (effect->flags & VOX_DIGS_EFFECT_TERRAIN_FRAGMENT) == 0U) {
+            continue;
+        }
+        demo_voxelize_terrain_fragment(
+            (int)(effect->position_x_q16 / 65536L),
+            (int)(effect->position_y_q16 / 65536L), effect->material,
+            effect->variant);
+        ++drawn;
+    }
+}
+
+static void demo_voxelize_player_overlays(demo_app *app)
 {
     vox_u16 player;
-    vox_u16 index;
-    /* The simulation treats every cell at and below lava_surface_y as lethal.
-     * Give that exact boundary a top-layer voxel horizon so bedrock or deep
-     * terrain cannot visually hide the rising hazard. */
-    demo_voxelize_lava_horizon();
-    demo_voxelize_rigid_bodies();
-    demo_voxelize_dropship();
+    if (app == 0) return;
     for (player = 0U; player < VOX_DIGS_MAX_SLOTS; ++player) {
         if (demo_match.alive[player]) {
             demo_voxelize_rope(player);
@@ -4174,6 +4229,19 @@ static void demo_build_render_world(demo_app *app)
             demo_voxelize_weapon_model(player);
         }
     }
+}
+
+static void demo_build_render_world(demo_app *app)
+{
+    vox_u16 index;
+    /* The simulation treats every cell at and below lava_surface_y as lethal.
+     * Give that exact boundary a top-layer voxel horizon so bedrock or deep
+     * terrain cannot visually hide the rising hazard. */
+    demo_voxelize_lava_horizon();
+    demo_voxelize_rigid_bodies();
+    demo_voxelize_terrain_fragment_effects();
+    demo_voxelize_dropship();
+    demo_voxelize_player_overlays(app);
     demo_voxelize_rail_traces(app);
     for (index = 0U; index < VOX_DIGS_MAX_PROJECTILES; ++index) {
         const vox_digs_projectile *projectile = &demo_match.projectiles[index];
@@ -4214,9 +4282,19 @@ static void demo_build_replay_render_world(const vox_digs_replay_frame *frame)
         for (column = 0U; column < frame->terrain_width; ++column) {
             vox_u16 cell_index = (vox_u16)(row * frame->terrain_width +
                                            column);
-            demo_render_voxel((int)frame->terrain_origin_x + column,
-                              (int)frame->terrain_origin_y + row,
-                              frame->terrain_material[cell_index]);
+            vox_u16 encoded = frame->terrain_material[cell_index];
+            vox_u16 material = (vox_u16)(encoded &
+                (vox_u16)~VOX_DIGS_REPLAY_TERRAIN_BLOODY);
+            if ((encoded & VOX_DIGS_REPLAY_TERRAIN_BLOODY) != 0U) {
+                demo_render_bloody_voxel((int)frame->terrain_origin_x +
+                                         column,
+                                         (int)frame->terrain_origin_y + row,
+                                         material);
+            } else {
+                demo_render_voxel((int)frame->terrain_origin_x + column,
+                                  (int)frame->terrain_origin_y + row,
+                                  material);
+            }
         }
     }
     for (index = 0U; index < frame->fluid_count; ++index) {
@@ -4234,9 +4312,16 @@ static void demo_build_replay_render_world(const vox_digs_replay_frame *frame)
     }
     for (index = 0U; index < frame->effect_count; ++index) {
         const vox_digs_replay_effect *effect = &frame->effects[index];
-        demo_render_voxel((int)(effect->position_x_q16 >> 16),
-                          (int)(effect->position_y_q16 >> 16),
-                          effect->material);
+        if ((effect->flags & VOX_DIGS_EFFECT_TERRAIN_FRAGMENT) != 0U) {
+            demo_voxelize_terrain_fragment(
+                (int)(effect->position_x_q16 / 65536L),
+                (int)(effect->position_y_q16 / 65536L), effect->material,
+                effect->variant);
+        } else {
+            demo_render_voxel((int)(effect->position_x_q16 >> 16),
+                              (int)(effect->position_y_q16 >> 16),
+                              effect->material);
+        }
     }
 }
 
@@ -4563,6 +4648,46 @@ static void demo_effect_particle_colour(const vox_digs_effect *effect,
     }
 }
 
+/* Effects are blended after the world/miner overlay, so particle coordinates
+ * need a screen-space exclusion rather than just an effect-center world test.
+ * Keep one pixel of slack around the body rectangle for the miner silhouette
+ * and the integer view transform. */
+static int demo_effect_pixel_overlaps_live_miner(const vox_software_view *view,
+                                                 int screen_x, int screen_y)
+{
+    vox_u16 player;
+    if (view == 0 || view->width_q16 <= 0L || view->height_q16 <= 0L) {
+        return 0;
+    }
+    for (player = 0U; player < demo_match.rules.player_count; ++player) {
+        const vox_physics_body *body = &demo_match.players[player];
+        double minimum_x;
+        double maximum_x;
+        double minimum_y;
+        double maximum_y;
+        if (demo_match.alive[player] == 0U) continue;
+        minimum_x = (double)(body->position_x.value_q16 -
+                             body->half_width_q16 - view->origin_x_q16) *
+                    (double)DEMO_WIDTH / (double)view->width_q16;
+        maximum_x = (double)(body->position_x.value_q16 +
+                             body->half_width_q16 - view->origin_x_q16) *
+                    (double)DEMO_WIDTH / (double)view->width_q16;
+        minimum_y = (double)(body->position_y.value_q16 -
+                             body->half_height_q16 - view->origin_y_q16) *
+                    (double)DEMO_HEIGHT / (double)view->height_q16;
+        maximum_y = (double)(body->position_y.value_q16 +
+                             body->half_height_q16 - view->origin_y_q16) *
+                    (double)DEMO_HEIGHT / (double)view->height_q16;
+        if (screen_x >= (int)minimum_x - 1 &&
+            screen_x <= (int)maximum_x + 1 &&
+            screen_y >= (int)minimum_y - 1 &&
+            screen_y <= (int)maximum_y + 1) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void demo_draw_effect_particles(const demo_app *app,
                                        const vox_software_view *view)
 {
@@ -4582,6 +4707,9 @@ static void demo_draw_effect_particles(const demo_app *app,
         vox_u8 blue;
         vox_u16 strength;
         if (!effect->active) continue;
+        if ((effect->flags & VOX_DIGS_EFFECT_TERRAIN_FRAGMENT) != 0U) {
+            continue;
+        }
         gore = effect->material == VOX_MAT_FLESH ||
                effect->material == VOX_MAT_BLOOD;
         if (gore && (app->options.gore_level == 0 ||
@@ -4594,13 +4722,18 @@ static void demo_draw_effect_particles(const demo_app *app,
         }
         demo_effect_particle_colour(effect, &red, &green, &blue);
         strength = gore ? 2U : 1U;
-        demo_blend_particle_pixel(screen_x, screen_y, red, green, blue,
-                                  strength);
+        if (!gore || !demo_effect_pixel_overlaps_live_miner(view, screen_x,
+                                                              screen_y)) {
+            demo_blend_particle_pixel(screen_x, screen_y, red, green, blue,
+                                      strength);
+        }
         if (effect->velocity_x_q16 > 4096L) tail_x = -1;
         else if (effect->velocity_x_q16 < -4096L) tail_x = 1;
         if (effect->velocity_y_q16 > 4096L) tail_y = -1;
         else if (effect->velocity_y_q16 < -4096L) tail_y = 1;
-        if (tail_x != 0 || tail_y != 0) {
+        if ((tail_x != 0 || tail_y != 0) &&
+            (!gore || !demo_effect_pixel_overlaps_live_miner(
+                view, screen_x + tail_x, screen_y + tail_y))) {
             demo_blend_particle_pixel(screen_x + tail_x, screen_y + tail_y,
                                       red, green, blue, 1U);
         }
@@ -5455,6 +5588,11 @@ static void demo_draw_play(demo_app *app)
     demo_build_render_world(app);
     if (app->replay_frame_valid) {
         demo_build_replay_render_world(&app->replay_frame);
+        /* Replay terrain/effects replace the captured local window after the
+         * live overlay is assembled. Reapply the replay-positioned miner
+         * marks so terrain fragments, like ordinary terrain, remain behind
+         * every living miner. */
+        demo_voxelize_player_overlays(app);
     }
     render_status = vox_software_render_view_ex(&demo_match.world,
         &demo_target, &demo_render_config, &view);
@@ -8611,9 +8749,9 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
          * 600-tick input stream; these activity counters are a determinism
          * baseline, not a wall-clock performance claim. */
         } else if (ticks == 600U &&
-                   (fired != 23U || explosions != 16U || crushes != 0U ||
-                    max_effects != 978U || max_awake != 4616U ||
-                    demo_match.state_hash != (vox_u32)0xC53B59D9UL)) {
+                   (fired != 18U || explosions != 16U || crushes != 0U ||
+                    max_effects != 796U || max_awake != 4294U ||
+                    demo_match.state_hash != (vox_u32)0x3B60903AUL)) {
             fprintf(stderr,
                     "load self-test: canonical 600-tick activity/hash "
                     "mismatch\n");
@@ -9650,6 +9788,7 @@ static int demo_replay_presentation_self_test(void)
     vox_digs_rules rules;
     vox_u32 hash_before;
     vox_u32 hash_after;
+    vox_u32 world_hash_before;
     vox_u16 tick;
     memset(&app, 0, sizeof(app));
     vox_digs_rules_classic(&rules);
@@ -9674,10 +9813,38 @@ static int demo_replay_presentation_self_test(void)
     demo_match.replay.frames[0].player_y_q16[0] = 96L << 16;
     demo_match.replay.frames[0].player_x_q16[1] = 220L << 16;
     demo_match.replay.frames[0].player_y_q16[1] = 96L << 16;
+    demo_match.replay.frames[0].terrain_origin_x = 200U;
+    demo_match.replay.frames[0].terrain_origin_y = 96U;
+    demo_match.replay.frames[0].terrain_width =
+        VOX_DIGS_REPLAY_WINDOW_DIAMETER;
+    demo_match.replay.frames[0].terrain_height =
+        VOX_DIGS_REPLAY_WINDOW_DIAMETER;
+    demo_match.replay.frames[0].terrain_material[0] = (vox_u16)(
+        VOX_MAT_STONE | VOX_DIGS_REPLAY_TERRAIN_BLOODY);
     demo_match.replay.frames[1] = demo_match.replay.frames[0];
     demo_match.replay.frames[1].tick = 124U;
     demo_match.replay.frames[1].player_x_q16[0] = 204L << 16;
     demo_match.replay.frames[1].player_x_q16[1] = 216L << 16;
+    if ((demo_match.replay.frames[0].terrain_material[0] &
+         VOX_DIGS_REPLAY_TERRAIN_BLOODY) == 0U ||
+        (demo_match.replay.frames[0].terrain_material[0] &
+         (vox_u16)~VOX_DIGS_REPLAY_TERRAIN_BLOODY) != VOX_MAT_STONE) {
+        return 2;
+    }
+    world_hash_before = vox_world_hash(&demo_match.world);
+    demo_render_overlay_begin();
+    demo_build_replay_render_world(&demo_match.replay.frames[0]);
+    {
+        const vox_cell *cell = vox_world_cell(
+            &demo_match.world, 200U, 96U, VOX_WORLD_DEPTH - 1U);
+        if (cell == 0 || cell->material != VOX_MAT_STONE ||
+            (cell->flags & VOX_CELL_BLOODY) == 0U) {
+            demo_render_overlay_restore();
+            return 2;
+        }
+    }
+    demo_render_overlay_restore();
+    if (vox_world_hash(&demo_match.world) != world_hash_before) return 2;
     hash_before = vox_digs_hash(&demo_match);
     demo_tick_results(&app);
     if (app.replay_playing == 0U || app.replay_frame_valid == 0U ||
@@ -9714,7 +9881,18 @@ static int demo_rigid_overlay_self_test(void)
     rules.bot_mask = 0U;
     rules.score_limit = 0U;
     if (vox_digs_match_init(&demo_match, &rules) != VOX_OK) return 1;
-    if (vox_world_set(&demo_match.world, 160U, 100U,
+    /* This fixed render-only arena may intersect an authored generated
+     * fixture.  Tear that fixture down explicitly before replacing it; the
+     * production setter deliberately refuses implicit fixture destruction. */
+    if ((vox_world_is_fixture(&demo_match.world, 160U, 100U,
+                              VOX_WORLD_DEPTH - 1U) &&
+         vox_world_set_fixture(&demo_match.world, 160U, 100U,
+                               VOX_WORLD_DEPTH - 1U, 0U) != VOX_OK) ||
+        (vox_world_is_fixture(&demo_match.world, 159U, 100U,
+                              VOX_WORLD_DEPTH - 1U) &&
+         vox_world_set_fixture(&demo_match.world, 159U, 100U,
+                               VOX_WORLD_DEPTH - 1U, 0U) != VOX_OK) ||
+        vox_world_set(&demo_match.world, 160U, 100U,
                       VOX_WORLD_DEPTH - 1U, VOX_MAT_AIR, 0L) != VOX_OK ||
         vox_world_set(&demo_match.world, 159U, 100U,
                       VOX_WORLD_DEPTH - 1U, VOX_MAT_AIR, 0L) != VOX_OK ||
@@ -9755,6 +9933,20 @@ static int demo_particle_overlay_self_test(void)
     vox_u32 match_hash;
     vox_u32 frame_hash;
     vox_result render_status;
+    int fragment_x;
+    int fragment_y;
+    int tail_x;
+    int tail_y;
+    int miner_x;
+    int miner_y;
+    vox_u32 tail_pixel;
+    vox_u32 miner_pixel;
+    vox_u8 tail_red;
+    vox_u8 tail_green;
+    vox_u8 tail_blue;
+    vox_u8 miner_red;
+    vox_u8 miner_green;
+    vox_u8 miner_blue;
     memset(&app, 0, sizeof(app));
     demo_prepare_targets();
     vox_digs_rules_classic(&rules);
@@ -9777,11 +9969,17 @@ static int demo_particle_overlay_self_test(void)
     demo_match.effects[0].position_x_q16 =
         demo_match.players[0].position_x.value_q16 + (2L << 16);
     demo_match.effects[0].position_y_q16 =
-        demo_match.players[0].position_y.value_q16 - (2L << 16);
+        demo_match.players[0].position_y.value_q16;
     demo_match.effects[0].velocity_x_q16 = 16384L;
-    demo_match.effects[0].velocity_y_q16 = -8192L;
+    demo_match.effects[0].velocity_y_q16 = 0L;
     demo_match.effects[0].ttl_ticks = 30U;
-    demo_match.effect_count = 1U;
+    demo_match.effects[1] = demo_match.effects[0];
+    demo_match.effects[1].position_x_q16 =
+        demo_match.players[0].position_x.value_q16;
+    demo_match.effects[1].position_y_q16 =
+        demo_match.players[0].position_y.value_q16;
+    demo_match.effects[1].velocity_x_q16 = 0L;
+    demo_match.effect_count = 2U;
     world_hash = vox_world_hash(&demo_match.world);
     match_hash = vox_digs_hash(&demo_match);
     demo_camera_view(&app, &view);
@@ -9795,11 +9993,41 @@ static int demo_particle_overlay_self_test(void)
         return 2;
     }
     demo_apply_atmosphere(&app, &view);
+    if (!demo_effect_view_position(&view, &demo_match.effects[0],
+                                   &fragment_x, &fragment_y) ||
+        !demo_effect_view_position(&view, &demo_match.effects[1],
+                                   &miner_x, &miner_y)) {
+        return 3;
+    }
+    tail_x = fragment_x - 1;
+    tail_y = fragment_y;
+    if (tail_x < 0 || tail_y < 0 || tail_x >= (int)DEMO_WIDTH ||
+        tail_y >= (int)DEMO_HEIGHT ||
+        !demo_effect_pixel_overlaps_live_miner(&view, tail_x, tail_y) ||
+        !demo_effect_pixel_overlaps_live_miner(&view, miner_x, miner_y)) {
+        return 4;
+    }
+    tail_pixel = ((vox_u32)tail_y * DEMO_WIDTH + (vox_u32)tail_x) *
+                 VOX_SOFTWARE_RGB_BYTES;
+    miner_pixel = ((vox_u32)miner_y * DEMO_WIDTH + (vox_u32)miner_x) *
+                  VOX_SOFTWARE_RGB_BYTES;
+    tail_red = demo_pixels[tail_pixel];
+    tail_green = demo_pixels[tail_pixel + 1U];
+    tail_blue = demo_pixels[tail_pixel + 2U];
+    miner_red = demo_pixels[miner_pixel];
+    miner_green = demo_pixels[miner_pixel + 1U];
+    miner_blue = demo_pixels[miner_pixel + 2U];
     frame_hash = vox_software_hash(&demo_target);
     demo_draw_effect_particles(&app, &view);
     if (vox_digs_hash(&demo_match) != match_hash ||
+        demo_pixels[tail_pixel] != tail_red ||
+        demo_pixels[tail_pixel + 1U] != tail_green ||
+        demo_pixels[tail_pixel + 2U] != tail_blue ||
+        demo_pixels[miner_pixel] != miner_red ||
+        demo_pixels[miner_pixel + 1U] != miner_green ||
+        demo_pixels[miner_pixel + 2U] != miner_blue ||
         vox_software_hash(&demo_target) == frame_hash) {
-        return 3;
+        return 5;
     }
     printf("DIGS particle overlay self-test passed frame=%08lx\n",
            (unsigned long)vox_software_hash(&demo_target));
@@ -9899,6 +10127,7 @@ static void demo_session_report(const char *phase, const vox_digs_match *match,
 {
     vox_u16 pair;
     long carried = 0L;
+    long contract_total = 0L;
     vox_u16 met = 0U;
     vox_u16 played = 0U;
     vox_u16 identity;
@@ -9906,6 +10135,8 @@ static void demo_session_report(const char *phase, const vox_digs_match *match,
     for (pair = 0U; pair < VOX_DIGS_MAX_PAIRS; ++pair) {
         long value = (long)chronicle->memory.regard[pair].valence;
         carried += value < 0L ? -value : value;
+        value = (long)match->contracts[pair].valence;
+        contract_total += value < 0L ? -value : value;
         met = (vox_u16)(met + chronicle->memory.regard[pair].matches_met);
     }
     for (identity = 0U; identity < VOX_DIGS_IDENTITY_COUNT; ++identity) {
@@ -9932,13 +10163,14 @@ static void demo_session_report(const char *phase, const vox_digs_match *match,
                     identity : VOX_DIGS_IDENTITY_COUNT];
     }
     printf("DIGS session self-test phase=%s launches=%lu matches=%lu "
-           "regard_total=%ld pairs_met=%lu identity_matches=%lu "
+           "regard_total=%ld contract_total=%ld pairs_met=%lu identity_matches=%lu "
            "opening_with=%s opening_tone=%lu opening_valence=%ld "
            "hash=%08lx\n",
            phase,
            (unsigned long)chronicle->memory.launch_counter,
            (unsigned long)chronicle->matches_recorded,
            carried,
+           contract_total,
            (unsigned long)met,
            (unsigned long)played,
            who,

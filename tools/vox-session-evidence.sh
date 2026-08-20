@@ -88,11 +88,13 @@ fresh_regard=$(field "$fresh" regard_total)
 fresh_met=$(field "$fresh" pairs_met)
 fresh_played=$(field "$fresh" identity_matches)
 fresh_valence=$(field "$fresh" opening_valence)
+fresh_contract_total=$(field "$fresh" contract_total)
 fresh_hash=$(field "$fresh" hash)
 check "opens with no accounts"        "$fresh_regard"  eq 0
 check "opens having met nobody"       "$fresh_met"     eq 0
 check "opens having played nothing"   "$fresh_played"  eq 0
 check "opens neutral toward the first bot" "$fresh_valence" eq 0
+check "opens with no carried contract" "$fresh_contract_total" eq 0
 
 # ---------------------------------------------------------------------------
 # 2. A match is played and writes back.
@@ -127,12 +129,14 @@ verify_regard=$(field "$verify" regard_total)
 verify_met=$(field "$verify" pairs_met)
 verify_played=$(field "$verify" identity_matches)
 verify_valence=$(field "$verify" opening_valence)
+verify_contract_total=$(field "$verify" contract_total)
 verify_hash=$(field "$verify" hash)
 check "the accounts crossed the process boundary intact" \
     "$verify_regard" eq "$record_regard"
 check "so did who has met whom"       "$verify_met"    eq "$record_met"
 check "so did the match count"        "$verify_played" eq "$record_played"
-check "the new match opens NOT neutral" "$verify_valence" ne 0
+check "the new match carries a non-neutral account" \
+    "$verify_contract_total" gt 0
 check "and therefore does not simulate identically to a first meeting" \
     "$verify_hash" ne "$fresh_hash"
 

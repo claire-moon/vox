@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-#include "vox/vox_kernel.h"
+#include "vox_kernel_private.h"
 
 #define VOX_AMBIENT_Q16 (20L << 16)
 #define VOX_STEAM_Q16 (140L << 16)
@@ -309,6 +309,10 @@ static void vox_step_reactions(vox_world *world,
         }
     }
     if (firedamp_ignited) {
+        /* This is a kernel-owned material reaction, not a game-routed
+         * qualifying fixture break.  vox_world_blast deliberately retains
+         * authored fixtures because only DIGS can turn one whole component
+         * into attributed physical scrap. */
         (void)vox_world_blast(world, blast_x, blast_y, blast_z, 3U,
                               700L << 16);
     }
@@ -344,6 +348,13 @@ static int vox_is_structural_material(vox_u16 material)
            material == VOX_MAT_METAL;
 }
 
+/* Authored fixtures are solid collision and rope targets, not terrain. */
+static int vox_is_structural_cell(const vox_cell *cell)
+{
+    return cell != 0 && (cell->flags & VOX_CELL_FIXTURE) == 0U &&
+           vox_is_structural_material(cell->material);
+}
+
 /*
  * Wake everything whose footing depends on (x, y, z).
  *
@@ -375,7 +386,7 @@ static void vox_wake_support_dependents(vox_world *world, vox_u32 x,
         }
         index = vox_index((vox_u32)neighbor, y - 1U, z);
         above = &world->cells[index];
-        if (!vox_is_structural_material(above->material)) {
+        if (!vox_is_structural_cell(above)) {
             continue;
         }
         vox_wake_cell(world,
@@ -405,6 +416,7 @@ static void vox_wake_support_dependents(vox_world *world, vox_u32 x,
 static int vox_cell_bears_load(const vox_cell *cell)
 {
     return cell->material != VOX_MAT_AIR &&
+           (cell->flags & VOX_CELL_FIXTURE) == 0U &&
            !(cell->flags & (VOX_CELL_PHASE_GAS | VOX_CELL_LOOSE |
                             VOX_CELL_UNSTABLE));
 }
@@ -490,7 +502,7 @@ static void vox_step_structures(vox_world *world,
                 vox_chunk *chunk;
                 int supported;
                 if (!(cell->flags & VOX_CELL_AWAKE) ||
-                    !vox_is_structural_material(cell->material)) {
+                    !vox_is_structural_cell(cell)) {
                     continue;
                 }
                 supported = vox_cell_has_support(world, x, y, z);
@@ -544,7 +556,9 @@ static int vox_try_move(vox_world *world, vox_u32 source_x, vox_u32 source_y,
     source_chunk = &world->chunks[vox_chunk_index(source_x, source_y)];
     destination_chunk = &world->chunks[vox_chunk_index((vox_u32)destination_x,
                                                         (vox_u32)destination_y)];
-    if (source->material == VOX_MAT_AIR || destination->material != VOX_MAT_AIR) {
+    if (source->material == VOX_MAT_AIR ||
+        (source->flags & VOX_CELL_FIXTURE) != 0U ||
+        destination->material != VOX_MAT_AIR) {
         return 0;
     }
     original = *source;
@@ -622,6 +636,7 @@ static void vox_step_falling(vox_world *world,
                         int moved = 0;
                         int prefer_left;
                         if (!(cell->flags & VOX_CELL_AWAKE) ||
+                            (cell->flags & VOX_CELL_FIXTURE) != 0U ||
                             (cell->flags & VOX_CELL_PHASE_GAS) ||
                             (!vox_is_falling_material(cell->material) &&
                              !(cell->flags & VOX_CELL_LOOSE) &&
@@ -785,7 +800,7 @@ static void vox_step_materials(vox_world *world,
                             vox_toggle_cell_signature(chunk, vox_index(x, y, depth),
                                                       cell);
                             vox_mark_dirty(chunk);
-                        } else if (vox_is_structural_material(cell->material) &&
+                        } else if (vox_is_structural_cell(cell) &&
                                    !vox_cell_has_support(world, x, y, depth)) {
                             /*
                              * An unsupported cell is not settled, so it must
@@ -906,6 +921,13 @@ vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
     }
     cell = &world->cells[vox_index(x, y, z)];
     chunk = &world->chunks[vox_chunk_index(x, y)];
+    /* Fixtures are authored targets, not an ordinary material variant.  A
+     * caller may refresh their metal state, but only the game-facing
+     * qualifying-break path may first revoke this identity and replace it. */
+    if ((cell->flags & VOX_CELL_FIXTURE) != 0U &&
+        material != cell->material) {
+        return VOX_ERR_INVALID;
+    }
     if (material == VOX_MAT_AIR) {
         vox_clear_cell(world, chunk, vox_index(x, y, z), cell);
         /*
@@ -926,15 +948,95 @@ vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
         return VOX_OK;
     }
     vox_toggle_cell_signature(chunk, vox_index(x, y, z), cell);
-    cell->material = material;
-    cell->flags = (vox_u16)(cell->flags &
-                            (vox_u16)~(VOX_CELL_PHASE_GAS |
-                                      VOX_CELL_MOVED |
-                                      VOX_CELL_LOOSE));
+    {
+        vox_u16 old_material = cell->material;
+        vox_u16 old_flags = cell->flags;
+        cell->material = material;
+        cell->flags = (vox_u16)(old_flags &
+                                (vox_u16)~(VOX_CELL_PHASE_GAS |
+                                          VOX_CELL_MOVED |
+                                          VOX_CELL_LOOSE |
+                                          VOX_CELL_FIXTURE |
+                                          VOX_CELL_BLOODY));
+        /* Temperature/damage updates must not turn an authored fixture (or
+         * its terrain stain) into ordinary terrain.  A material replacement
+         * still deliberately clears both identities. */
+        if (material == old_material) {
+            cell->flags = (vox_u16)(cell->flags |
+                                     (old_flags & (VOX_CELL_FIXTURE |
+                                                   VOX_CELL_BLOODY)));
+        }
+    }
     cell->temperature_q16 = temperature_q16;
     vox_toggle_cell_signature(chunk, vox_index(x, y, z), cell);
     vox_update_active(world, chunk, vox_index(x, y, z), cell);
     vox_wake_cell(world, chunk, vox_index(x, y, z), cell);
+    vox_mark_dirty(chunk);
+    return VOX_OK;
+}
+
+vox_result vox_world_set_fixture(vox_world *world, vox_u32 x, vox_u32 y,
+                                 vox_u32 z, vox_u16 fixture)
+{
+    vox_cell *cell;
+    vox_chunk *chunk;
+    vox_u32 index;
+    if (world == 0 || !vox_in_bounds(x, y, z)) return VOX_ERR_INVALID;
+    cell = &world->cells[vox_index(x, y, z)];
+    if (fixture != 0U && cell->material != VOX_MAT_METAL) {
+        return VOX_ERR_INVALID;
+    }
+    if (((cell->flags & VOX_CELL_FIXTURE) != 0U) == (fixture != 0U) &&
+        (fixture == 0U ||
+         (cell->flags & (VOX_CELL_LOOSE | VOX_CELL_UNSTABLE |
+                         VOX_CELL_MOVED)) == 0U)) {
+        return VOX_OK;
+    }
+    index = vox_index(x, y, z);
+    chunk = &world->chunks[vox_chunk_index(x, y)];
+    vox_toggle_cell_signature(chunk, index, cell);
+    if (fixture != 0U) {
+        cell->flags = (vox_u16)((cell->flags | VOX_CELL_FIXTURE) &
+                                 (vox_u16)~(VOX_CELL_LOOSE |
+                                           VOX_CELL_UNSTABLE |
+                                           VOX_CELL_MOVED));
+    } else {
+        cell->flags = (vox_u16)(cell->flags &
+                                (vox_u16)~VOX_CELL_FIXTURE);
+    }
+    vox_toggle_cell_signature(chunk, index, cell);
+    vox_mark_dirty(chunk);
+    return VOX_OK;
+}
+
+int vox_world_is_fixture(const vox_world *world, vox_u32 x, vox_u32 y,
+                         vox_u32 z)
+{
+    const vox_cell *cell;
+    if (world == 0 || !vox_in_bounds(x, y, z)) return 0;
+    cell = &world->cells[vox_index(x, y, z)];
+    return cell->material == VOX_MAT_METAL &&
+           (cell->flags & VOX_CELL_FIXTURE) != 0U;
+}
+
+vox_result vox_world_set_bloody(vox_world *world, vox_u32 x, vox_u32 y,
+                                vox_u32 z, vox_u16 bloody)
+{
+    vox_cell *cell;
+    vox_chunk *chunk;
+    vox_u32 index;
+    if (world == 0 || !vox_in_bounds(x, y, z)) return VOX_ERR_INVALID;
+    cell = &world->cells[vox_index(x, y, z)];
+    if (cell->material == VOX_MAT_AIR) return VOX_ERR_INVALID;
+    if (((cell->flags & VOX_CELL_BLOODY) != 0U) == (bloody != 0U)) {
+        return VOX_OK;
+    }
+    index = vox_index(x, y, z);
+    chunk = &world->chunks[vox_chunk_index(x, y)];
+    vox_toggle_cell_signature(chunk, index, cell);
+    if (bloody != 0U) cell->flags = (vox_u16)(cell->flags | VOX_CELL_BLOODY);
+    else cell->flags = (vox_u16)(cell->flags & (vox_u16)~VOX_CELL_BLOODY);
+    vox_toggle_cell_signature(chunk, index, cell);
     vox_mark_dirty(chunk);
     return VOX_OK;
 }
@@ -963,7 +1065,10 @@ static vox_result vox_world_set_layer_except_internal(
             int occupied;
             cell_index = vox_index(x, y, z);
             cell = &world->cells[cell_index];
-            if (cell->material == skip_material) continue;
+            /* Bulk hazards must not overwrite an authored static fixture.
+             * Fixtures are a target class, not ordinary metal terrain. */
+            if (cell->material == skip_material ||
+                (cell->flags & VOX_CELL_FIXTURE) != 0U) continue;
             chunk = &world->chunks[vox_chunk_index(x, y)];
             old_signature = vox_cell_signature(cell_index, cell);
             was_occupied = (cell->flags & VOX_CELL_OCCUPIED) != 0U;
@@ -972,7 +1077,7 @@ static vox_result vox_world_set_layer_except_internal(
             cell->flags = (vox_u16)(cell->flags &
                 (vox_u16)~(VOX_CELL_OCCUPIED | VOX_CELL_PHASE_GAS |
                            VOX_CELL_MOVED | VOX_CELL_LOOSE |
-                           VOX_CELL_UNSTABLE));
+                           VOX_CELL_UNSTABLE | VOX_CELL_BLOODY));
             cell->temperature_q16 = temperature_q16;
             occupied = material != VOX_MAT_AIR;
             if (occupied) {
@@ -1034,6 +1139,9 @@ vox_result vox_world_set_loose(vox_world *world, vox_u32 x, vox_u32 y,
     cell = &world->cells[cell_index];
     if (cell->material == VOX_MAT_AIR) {
         return loose ? VOX_ERR_INVALID : VOX_OK;
+    }
+    if (loose != 0U && (cell->flags & VOX_CELL_FIXTURE) != 0U) {
+        return VOX_ERR_INVALID;
     }
     current = (vox_u16)((cell->flags & VOX_CELL_LOOSE) != 0U);
     if (current == loose) {
@@ -1133,8 +1241,40 @@ vox_result vox_world_clear_dirty(vox_world *world)
     return VOX_OK;
 }
 
-vox_result vox_world_blast(vox_world *world, vox_u32 x, vox_u32 y,
-                           vox_u32 z, vox_u32 radius, vox_i32 heat_q16)
+void vox_blast_capture_init(vox_blast_capture *capture)
+{
+    if (capture != 0) {
+        capture->count = 0U;
+        capture->truncated = 0U;
+        capture->structural_count = 0U;
+    }
+}
+
+static void vox_blast_capture_cell(vox_blast_capture *capture, vox_u32 x,
+                                   vox_u32 y, vox_u32 z, vox_u16 material,
+                                   vox_u16 flags)
+{
+    vox_u16 index;
+    if (capture == 0) {
+        return;
+    }
+    if (capture->count >= VOX_BLAST_CAPTURE_MAX) {
+        capture->truncated = 1U;
+        return;
+    }
+    index = capture->count;
+    capture->cells[index].x = (vox_u16)x;
+    capture->cells[index].y = (vox_u16)y;
+    capture->cells[index].z = (vox_u16)z;
+    capture->cells[index].material = material;
+    capture->cells[index].flags = flags;
+    capture->count = (vox_u16)(index + 1U);
+}
+
+static vox_result vox_world_blast_impl(vox_world *world, vox_u32 x,
+                                       vox_u32 y, vox_u32 z,
+                                       vox_u32 radius, vox_i32 heat_q16,
+                                       vox_blast_capture *capture)
 {
     long min_x;
     long max_x;
@@ -1146,6 +1286,7 @@ vox_result vox_world_blast(vox_world *world, vox_u32 x, vox_u32 y,
     long fracture_radius;
     long fracture_squared;
     vox_u32 depth;
+    vox_blast_capture_init(capture);
     if (world == 0 || !vox_in_bounds(x, y, z) ||
         radius == 0U || radius > VOX_BLAST_MAX_RADIUS) {
         return VOX_ERR_INVALID;
@@ -1190,8 +1331,17 @@ vox_result vox_world_blast(vox_world *world, vox_u32 x, vox_u32 y,
                     (vox_u32)sample_x, (vox_u32)sample_y)];
                 if (cell->material != VOX_MAT_AIR &&
                     cell->material != VOX_MAT_BEDROCK &&
+                    (cell->flags & VOX_CELL_FIXTURE) == 0U &&
                     (distance_squared <= core_squared ||
                      ((fracture >> (depth & 7U)) & 1U) != 0U)) {
+                    if (capture != 0 &&
+                        vox_is_structural_material(cell->material) &&
+                        capture->structural_count < 65535U) {
+                        capture->structural_count++;
+                    }
+                    vox_blast_capture_cell(capture, (vox_u32)sample_x,
+                                           (vox_u32)sample_y, depth,
+                                           cell->material, cell->flags);
                     vox_clear_cell(world, chunk, vox_index((vox_u32)sample_x,
                                                            (vox_u32)sample_y,
                                                            depth), cell);
@@ -1254,6 +1404,23 @@ vox_result vox_world_blast(vox_world *world, vox_u32 x, vox_u32 y,
         }
     }
     return VOX_OK;
+}
+
+vox_result vox_world_blast(vox_world *world, vox_u32 x, vox_u32 y,
+                           vox_u32 z, vox_u32 radius, vox_i32 heat_q16)
+{
+    return vox_world_blast_impl(world, x, y, z, radius, heat_q16, 0);
+}
+
+vox_result vox_world_blast_capture(vox_world *world, vox_u32 x, vox_u32 y,
+                                   vox_u32 z, vox_u32 radius,
+                                   vox_i32 heat_q16,
+                                   vox_blast_capture *capture)
+{
+    if (capture == 0) {
+        return VOX_ERR_INVALID;
+    }
+    return vox_world_blast_impl(world, x, y, z, radius, heat_q16, capture);
 }
 
 vox_result vox_world_step(vox_world *world, const vox_step_command *command)
@@ -1336,6 +1503,9 @@ vox_u16 vox_world_collision_classify(const vox_world *world, vox_u32 x,
     for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
         const vox_cell *cell = &world->cells[vox_index(x, y, z)];
         const vox_material_properties *properties;
+        if ((cell->flags & VOX_CELL_FIXTURE) != 0U) {
+            return VOX_WORLD_COLLISION_SOLID;
+        }
         if (cell->material == VOX_MAT_AIR ||
             (cell->flags & VOX_CELL_PHASE_GAS)) {
             continue;

@@ -53,28 +53,59 @@ angular velocity, mass, inertia, friction, restitution, sleep state, and
 bounded joints. Its deterministic solver uses a fixed iteration count, stable
 body-pair ordering, integer angle sectors, terrain contacts, body contacts,
 joint distance/angle limits, and fixed pool overflow. Killed miners become
-connected anatomy assemblies; smoke and tiny particles remain presentation
-effects, while debris and fixture scrap use the rigid pool. A body may sample
-the authoritative fluid pool for bounded drag and buoyancy, and long-sleeping
-corpse/debris/scrap bodies are recycled through a stable release policy;
-settled detached terrain restores up to sixteen loose cells of its recorded
-material in stable radius/depth order. Any compact remainder increments the
-authoritative, hashed discard counter instead of silently vanishing. Corpse
-and fixture-scrap slots expire without turning into terrain or new grapple
-anchors.
+connected anatomy assemblies; smoke and gore remain presentation effects,
+player-cut terrain uses material-backed effect fragments, and structural debris
+and fixture scrap use the rigid pool. A body may sample the authoritative fluid
+pool for bounded drag and buoyancy, and long-sleeping corpse/debris/scrap
+bodies are recycled through a stable release policy. Settled detached terrain
+restores up to sixteen loose cells of its recorded material in stable
+radius/depth order. Any compact remainder increments the authoritative, hashed
+discard counter instead of silently vanishing. Fixture scrap never restores a
+fixture or a replacement fixture rope anchor: only a sleeping metal component
+with at least sixteen source cells may place at most four ordinary, stable
+metal cells in deterministic nearby air cells. Smaller components stay visual
+and recycle; any unplaceable source material is accounted in the same hashed
+discard counter. Resting scrap is pass-through to miners. A moving scrap body
+can only cause its bounded, nonlethal 1–10 HP direct impact at high speed; it
+cannot sever, bury, or kill a miner.
+
+Authored metal fixtures remain static, collision-solid rope targets until a
+game-routed explosive fracture removes them. Kernel-owned material-reaction
+blasts are intentionally nonqualifying and leave fixtures intact: they cannot
+produce the game-owned component scrap, rope event, or player attribution.
+Fixtures are explicitly excluded from
+support-bearing checks, terrain gravity, unstable marking, structural-risk
+scans, and cluster extraction, so they never enter structural work and a
+fixture-only blast cannot create a cave-in. Player-caused removal of soil,
+stone, coal, biomass, sand, or ordinary metal captures real cleared cells into
+bounded fixed-point fragments. They sweep, bounce, and tumble without
+colliding with miners; once slow, each retries deterministic nearby placement
+as loose terrain while rejecting a living miner's bounds. A saturated effect
+pool skips a new fragment instead of evicting a live one. Non-fragment solid
+and gore effects use swept contact with the first terrain surface, stop at the
+last reachable point, and remain as visible nonblocking landed marks for 180
+ticks. They never create terrain, hazards, anchors, or movement blockers, and
+an airborne TTL expiry simply removes them. Blood follows the same impact rule
+but stains only the frontmost struck terrain voxel dark red and adds its
+nonblocking persistent-fluid residue on that actual impact; it never stains
+terrain at a wound, death, or airborne expiry and never changes material,
+collision, support, or player rendering.
 
 `vox_cluster_extract` performs a stable six-neighbour structural extraction and
-`vox_cluster_spawn_debris` hands detached material to the rigid pool. The
-match-owned `vox_structure_state` tracks per-chunk support, load, collapse
-risk, and a bounded deferred frontier; invalidation is hashed and processed in
-stable chunk order. DIGS consumes up to two queued unsupported fragments per
-tick, attributes their cave-in events and awards to the invalidating miner, and
-re-invalidates each detached edge so a long cut proceeds through bounded,
-deterministic work. A wide-roof regression proves successive 128-cell
-fragments cross chunk boundaries rather than leaving a far half floating
-forever. This is a real deferred cascade, not a claim of an unbounded whole-map
-solver: complete connected-volume support/load analysis and exact mixed-material
-fragment reconstruction remain open acceptance work.
+`vox_cluster_spawn_debris` hands qualifying detached material to the rigid
+pool. The match-owned `vox_structure_state` tracks per-chunk support, load,
+collapse risk, and a bounded deferred frontier; invalidation is hashed and
+processed in stable chunk order. DIGS consumes up to two queued unsupported
+fragments per tick, but emits a cave-in event, award, attribution, and rigid
+debris only for an independently detached, non-fixture terrain component of at
+least sixteen cells. Smaller components restore as loose nonblocking material,
+with no cave-in event or structural award. Qualifying edges are re-invalidated
+so a long cut proceeds through bounded, deterministic work. A wide-roof
+regression proves successive 128-cell fragments cross chunk boundaries rather
+than leaving a far half floating forever. This is a real deferred cascade, not
+a claim of an unbounded whole-map solver: complete connected-volume
+support/load analysis and exact mixed-material fragment reconstruction remain
+open acceptance work.
 
 Rope hooks and weapon rays use the same fixed-point swept-contact policy. The
 attached rope is a bounded segmented constraint with terrain wrapping; cable
