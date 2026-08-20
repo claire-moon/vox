@@ -18,9 +18,9 @@ or download the current version from:
 
     https://github.com/mdqinc/SDL_GameControllerDB
 
-You can also point DIGS at any mapping file directly:
-
-    DIGS_GAMECONTROLLERDB=/path/to/gamecontrollerdb.txt ./run-digs.sh
+You can also set DIGS_GAMECONTROLLERDB to any mapping file before launching
+DIGS. The supplied Windows launcher automatically uses a mapping copied to the
+root-level share/digs/controllers directory.
 
 The database is not installed by default because it is larger than the
 game itself and almost never needed.

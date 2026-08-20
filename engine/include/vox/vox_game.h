@@ -53,8 +53,6 @@
 #define VOX_DIGS_DASH_INVULNERABILITY_TICKS 8U
 #define VOX_DIGS_DASH_SPEED_Q16 (5L << 16)
 #define VOX_DIGS_MAX_PROJECTILES 64U
-/* Fixed public match storage remains ABI 11.  Carnage is achieved through
- * deterministic pool reuse and broader spray, not a larger public array. */
 #define VOX_DIGS_FX_RETRO 768U
 #define VOX_DIGS_FX_STANDARD 1536U
 #define VOX_DIGS_FX_CARNAGE 3072U
@@ -75,9 +73,6 @@
     (VOX_DIGS_REPLAY_WINDOW_RADIUS * 2U + 1U)
 #define VOX_DIGS_REPLAY_WINDOW_CELLS \
     (VOX_DIGS_REPLAY_WINDOW_DIAMETER * VOX_DIGS_REPLAY_WINDOW_DIAMETER)
-/* terrain_material[] carries this presentation flag in addition to its
- * low-bit material identifier, avoiding a replay-frame ABI expansion. */
-#define VOX_DIGS_REPLAY_TERRAIN_BLOODY 32768U
 #define VOX_DIGS_REPLAY_MAX_RIGIDS 24U
 #define VOX_DIGS_REPLAY_MAX_FLUIDS 32U
 #define VOX_DIGS_REPLAY_MAX_EFFECTS 24U
@@ -579,13 +574,6 @@ typedef struct vox_digs_effect {
     vox_u16 depth;
     vox_u16 flags;
 } vox_digs_effect;
-
-/* A landed effect remains presentation-only for its remaining TTL. */
-#define VOX_DIGS_EFFECT_LANDED 1U
-/* A terrain fragment owns one removed terrain material until it settles. */
-#define VOX_DIGS_EFFECT_TERRAIN_FRAGMENT 2U
-/* A stopped terrain fragment retries loose-terrain placement each tick. */
-#define VOX_DIGS_EFFECT_FRAGMENT_SETTLING 4U
 
 typedef struct vox_digs_anatomy_part {
     vox_u16 health;

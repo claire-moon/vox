@@ -10,4 +10,8 @@ if not exist "%ROOT%bin\digs_demo.exe" (
     exit /b 1
 )
 
+rem Keep the documented root-level share/ drop-in path useful even though
+rem SDL_GetBasePath() resolves from bin/. An explicit user setting still wins.
+if not defined DIGS_GAMECONTROLLERDB if exist "%ROOT%share\digs\controllers\gamecontrollerdb.txt" set "DIGS_GAMECONTROLLERDB=%ROOT%share\digs\controllers\gamecontrollerdb.txt"
+
 start "DIGS" /D "%ROOT%bin" "%ROOT%bin\digs_demo.exe" %*

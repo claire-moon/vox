@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-#include "vox/vox_game.h"
+#include "vox_digs_private.h"
 #include "digs_lines.h"
 
 #define DIGS_DENSITY_SCALE 2U

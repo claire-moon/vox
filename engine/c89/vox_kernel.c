@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-#include "vox/vox_kernel.h"
+#include "vox_kernel_private.h"
 
 #define VOX_AMBIENT_Q16 (20L << 16)
 #define VOX_STEAM_Q16 (140L << 16)

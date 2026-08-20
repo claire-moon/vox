@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "vox/vox_render.h"
+#include "vox_kernel_private.h"
 
 typedef struct vox_rgb {
     vox_u8 red;

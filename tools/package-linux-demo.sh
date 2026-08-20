@@ -319,6 +319,10 @@ install -D -m 0644 -- "$CONTROLLER_DB" \
     "$STAGE_DIR/extras/gamecontrollerdb.txt"
 [[ -r "$STAGE_DIR/extras/gamecontrollerdb.txt" ]] || \
     die 'the optional controller database was not packaged'
+CONTROLLER_DB_STAGED_SHA256=$(sha256sum \
+    "$STAGE_DIR/extras/gamecontrollerdb.txt" | awk '{print $1}')
+[[ "$CONTROLLER_DB_STAGED_SHA256" == "$CONTROLLER_DB_SHA256" ]] || \
+    die "packaged SDL GameControllerDB checksum mismatch: $CONTROLLER_DB_STAGED_SHA256"
 install -m 0755 -- "$ROOT/packaging/linux/run-digs.sh" \
     "$STAGE_DIR/run-digs.sh"
 install -m 0755 -- "$ROOT/packaging/linux/smoke-test.sh" \
@@ -514,6 +518,13 @@ tar -xzf "$BINARY_ARCHIVE" -C "$PACKAGED_CHECK_DIR"
 PACKAGED_ROOT="$PACKAGED_CHECK_DIR/$ARCHIVE_STEM"
 [[ -x "$PACKAGED_ROOT/run-digs.sh" ]] || \
     die 'the packaged Linux launcher is missing or not executable'
+PACKAGED_CONTROLLER_DB="$PACKAGED_ROOT/extras/gamecontrollerdb.txt"
+[[ -r "$PACKAGED_CONTROLLER_DB" ]] || \
+    die 'the packaged Linux controller database is missing'
+PACKAGED_CONTROLLER_DB_SHA256=$(sha256sum "$PACKAGED_CONTROLLER_DB" | \
+    awk '{print $1}')
+[[ "$PACKAGED_CONTROLLER_DB_SHA256" == "$CONTROLLER_DB_SHA256" ]] || \
+    die "packaged Linux SDL GameControllerDB checksum mismatch: $PACKAGED_CONTROLLER_DB_SHA256"
 # Assert the property, not one payload file.  This check named the Lua
 # catalog manifest, which v0.0.4 removed, so it failed on a package that was
 # perfectly good.  Comparing the two trees keeps it testing what it is for --

@@ -94,10 +94,6 @@ typedef struct vox_material_properties {
 #define VOX_CELL_UNSTABLE 16U
 /* Loose solid cells simulate as debris but do not block character bodies. */
 #define VOX_CELL_LOOSE 32U
-/* Authored metal rope target; never participates in terrain structure. */
-#define VOX_CELL_FIXTURE 64U
-/* Presentation-only blood stain on an existing terrain voxel. */
-#define VOX_CELL_BLOODY 128U
 
 typedef enum vox_world_collision_class {
     VOX_WORLD_COLLISION_EMPTY = 0,
@@ -108,8 +104,6 @@ typedef enum vox_world_collision_class {
 #define VOX_CHUNK_ACTIVE 1U
 #define VOX_CHUNK_DIRTY 2U
 #define VOX_BLAST_MAX_RADIUS 16U
-/* Bounded record of cells actually cleared by one fracture pass. */
-#define VOX_BLAST_CAPTURE_MAX 160U
 
 /*
  * Horizontal reach, in cells, over which intact ground holds up a ceiling.
@@ -158,22 +152,6 @@ typedef struct vox_world {
     vox_cell cells[VOX_WORLD_CELLS];
 } vox_world;
 
-typedef struct vox_blast_cell {
-    vox_u16 x;
-    vox_u16 y;
-    vox_u16 z;
-    vox_u16 material;
-    vox_u16 flags;
-} vox_blast_cell;
-
-typedef struct vox_blast_capture {
-    vox_u16 count;
-    vox_u16 truncated;
-    /* All non-fixture support-bearing cells cleared, even past record cap. */
-    vox_u16 structural_count;
-    vox_blast_cell cells[VOX_BLAST_CAPTURE_MAX];
-} vox_blast_capture;
-
 typedef struct vox_step_command {
     vox_u32 abi_version;
     vox_u32 struct_size;
@@ -194,14 +172,6 @@ vox_result vox_world_rebuild(vox_world *world);
 const vox_material_properties *vox_material_get(vox_u16 material);
 vox_result vox_world_set(vox_world *world, vox_u32 x, vox_u32 y, vox_u32 z,
                          vox_u16 material, vox_i32 temperature_q16);
-/* Mark authored metal as a static rope target, distinct from terrain. */
-vox_result vox_world_set_fixture(vox_world *world, vox_u32 x, vox_u32 y,
-                                 vox_u32 z, vox_u16 fixture);
-int vox_world_is_fixture(const vox_world *world, vox_u32 x, vox_u32 y,
-                         vox_u32 z);
-/* Toggle a nonphysical blood stain without changing material or collision. */
-vox_result vox_world_set_bloody(vox_world *world, vox_u32 x, vox_u32 y,
-                                vox_u32 z, vox_u16 bloody);
 /* Set one complete x/z layer, retaining a material such as bedrock. */
 vox_result vox_world_set_layer_except(vox_world *world, vox_u32 y,
                                       vox_u16 material,
@@ -220,19 +190,6 @@ vox_result vox_world_sleep_all(vox_world *world);
 vox_result vox_world_clear_dirty(vox_world *world);
 vox_result vox_world_blast(vox_world *world, vox_u32 x, vox_u32 y,
                            vox_u32 z, vox_u32 radius, vox_i32 heat_q16);
-/* Initialize a bounded fracture capture record before reuse. */
-void vox_blast_capture_init(vox_blast_capture *capture);
-/*
- * Apply the normal blast fracture while recording the pre-clear location and
- * material of each destroyed non-bedrock, non-fixture cell.  The record is
- * ordered by the deterministic fracture traversal; truncated is set when it
- * reaches capacity. structural_count records all cleared support-bearing
- * terrain, including cells beyond the bounded record.
- */
-vox_result vox_world_blast_capture(vox_world *world, vox_u32 x, vox_u32 y,
-                                   vox_u32 z, vox_u32 radius,
-                                   vox_i32 heat_q16,
-                                   vox_blast_capture *capture);
 vox_result vox_world_step(vox_world *world, const vox_step_command *command);
 vox_u32 vox_world_hash(const vox_world *world);
 const vox_cell *vox_world_cell(const vox_world *world, vox_u32 x, vox_u32 y,

@@ -9,6 +9,7 @@
 #include "digs_miner_art.h"
 #include "vox/vox_audio.h"
 #include "vox/vox_game.h"
+#include "vox_digs_private.h"
 #include "digs_lines.h"
 #include "digs_chronicle.h"
 #include "vox/vox_render.h"

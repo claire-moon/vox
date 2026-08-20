@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "vox/vox_cluster.h"
+#include "vox_kernel_private.h"
 
 static int cluster_in_bounds(vox_u32 x, vox_u32 y, vox_u32 z)
 {

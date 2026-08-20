@@ -174,7 +174,9 @@ add_library(digs_game STATIC
 )
 target_link_libraries(digs_game PUBLIC vox_kernel vox_physics vox_fluid vox_rigid
                       vox_cluster)
-target_include_directories(digs_game PUBLIC engine/include games/digs)
+target_include_directories(digs_game
+    PUBLIC engine/include games/digs
+    PRIVATE engine/c89)
 set_property(TARGET digs_game PROPERTY C_STANDARD 90)
 set_property(TARGET digs_game PROPERTY C_STANDARD_REQUIRED ON)
 if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
@@ -185,7 +187,9 @@ add_library(vox_software STATIC
     ports/software/vox_software.c
 )
 target_link_libraries(vox_software PUBLIC vox_kernel)
-target_include_directories(vox_software PUBLIC engine/include)
+target_include_directories(vox_software
+    PUBLIC engine/include
+    PRIVATE engine/c89)
 set_property(TARGET vox_software PROPERTY C_STANDARD 90)
 set_property(TARGET vox_software PROPERTY C_STANDARD_REQUIRED ON)
 if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
@@ -320,7 +324,9 @@ if (VOX_BUILD_LEGACY_PROFILE)
         games/digs/digs_game.c
         games/digs/digs_lines.c
     )
-    target_include_directories(digs_legacy_game PUBLIC engine/include)
+    target_include_directories(digs_legacy_game
+        PUBLIC engine/include
+        PRIVATE engine/c89)
     target_compile_definitions(digs_legacy_game PUBLIC
         ${VOX_LEGACY_WORLD_DEFINITIONS})
     target_link_libraries(digs_legacy_game PUBLIC
@@ -337,7 +343,9 @@ if (VOX_BUILD_LEGACY_PROFILE)
     add_library(vox_legacy_software STATIC
         ports/software/vox_software.c
     )
-    target_include_directories(vox_legacy_software PUBLIC engine/include)
+    target_include_directories(vox_legacy_software
+        PUBLIC engine/include
+        PRIVATE engine/c89)
     target_compile_definitions(vox_legacy_software PUBLIC
         ${VOX_LEGACY_WORLD_DEFINITIONS})
     target_link_libraries(vox_legacy_software PUBLIC vox_legacy_kernel)
@@ -448,8 +456,8 @@ if (VOX_BUILD_SDL2_DEMO)
         ports/sdl2/vox_sdl_ui.c
     )
     target_link_libraries(digs_demo PRIVATE digs_game digs_miner_art vox_audio SDL2::SDL2)
-    target_include_directories(digs_demo PRIVATE engine/include ports/sdl2
-        games/digs "${CMAKE_BINARY_DIR}/include")
+    target_include_directories(digs_demo PRIVATE engine/include engine/c89
+        ports/sdl2 games/digs "${CMAKE_BINARY_DIR}/include")
     target_compile_definitions(digs_demo PRIVATE SDL_MAIN_HANDLED)
     # The chronicle is meant to be unrepeatable, so a released build has no
     # way to erase it.  Refining the feature needs one, so debug builds get
@@ -501,7 +509,7 @@ if (VOX_BUILD_TESTS)
     add_test(NAME vox_accel_scalar_nasm_parity COMMAND vox_accel_test)
     add_executable(vox_kernel_test tests/headless/vox_kernel_test.c)
     target_link_libraries(vox_kernel_test PRIVATE vox_kernel)
-    target_include_directories(vox_kernel_test PRIVATE engine/include)
+    target_include_directories(vox_kernel_test PRIVATE engine/include engine/c89)
     add_test(NAME vox_kernel_determinism COMMAND vox_kernel_test)
     add_executable(vox_fluid_test tests/headless/vox_fluid_test.c)
     target_link_libraries(vox_fluid_test PRIVATE vox_fluid)
@@ -533,7 +541,8 @@ if (VOX_BUILD_TESTS)
     add_executable(vox_v005_gameplay_test
         tests/headless/vox_v005_gameplay_test.c)
     target_link_libraries(vox_v005_gameplay_test PRIVATE digs_game)
-    target_include_directories(vox_v005_gameplay_test PRIVATE engine/include)
+    target_include_directories(vox_v005_gameplay_test PRIVATE engine/include
+        engine/c89 games/digs)
     set_property(TARGET vox_v005_gameplay_test PROPERTY C_STANDARD 90)
     set_property(TARGET vox_v005_gameplay_test PROPERTY C_STANDARD_REQUIRED ON)
     if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
@@ -561,7 +570,8 @@ if (VOX_BUILD_TESTS)
     add_test(NAME vox_physics_c_abi COMMAND vox_physics_c_abi_test)
     add_executable(vox_game_test tests/headless/vox_game_test.c)
     target_link_libraries(vox_game_test PRIVATE digs_game)
-    target_include_directories(vox_game_test PRIVATE engine/include)
+    target_include_directories(vox_game_test PRIVATE engine/include engine/c89
+        games/digs)
     add_test(NAME digs_match_determinism COMMAND vox_game_test)
     add_executable(vox_software_test tests/headless/vox_software_test.c)
     target_link_libraries(vox_software_test PRIVATE vox_software)

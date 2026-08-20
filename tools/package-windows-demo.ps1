@@ -78,6 +78,16 @@ if ($dirty -and -not $AllowDirty) {
     $dirty | Write-Error
     Stop-Package 'the source tree is dirty; commit/stash changes before making a release bundle'
 }
+$controllerDb = Join-Path $Root 'third_party\SDL_GameControllerDB\gamecontrollerdb.txt'
+$controllerDbSha256 = 'dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0'
+if (-not (Test-Path -LiteralPath $controllerDb -PathType Leaf)) {
+    Stop-Package 'the pinned SDL GameControllerDB data file is missing'
+}
+$controllerDbHash = Get-FileHash -Algorithm SHA256 -LiteralPath $controllerDb
+$controllerDbActualSha256 = $controllerDbHash.Hash.ToLowerInvariant()
+if ($controllerDbActualSha256 -ne $controllerDbSha256) {
+    Stop-Package "SDL GameControllerDB checksum mismatch: $controllerDbActualSha256"
+}
 
 $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
 if (-not $vcpkgRoot) {
@@ -189,6 +199,17 @@ try {
     # SDL_GetBasePath resolves from bin/.  Copy the small data tree here too
     # so the released executable is self-contained without a Windows symlink.
     Copy-RequiredTree $share (Join-Path $stage 'bin\share')
+    # Match the Linux bundle's opt-in controller mapping extra. It stays
+    # outside the playable payload because SDL2 does not load it until a
+    # tester deliberately copies it into the controller directory.
+    $stagedControllerDb = Join-Path $stage 'extras\gamecontrollerdb.txt'
+    Copy-RequiredFile $controllerDb $stagedControllerDb
+    $stagedControllerDbHash = Get-FileHash -Algorithm SHA256 `
+        -LiteralPath $stagedControllerDb
+    $stagedControllerDbSha256 = $stagedControllerDbHash.Hash.ToLowerInvariant()
+    if ($stagedControllerDbSha256 -ne $controllerDbSha256) {
+        Stop-Package "packaged SDL GameControllerDB checksum mismatch: $stagedControllerDbSha256"
+    }
     Copy-RequiredFile (Join-Path $Root 'packaging\windows\run-digs.bat') `
         (Join-Path $stage 'run-digs.bat')
     Copy-RequiredFile (Join-Path $Root 'packaging\windows\START-HERE.txt') `
@@ -228,8 +249,17 @@ try {
     $packageCheck = Join-Path $work 'package-check'
     Expand-Archive -LiteralPath $archive -DestinationPath $packageCheck -Force
     $packagedDemo = Join-Path $packageCheck "$stem\bin\digs_demo.exe"
+    $packagedControllerDb = Join-Path $packageCheck "$stem\extras\gamecontrollerdb.txt"
     if (-not (Test-Path -LiteralPath $packagedDemo -PathType Leaf)) {
         Stop-Package 'the packaged digs_demo.exe is missing from the ZIP'
+    }
+    if (-not (Test-Path -LiteralPath $packagedControllerDb -PathType Leaf)) {
+        Stop-Package 'the packaged controller database is missing from the ZIP'
+    }
+    $packagedControllerDbHash = Get-FileHash -Algorithm SHA256 `
+        -LiteralPath $packagedControllerDb
+    if ($packagedControllerDbHash.Hash.ToLowerInvariant() -ne $controllerDbSha256) {
+        Stop-Package 'the packaged controller database checksum does not match the pin'
     }
     & $packagedDemo --input-self-test
     if ($LASTEXITCODE -ne 0) {

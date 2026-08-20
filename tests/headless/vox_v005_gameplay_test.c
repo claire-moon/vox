@@ -2,6 +2,7 @@
 #include <stdio.h>
 
 #include "vox/vox_game.h"
+#include "vox_digs_private.h"
 
 #define V005_ROPE_REACH 48L
 #define V005_ROPE_CLEAR 56L

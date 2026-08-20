@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include <stdio.h>
 #include "vox/vox_game.h"
+#include "vox_digs_private.h"
 #include "digs_lines.h"
 #include <string.h>
 
