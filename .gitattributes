@@ -5,3 +5,4 @@
 *.rs text eol=lf
 *.nasm text eol=lf
 *.voxrules text eol=lf
+third_party/SDL_GameControllerDB/gamecontrollerdb.txt text eol=lf
