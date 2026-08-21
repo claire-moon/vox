@@ -54,6 +54,15 @@ public final class DigsActivity extends SDLActivity {
     }
 
     @Override
+    public void setOrientationBis(int width, int height, boolean resizable,
+                                  String hint) {
+        /* SDL asks its host to choose an orientation when it creates a
+         * window. Keep the activity's advertised landscape contract intact
+         * even during a surface recreation. */
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+    }
+
+    @Override
     protected void onPause() {
         if (!SDLActivity.mBrokenLibraries) {
             DigsControlOverlay.releaseAll();

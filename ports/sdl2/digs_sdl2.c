@@ -59,6 +59,10 @@
 #define DEMO_NAME_GRID_ITEMS 42
 #define DEMO_FRAME_CAP_COUNT 7
 #define DEMO_FRAME_CAP_DEFAULT 2
+#if defined(VOX_ANDROID_PORT)
+#define DEMO_ANDROID_FRAME_CAP_DEFAULT 1
+#define DEMO_ANDROID_RENDERER_RETRY_MS 250U
+#endif
 #define DEMO_SCENE_MAX_PIXELS 1048576UL
 #define DEMO_RENDER_OVERLAY_CAPACITY 8192U
 #define DEMO_HAPTIC_REFRESH_MS 42U
@@ -354,7 +358,7 @@ typedef struct demo_app {
     int android_taps[DIGS_ANDROID_CONTROL_COUNT];
     int android_aim_pending;
     int android_pointer_pending;
-    int android_renderer_recovery_attempted;
+    vox_u32 android_renderer_retry_at;
 #endif
     demo_damage_popup damage_popups[DEMO_DAMAGE_POPUP_MAX];
     demo_hit_marker hit_markers[DEMO_LOCAL_MAX];
@@ -1714,7 +1718,13 @@ static int demo_prompt_family(demo_app *app)
 static void demo_options_defaults(demo_app *app)
 {
     memset(&app->options, 0, sizeof(app->options));
+#if defined(VOX_ANDROID_PORT)
+    /* Preserve the fixed 60 Hz simulation while leaving stable presentation
+     * headroom for the Android host. */
+    app->options.frame_cap_index = DEMO_ANDROID_FRAME_CAP_DEFAULT;
+#else
     app->options.frame_cap_index = DEMO_FRAME_CAP_DEFAULT;
+#endif
     app->options.gi_quality = VOX_GI_BALANCED;
     app->options.flash_mode = 2;
     app->options.gore_level = 2;
@@ -1724,7 +1734,11 @@ static void demo_options_defaults(demo_app *app)
     app->options.damage_number_color = 0;
     app->options.fx_profile = 1;
     app->options.master_volume = 8;
+#if defined(VOX_ANDROID_PORT)
+    app->options.laptop_mode = 1;
+#else
     app->options.laptop_mode = 0;
+#endif
     app->options.dummy_mode = 0;
     app->options.haptic_level = 2;
     app->cap_supported_mask = ((vox_u32)1U << DEMO_FRAME_CAP_COUNT) - 1U;
@@ -6091,7 +6105,9 @@ static int demo_create_presentation(demo_app *app)
 {
     Uint32 renderer_flags;
     Uint32 texture_format;
+#if !defined(VOX_ANDROID_PORT)
     int logical_size_status;
+#endif
     if (app == 0 || app->window == 0) return 0;
 #if defined(VOX_ANDROID_PORT)
     renderer_flags = SDL_RENDERER_ACCELERATED;
@@ -6103,8 +6119,9 @@ static int demo_create_presentation(demo_app *app)
     app->renderer = SDL_CreateRenderer(app->window, -1, renderer_flags);
 #if defined(VOX_ANDROID_PORT)
     if (app->renderer == 0) {
-        app->renderer = SDL_CreateRenderer(app->window, -1,
-                                           SDL_RENDERER_SOFTWARE);
+        /* Let SDL select any usable presentation backend if an accelerated
+         * context is briefly unavailable while Android attaches the surface. */
+        app->renderer = SDL_CreateRenderer(app->window, -1, 0U);
     }
 #else
     if (app->renderer == 0) {
@@ -6112,15 +6129,14 @@ static int demo_create_presentation(demo_app *app)
     }
 #endif
     if (app->renderer == 0) return 0;
+#if defined(VOX_ANDROID_PORT)
+    /* Android surface dimensions can change while the activity is settling.
+     * Present to an explicit rectangle instead of relying on SDL's logical
+     * size transform, which may capture an invalid early surface size. */
+#else
     logical_size_status = SDL_RenderSetLogicalSize(app->renderer,
                                                    (int)DEMO_WIDTH,
                                                    (int)DEMO_HEIGHT);
-#if defined(VOX_ANDROID_PORT)
-    /* A few GLES drivers expose a renderer before the first stable surface
-     * size. Rendering can still proceed safely without SDL logical scaling,
-     * so do not turn that transient setup failure into an app exit. */
-    if (logical_size_status != 0) SDL_ClearError();
-#else
     if (logical_size_status != 0 ||
         SDL_RenderSetIntegerScale(app->renderer, SDL_TRUE) != 0) {
         demo_destroy_presentation(app);
@@ -6134,6 +6150,13 @@ static int demo_create_presentation(demo_app *app)
         demo_destroy_presentation(app);
         return 0;
     }
+#if defined(VOX_ANDROID_PORT)
+    (void)SDL_SetTextureBlendMode(app->texture, SDL_BLENDMODE_NONE);
+    if (SDL_SetRenderDrawColor(app->renderer, 0U, 0U, 0U, 255U) != 0) {
+        demo_destroy_presentation(app);
+        return 0;
+    }
+#endif
     return 1;
 }
 
@@ -6152,15 +6175,81 @@ static void demo_prepare_android_present_pixels(void)
         destination[3] = 255U;
     }
 }
+
+static int demo_android_presentation_destination(demo_app *app,
+                                                 SDL_Rect *destination)
+{
+    int output_width;
+    int output_height;
+    int destination_width;
+    int destination_height;
+    long scaled;
+    if (app == 0 || app->renderer == 0 || destination == 0) return 0;
+    if (SDL_GetRendererOutputSize(app->renderer, &output_width,
+                                  &output_height) != 0 ||
+        output_width <= 0 || output_height <= 0) {
+        return 0;
+    }
+    if ((long)output_width * (long)DEMO_HEIGHT >
+        (long)output_height * (long)DEMO_WIDTH) {
+        destination_height = output_height;
+        scaled = (long)output_height * (long)DEMO_WIDTH /
+                 (long)DEMO_HEIGHT;
+        destination_width = (int)scaled;
+    } else {
+        destination_width = output_width;
+        scaled = (long)output_width * (long)DEMO_HEIGHT /
+                 (long)DEMO_WIDTH;
+        destination_height = (int)scaled;
+    }
+    if (destination_width <= 0 || destination_height <= 0) return 0;
+    destination->x = (output_width - destination_width) / 2;
+    destination->y = (output_height - destination_height) / 2;
+    destination->w = destination_width;
+    destination->h = destination_height;
+    return 1;
+}
+
+static int demo_android_recover_presentation(demo_app *app)
+{
+    vox_u32 now;
+    if (app == 0) return 0;
+    now = SDL_GetTicks();
+    if (app->android_renderer_retry_at != 0U &&
+        (Sint32)(now - app->android_renderer_retry_at) < 0) {
+        return 0;
+    }
+    app->android_renderer_retry_at = now + DEMO_ANDROID_RENDERER_RETRY_MS;
+    demo_destroy_presentation(app);
+    if (!demo_create_presentation(app)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "DIGS renderer recovery is waiting for a valid surface: %s",
+                     SDL_GetError());
+        return 0;
+    }
+    return 1;
+}
 #endif
 
-/* Return one for a presented frame, zero after a successful Android renderer
- * recovery, and negative one when there is no recoverable presentation path. */
+/* Android presentation failures are recoverable surface events. Keep the
+ * native loop alive, retry from a clean renderer, and let SDL resume normally
+ * once Android has supplied a valid output size. */
 static int demo_present_frame(demo_app *app)
 {
     const void *pixels;
     int pitch;
-    if (app == 0 || app->renderer == 0 || app->texture == 0) return -1;
+#if defined(VOX_ANDROID_PORT)
+    SDL_Rect destination;
+#endif
+    if (app == 0) return -1;
+#if defined(VOX_ANDROID_PORT)
+    if (app->renderer == 0 || app->texture == 0) {
+        (void)demo_android_recover_presentation(app);
+        return 0;
+    }
+#else
+    if (app->renderer == 0 || app->texture == 0) return -1;
+#endif
     pixels = demo_pixels;
     pitch = (int)demo_ui.stride;
 #if defined(VOX_ANDROID_PORT)
@@ -6168,6 +6257,22 @@ static int demo_present_frame(demo_app *app)
     pixels = demo_android_present_pixels;
     pitch = (int)(DEMO_WIDTH * DEMO_ANDROID_RGBA_BYTES);
 #endif
+#if defined(VOX_ANDROID_PORT)
+    if (!demo_android_presentation_destination(app, &destination) ||
+        SDL_UpdateTexture(app->texture, 0, pixels, pitch) != 0 ||
+        SDL_SetRenderDrawColor(app->renderer, 0U, 0U, 0U, 255U) != 0 ||
+        SDL_RenderClear(app->renderer) != 0 ||
+        SDL_RenderCopy(app->renderer, app->texture, 0, &destination) != 0) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "DIGS frame presentation is recovering: %s",
+                     SDL_GetError());
+        (void)demo_android_recover_presentation(app);
+        return 0;
+    }
+    SDL_RenderPresent(app->renderer);
+    app->android_renderer_retry_at = 0U;
+    return 1;
+#else
     if (SDL_UpdateTexture(app->texture, 0, pixels, pitch) != 0 ||
         SDL_RenderClear(app->renderer) != 0 ||
         SDL_RenderCopy(app->renderer, app->texture, 0, 0) != 0) {
@@ -6183,10 +6288,8 @@ static int demo_present_frame(demo_app *app)
         return -1;
     }
     SDL_RenderPresent(app->renderer);
-#if defined(VOX_ANDROID_PORT)
-    app->android_renderer_recovery_attempted = 0;
-#endif
     return 1;
+#endif
 }
 
 static void demo_set_mouse_logical(demo_app *app, int logical_x,
@@ -7025,6 +7128,14 @@ static void demo_handle_event(demo_app *app, const SDL_Event *event)
 {
     if (event->type == SDL_QUIT) {
         app->running = 0;
+#if defined(VOX_ANDROID_PORT)
+    } else if (event->type == SDL_RENDER_TARGETS_RESET ||
+               event->type == SDL_RENDER_DEVICE_RESET) {
+        /* Android can discard EGL resources during focus and surface changes.
+         * Recreate both texture and renderer on the next presentation. */
+        app->android_renderer_retry_at = 0U;
+        demo_destroy_presentation(app);
+#endif
     } else if (event->type == SDL_TEXTINPUT &&
                app->screen == DEMO_NAME_EDITOR) {
         int index;
@@ -8733,8 +8844,7 @@ int main(int argc, char **argv)
     app.window = SDL_CreateWindow("DIGS v0.0.3 Demo",
                                   SDL_WINDOWPOS_UNDEFINED,
                                   SDL_WINDOWPOS_UNDEFINED,
-                                  0, 0,
-                                  SDL_WINDOW_FULLSCREEN |
+                                  (int)DEMO_WIDTH, (int)DEMO_HEIGHT,
                                   SDL_WINDOW_ALLOW_HIGHDPI);
 #else
     app.window = SDL_CreateWindow("DIGS v0.0.3 Demo",
@@ -8749,12 +8859,22 @@ int main(int argc, char **argv)
         return 3;
     }
     demo_apply_fullscreen(&app);
+#if defined(VOX_ANDROID_PORT)
+    /* A surface can be momentarily unavailable after the activity starts.
+     * The frame loop below owns retries, so do not turn that into an exit. */
+    if (!demo_create_presentation(&app)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "DIGS is waiting for an Android renderer: %s",
+                    SDL_GetError());
+    }
+#else
     if (!demo_create_presentation(&app)) {
         fprintf(stderr, "renderer or texture failed: %s\n", SDL_GetError());
         SDL_DestroyWindow(app.window);
         SDL_Quit();
         return 4;
     }
+#endif
     demo_audio_open(&app);
     demo_audio_speak_text(&app, "DIGS!", VOX_AUDIO_SPEECH_DEEP,
                           VOX_AUDIO_PRIORITY_ANNOUNCER,
@@ -8834,6 +8954,11 @@ int main(int argc, char **argv)
                 continue;
             }
             if (present_status == 0) {
+#if defined(VOX_ANDROID_PORT)
+                /* A lost Android surface is expected to be transient. Avoid
+                 * a busy loop while the recovery path waits for it. */
+                SDL_Delay(16U);
+#endif
                 continue;
             }
         }
