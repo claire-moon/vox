@@ -33,6 +33,10 @@ def is_sdl2_notice_file(relative: str) -> bool:
     return relative == "LICENSES/SDL2-zlib.txt"
 
 
+def is_sdl2_source_file(relative: str) -> bool:
+    return relative.startswith("third_party/SDL/")
+
+
 def digest(path: Path, algorithm: str) -> str:
     value = hashlib.new(algorithm)
     with path.open("rb") as source:
@@ -63,7 +67,7 @@ def make_file(root: Path, path: Path) -> Dict[str, object]:
         CONTROLLER_DB_LICENSE
         if is_controller_db_file(relative)
         else SDL_LICENSE
-        if is_sdl2_notice_file(relative)
+        if is_sdl2_notice_file(relative) or is_sdl2_source_file(relative)
         else PROJECT_LICENSE
     )
     return {
@@ -98,6 +102,11 @@ def main() -> int:
         "--bundled-sdl2",
         action="store_true",
         help="record SDL2 as a bundled component rather than a system dependency",
+    )
+    parser.add_argument(
+        "--bundled-sdl2-source",
+        action="store_true",
+        help="record pinned SDL2 source included with the source archive",
     )
     args = parser.parse_args()
 
@@ -155,19 +164,33 @@ def main() -> int:
         for item, path in zip(files, paths)
         if is_controller_db_file(path.relative_to(root).as_posix())
     ]
+    sdl_source_file_ids = [
+        item["SPDXID"]
+        for item, path in zip(files, paths)
+        if is_sdl2_source_file(path.relative_to(root).as_posix())
+    ]
+    sdl_is_bundled = args.bundled_sdl2 or args.bundled_sdl2_source
     sdl_comment = (
         "Bundled as a statically linked component of the Windows executable."
         if args.bundled_sdl2
         else (
-            "External, system-provided dynamic runtime dependency. "
-            f"SDL2 is not included in this {distribution_kind}."
+            "Pinned SDL2 source is included for the Android host."
+            if args.bundled_sdl2_source
+            else (
+                "External, system-provided dynamic runtime dependency. "
+                f"SDL2 is not included in this {distribution_kind}."
+            )
         )
     )
-    sdl_relationship_type = "CONTAINS" if args.bundled_sdl2 else "DEPENDS_ON"
+    sdl_relationship_type = "CONTAINS" if sdl_is_bundled else "DEPENDS_ON"
     sdl_relationship_comment = (
         "SDL2 is bundled as a statically linked component."
         if args.bundled_sdl2
-        else "External system dependency; not bundled."
+        else (
+            "Pinned SDL2 source is included for the Android host."
+            if args.bundled_sdl2_source
+            else "External system dependency; not bundled."
+        )
     )
     document = {
         "spdxVersion": "SPDX-2.3",
@@ -208,12 +231,14 @@ def main() -> int:
                 "SPDXID": sdl_id,
                 "versionInfo": "2.x (minimum supported 2.0.10)",
                 "downloadLocation": "https://github.com/libsdl-org/SDL/tree/SDL2",
-                "filesAnalyzed": False,
+                "filesAnalyzed": args.bundled_sdl2_source,
                 "licenseConcluded": SDL_LICENSE,
                 "licenseDeclared": SDL_LICENSE,
                 "copyrightText": "NOASSERTION",
                 "primaryPackagePurpose": "LIBRARY",
                 "comment": sdl_comment,
+                **({"hasFiles": sdl_source_file_ids}
+                   if args.bundled_sdl2_source else {}),
             },
             {
                 "name": "SDL GameControllerDB",
@@ -254,6 +279,14 @@ def main() -> int:
                 "relatedSpdxElement": controller_db_id,
                 "comment": "Pinned controller mapping data; bundled.",
             },
+        ]
+        + [
+            {
+                "spdxElementId": sdl_id,
+                "relationshipType": "CONTAINS",
+                "relatedSpdxElement": identifier,
+            }
+            for identifier in sdl_source_file_ids
         ]
         + [
             {
