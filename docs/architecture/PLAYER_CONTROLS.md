@@ -54,6 +54,36 @@ The public input and fire records are ABI-versioned. A future replay or network
 transport should serialize these commands plus required setup metadata, not
 body transforms or presentation events.
 
+## Android phone overlay
+
+The experimental Android host keeps the same player-one input record and
+authoritative tick boundary. Its Java overlay sends held actions, a gamepad-
+style aim vector, or a direct touch cursor to the SDL host; it does not
+synthesize a second simulation, touch-specific weapon, or alternate physics
+path. Non-play screens expose a dedicated menu overlay instead of reusing
+gameplay labels.
+
+| Phone control | DIGS input | Screen behavior |
+|---|---|---|
+| Menu UP / DOWN | Up/down navigation key | Navigate the current menu |
+| Menu LEFT / RIGHT | Left/right navigation key | Change the selected value |
+| Menu SELECT | Accept key | Activate the selected item |
+| Menu BACK or Android Back | Escape/back key | Return to the prior menu |
+| Gameplay LEFT / RIGHT | Held horizontal movement | Match only |
+| Gameplay JUMP / STEAM | Held jump / steam action | Match only |
+| AIM pad | Player-one aim direction and magnitude | Match only |
+| Blank gameplay surface | Mouse-style absolute cursor aim | Match only |
+| FIRE | Held fire, charge/release, and ON FIRE respawn | Match only |
+| ROPE | Held/toggled rope under the configured rope policy | Match only |
+| TOOL | Tap next weapon; hold previous weapon | Match only |
+| PAUSE | Pause key | Match only |
+
+Buttons have a minimum 48 dp touch target, visible high-contrast labels, and
+Android accessibility descriptions. The aim pad is separately labelled as a
+drag control. A connected hardware controller still uses the existing SDL2
+controller path, while any phone-overlay action deliberately selects the
+existing keyboard-style player-one source.
+
 AUTO and locked keyboard/controller ownership are host policies and remain
 outside the match hash. In ON FIRE respawn mode the host requires Fire to be
 released after death and pressed again once the authoritative countdown is

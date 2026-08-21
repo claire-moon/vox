@@ -22,6 +22,7 @@ GLIBC_MAX=${VOX_PACKAGE_GLIBC_MAX:-2.35}
 CONTROLLER_DB="$ROOT/third_party/SDL_GameControllerDB/gamecontrollerdb.txt"
 CONTROLLER_DB_SHA256=dd4dd9dcb458aa4fbfd9b37ccdd4884b1e2e258edf8a16c3c4df3e77ac5174a0
 WORK_DIR=
+BUNDLED_SDL_SOURCE=0
 
 if [[ -n "$BUILD_JOBS" && ! "$BUILD_JOBS" =~ ^[1-9][0-9]*$ ]]; then
     printf 'package-linux-demo: VOX_BUILD_JOBS must be a positive integer\n' >&2
@@ -64,6 +65,25 @@ copy_tree()
 
     mkdir -p -- "$destination"
     cp -RPp -- "$source"/. "$destination"/
+}
+
+copy_submodule_tree()
+{
+    local source=$1
+    local destination=$2
+    local relative_path
+
+    # A desktop source archive can be built without the optional Android
+    # source submodule. Its pinned retrieval record remains in .gitmodules.
+    [[ -e "$source/.git" ]] || return 1
+    git -C "$source" rev-parse --is-inside-work-tree >/dev/null 2>&1 || \
+        die "tracked submodule is invalid: $source"
+    mkdir -p -- "$destination"
+    git -C "$source" ls-files -z | while IFS= read -r -d '' relative_path; do
+        mkdir -p -- "$destination/$(dirname -- "$relative_path")"
+        cp -Pp -- "$source/$relative_path" \
+            "$destination/$relative_path"
+    done
 }
 
 make_archive()
@@ -428,9 +448,24 @@ python3 -m json.tool "$STAGE_DIR/SBOM.spdx.json" >/dev/null
 # explicit dirty-tree override still captures modified and new source files.
 mkdir -p -- "$SOURCE_STAGE"
 while IFS= read -r -d '' relative_path; do
-    mkdir -p -- "$SOURCE_STAGE/$(dirname -- "$relative_path")"
-    cp -Pp -- "$ROOT/$relative_path" "$SOURCE_STAGE/$relative_path"
+    if [[ -d "$ROOT/$relative_path" ]]; then
+        # A gitlink is a tracked source boundary, not a regular file. Copy
+        # only the submodule's tracked tree so the archive retains the pinned
+        # source without embedding its private .git metadata.
+        if copy_submodule_tree "$ROOT/$relative_path" \
+            "$SOURCE_STAGE/$relative_path"; then
+            BUNDLED_SDL_SOURCE=1
+        fi
+    else
+        mkdir -p -- "$SOURCE_STAGE/$(dirname -- "$relative_path")"
+        cp -Pp -- "$ROOT/$relative_path" "$SOURCE_STAGE/$relative_path"
+    fi
 done < <(git -C "$ROOT" ls-files -z --cached --others --exclude-standard)
+
+SOURCE_SDL_ARGUMENT=()
+if [[ "$BUNDLED_SDL_SOURCE" == 1 ]]; then
+    SOURCE_SDL_ARGUMENT=(--bundled-sdl2-source)
+fi
 
 python3 "$ROOT/tools/generate-spdx-sbom.py" \
     --root "$SOURCE_STAGE" \
@@ -440,6 +475,7 @@ python3 "$ROOT/tools/generate-spdx-sbom.py" \
     --epoch "$SOURCE_DATE_EPOCH" \
     --document-name "VOX + DIGS $VERSION Corresponding Source" \
     --purpose SOURCE \
+    "${SOURCE_SDL_ARGUMENT[@]}" \
     --namespace-label corresponding-source
 
 python3 -m json.tool "$SOURCE_STAGE/SBOM.spdx.json" >/dev/null

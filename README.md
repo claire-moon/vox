@@ -30,6 +30,14 @@ Keep `bin/`, `bin/share`, `share/`, and `libexec/` in the extracted folder.
 If the launcher says SDL2 is missing, install the SDL2 runtime from your Linux
 distribution and run `./run-digs.sh` again.
 
+## Experimental Android port
+
+The released `v0.0.3` game has an Android source port under
+[`ports/android`](ports/android/README.md). It compiles the same SDL2 host,
+deterministic core, scripts, renderer, and audio path with accessible,
+on-screen controls for phone users. It is not yet a released or
+hardware-verified Android package.
+
 ## License
 
 DIGS and VOX are licensed under [GPL-3.0-or-later](LICENSE).
