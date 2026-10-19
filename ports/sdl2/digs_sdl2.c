@@ -377,6 +377,7 @@ typedef struct demo_app {
     demo_killfeed_line killfeed[DEMO_KILLFEED_MAX];
     demo_speech_bubble bubbles[VOX_DIGS_MAX_SLOTS];
     vox_u16 miner_hit_ttl[VOX_DIGS_MAX_SLOTS];
+    vox_u16 weapon_flash_ttl[VOX_DIGS_MAX_SLOTS];
     vox_u16 victory_bark_ttl[VOX_DIGS_MAX_SLOTS];
     vox_u16 crosshair_pulse_ttl[DEMO_LOCAL_MAX];
     vox_u16 multikill_count[DEMO_LOCAL_MAX];
@@ -3880,17 +3881,14 @@ static void demo_miner_overlay_plot(void *context, int x, int y,
     demo_render_voxel(x, y, material);
 }
 
-static void demo_voxelize_miner(const demo_app *app, vox_u16 player)
+static void demo_miner_pose(const demo_app *app, vox_u16 player,
+                             digs_miner_pose *pose_out)
 {
     static const vox_u16 coats[VOX_DIGS_MAX_SLOTS] = {
         VOX_MAT_METAL, VOX_MAT_BIOMASS, VOX_MAT_COAL, VOX_MAT_STONE
     };
     const vox_physics_body *body = &demo_match.players[player];
     digs_miner_pose pose;
-    int x = demo_q16_to_screen(body->position_x.value_q16,
-                               VOX_WORLD_WIDTH, VOX_WORLD_WIDTH);
-    int y = demo_q16_to_screen(body->position_y.value_q16,
-                               VOX_WORLD_HEIGHT, VOX_WORLD_HEIGHT);
     vox_i32 speed_x = body->velocity_x.value_q16;
     vox_u16 part;
     digs_miner_pose_default(&pose);
@@ -3914,13 +3912,20 @@ static void demo_voxelize_miner(const demo_app *app, vox_u16 player)
         (demo_match.player_actions[player] & VOX_DIGS_ACTION_STEAM) != 0U &&
         demo_match.steam_q16[player] > 0U;
     pose.steam_variant = (vox_u16)((demo_match.tick + player * 17U) & 7U);
-    pose.animation_phase = (vox_u16)((demo_match.tick + player * 3U) & 3U);
+    pose.animation_phase = (vox_u16)((((demo_match.tick / 3U) +
+                                      player * 5U) & 15U) |
+                                     DIGS_MINER_ARTICULATED);
+    pose.aim_x = (int)demo_match.aim_x[player] -
+                 (int)(body->position_x.value_q16 / 65536L);
+    pose.aim_y = (int)demo_match.aim_y[player] -
+                 (int)(body->position_y.value_q16 / 65536L);
     pose.animation = DIGS_MINER_ANIMATION_IDLE;
     if (app->miner_hit_ttl[player] > 0U) {
         pose.animation = DIGS_MINER_ANIMATION_PAIN;
     } else if (pose.steam_thrusting != 0U) {
         pose.animation = DIGS_MINER_ANIMATION_STEAM;
-    } else if ((demo_match.player_actions[player] & VOX_DIGS_ACTION_FIRE) !=
+    } else if (app->weapon_flash_ttl[player] != 0U ||
+               (demo_match.player_actions[player] & VOX_DIGS_ACTION_FIRE) !=
                0U || demo_match.weapon_charging[player] != 0U ||
                demo_match.rail_charging[player] != 0U) {
         pose.animation = DIGS_MINER_ANIMATION_FIRE;
@@ -3941,6 +3946,16 @@ static void demo_voxelize_miner(const demo_app *app, vox_u16 player)
             pose.severed_mask |= (vox_u32)1U << part;
         }
     }
+    *pose_out = pose;
+}
+
+static void demo_voxelize_miner(const demo_app *app, vox_u16 player)
+{
+    const vox_physics_body *body = &demo_match.players[player];
+    digs_miner_pose pose;
+    int x = (int)(body->position_x.value_q16 / 65536L);
+    int y = (int)(body->position_y.value_q16 / 65536L);
+    demo_miner_pose(app, player, &pose);
     (void)digs_miner_plot(x, y, &pose, demo_miner_overlay_plot, 0);
 }
 
@@ -4081,45 +4096,36 @@ static void demo_voxelize_dropship(void)
     }
 }
 
-/* A held tool is a tiny presentation-only voxel silhouette.  The gameplay
- * weapon remains the selected authoritative ID; this only makes its muzzle
- * direction legible at the same scale as the miner art. */
-static void demo_voxelize_weapon_model(vox_u16 player)
+/* Every held tool has an authored voxel form.  Its grip follows the same
+ * evaluated hand joint as the miner; the model and flash share an endpoint. */
+static void demo_voxelize_weapon_model(const demo_app *app, vox_u16 player)
 {
     const vox_physics_body *body = &demo_match.players[player];
-    vox_u16 weapon = demo_match.selected_weapon[player];
+    digs_miner_pose miner;
+    digs_miner_skeleton skeleton;
+    digs_weapon_pose weapon;
     int body_x = (int)(body->position_x.value_q16 / 65536L);
     int body_y = (int)(body->position_y.value_q16 / 65536L);
-    int muzzle_x = body_x + (demo_match.facing_right[player] ? 3 : -3);
-    int muzzle_y = body_y - 2;
-    int delta_x = (int)demo_match.aim_x[player] - body_x;
-    int delta_y = (int)demo_match.aim_y[player] - body_y;
-    int step_x;
-    int step_y;
-    int length;
-    vox_u16 material;
-    if (weapon >= VOX_DIGS_TOOL_COUNT) return;
-    if (delta_x == 0 && delta_y == 0) {
-        step_x = demo_match.facing_right[player] ? 1 : -1;
-        step_y = 0;
-    } else if ((delta_x < 0 ? -delta_x : delta_x) >=
-               (delta_y < 0 ? -delta_y : delta_y)) {
-        step_x = delta_x < 0 ? -1 : 1;
-        step_y = delta_y < 0 ? -1 : (delta_y > 0 ? 1 : 0);
-    } else {
-        step_x = delta_x < 0 ? -1 : (delta_x > 0 ? 1 : 0);
-        step_y = delta_y < 0 ? -1 : 1;
-    }
-    material = weapon == VOX_DIGS_TOOL_CINDER_FLASK ||
-               weapon == VOX_DIGS_TOOL_RAIL_GUN ? VOX_MAT_LAVA :
-               VOX_MAT_METAL;
-    for (length = 0; length < 4; ++length) {
-        demo_render_voxel(muzzle_x + step_x * length,
-                          muzzle_y + step_y * length, material);
-    }
-    demo_render_voxel(muzzle_x + step_x * 4, muzzle_y + step_y * 4,
-                      weapon == VOX_DIGS_TOOL_SMOKE_POT ? VOX_MAT_SMOKE :
-                      material);
+    int hand;
+    int muzzle_x;
+    int muzzle_y;
+    vox_u16 hand_part;
+    demo_miner_pose(app, player, &miner);
+    hand = miner.facing_right ? DIGS_MINER_JOINT_RIGHT_HAND :
+                                DIGS_MINER_JOINT_LEFT_HAND;
+    hand_part = miner.facing_right ? VOX_DIGS_PART_RIGHT_HAND :
+                                    VOX_DIGS_PART_LEFT_HAND;
+    if ((miner.severed_mask & ((vox_u32)1U << hand_part)) != 0U ||
+        digs_miner_skeleton_build(&miner, &skeleton) != VOX_OK) return;
+    weapon.weapon = demo_match.selected_weapon[player];
+    weapon.firing = app->weapon_flash_ttl[player] != 0U;
+    weapon.phase = (vox_u16)(demo_match.tick & 7U);
+    weapon.reserved = 0U;
+    weapon.aim_x = miner.aim_x;
+    weapon.aim_y = miner.aim_y;
+    (void)digs_weapon_plot(body_x + skeleton.x[hand],
+        body_y + skeleton.y[hand], &weapon, demo_miner_overlay_plot, 0,
+        &muzzle_x, &muzzle_y);
 }
 
 /* Bodies in the authoritative rigid pool used to be visible only in replay
@@ -4226,7 +4232,7 @@ static void demo_voxelize_player_overlays(demo_app *app)
         if (demo_match.alive[player]) {
             demo_voxelize_rope(player);
             demo_voxelize_miner(app, player);
-            demo_voxelize_weapon_model(player);
+            demo_voxelize_weapon_model(app, player);
         }
     }
 }
@@ -4475,54 +4481,159 @@ static void demo_view_advance(vox_i32 *position_q16, vox_u32 *error,
     }
 }
 
-/* Keep the atmospheric pass subordinate to the terrain palette.  The former
- * two hard horizon silhouettes and per-cell cloud dither read as accidental
- * foreground geometry at this resolution.  A tiny air-only fog bias and one
- * seed-derived moon retain depth without replacing the renderer's material
- * decisions or canonical state. */
+#define DEMO_CLOUD_STEP 4U
+#define DEMO_CLOUD_COLUMNS (DEMO_WIDTH / DEMO_CLOUD_STEP + 1U)
+#define DEMO_CLOUD_ROWS (DEMO_HEIGHT / DEMO_CLOUD_STEP + 1U)
+static vox_u8 demo_cloud_field[DEMO_CLOUD_ROWS][DEMO_CLOUD_COLUMNS];
+static int demo_parallax_ridge[3][DEMO_WIDTH];
+
+/* Four samples through a smooth, seeded density volume.  Opacity integrates
+ * along the ray with bounded integer transmittance.  The field is evaluated
+ * on a four-pixel grid and interpolated by the raster pass, which avoids
+ * noisy voxel dither and keeps presentation work independent of frame rate. */
+static int demo_cloud_ray(int world_x, int world_y, vox_u32 tick)
+{
+    int opacity = 0;
+    int sample;
+    if (world_y < 24 || world_y > 116) return 0;
+    for (sample = 0; sample < 4; ++sample) {
+        int x = world_x + (int)((tick / 8U) % 4096U) + sample * 11;
+        int y = world_y + sample * 3;
+        int cell_x;
+        int cell_y;
+        int blend_x;
+        int blend_y;
+        int a;
+        int b;
+        int c;
+        int d;
+        int density;
+        int vertical = 46 - (world_y > 70 ? world_y - 70 : 70 - world_y);
+        vox_u32 salt = 1201U + (vox_u32)sample * 73U;
+        if (x < 0) x += 8192;
+        if (y < 0) y = 0;
+        cell_x = x / 48;
+        cell_y = y / 24;
+        blend_x = x % 48;
+        blend_y = y % 24;
+        a = (int)(vox_digs_noise(demo_match.rules.seed,
+            (vox_u32)cell_x, (vox_u32)cell_y, salt) & 255U);
+        b = (int)(vox_digs_noise(demo_match.rules.seed,
+            (vox_u32)(cell_x + 1), (vox_u32)cell_y, salt) & 255U);
+        c = (int)(vox_digs_noise(demo_match.rules.seed,
+            (vox_u32)cell_x, (vox_u32)(cell_y + 1), salt) & 255U);
+        d = (int)(vox_digs_noise(demo_match.rules.seed,
+            (vox_u32)(cell_x + 1), (vox_u32)(cell_y + 1), salt) & 255U);
+        a += (b - a) * blend_x / 48;
+        c += (d - c) * blend_x / 48;
+        density = a + (c - a) * blend_y / 24 - 112;
+        if (density < 0) density = 0;
+        density = density * vertical / 184;
+        if (density > 48) density = 48;
+        opacity += (255 - opacity) * density / 255;
+    }
+    return opacity;
+}
+
+static void demo_prepare_atmosphere(const demo_app *app,
+                                    const vox_software_view *view)
+{
+    vox_u32 row;
+    vox_u32 column;
+    int layer;
+    int camera_x = (int)app->camera_world_x;
+    int camera_y = (int)app->camera_world_y;
+    for (column = 0U; column < DEMO_WIDTH; ++column) {
+        int world_x = (int)((view->origin_x_q16 +
+            (vox_i32)(column * ((vox_u32)view->width_q16 / DEMO_WIDTH) +
+                      column * ((vox_u32)view->width_q16 % DEMO_WIDTH) /
+                      DEMO_WIDTH)) /
+            65536L);
+        for (layer = 0; layer < 3; ++layer) {
+            int sample_x = world_x - camera_x * (3 - layer) / 5 +
+                           layer * 79 + (int)VOX_WORLD_WIDTH;
+            sample_x %= (int)VOX_WORLD_WIDTH;
+            demo_parallax_ridge[layer][column] =
+                (int)vox_digs_map_surface(demo_match.rules.map_style,
+                    demo_match.rules.seed, (vox_u32)sample_x) / 2 +
+                24 + layer * 12 + camera_y * (3 - layer) / 12;
+        }
+    }
+    for (row = 0U; row < DEMO_CLOUD_ROWS; ++row) {
+        int world_y = (int)((view->origin_y_q16 +
+            (vox_i32)(row * DEMO_CLOUD_STEP *
+                      ((vox_u32)view->height_q16 / DEMO_HEIGHT) +
+                      row * DEMO_CLOUD_STEP *
+                      ((vox_u32)view->height_q16 % DEMO_HEIGHT) / DEMO_HEIGHT)) / 65536L);
+        for (column = 0U; column < DEMO_CLOUD_COLUMNS; ++column) {
+            int world_x = (int)((view->origin_x_q16 +
+                (vox_i32)(column * DEMO_CLOUD_STEP *
+                          ((vox_u32)view->width_q16 / DEMO_WIDTH) +
+                          column * DEMO_CLOUD_STEP *
+                          ((vox_u32)view->width_q16 % DEMO_WIDTH) / DEMO_WIDTH)) / 65536L);
+            demo_cloud_field[row][column] = (vox_u8)demo_cloud_ray(
+                world_x - camera_x / 6, world_y - camera_y / 12,
+                demo_match.tick);
+        }
+    }
+}
+
+/* The distant layers and clouds affect air pixels only.  All material edges,
+ * projectiles, held models and the HUD keep their foreground palette. */
 static void demo_atmosphere_pixel(const demo_app *app, vox_u32 world_x,
-                                  vox_u32 world_y, vox_u8 *pixel)
+                                  vox_u32 world_y, vox_u32 screen_x,
+                                  vox_u32 screen_y, vox_u8 *pixel)
 {
     vox_u32 seed = demo_match.rules.seed;
-    int red;
-    int green;
-    int blue;
-    int fog;
-    int moon_x;
-    int moon_y;
-    int moon_radius;
-    int delta_x;
-    int delta_y;
-    (void)app;
-    red = (int)pixel[0];
-    green = (int)pixel[1];
-    blue = (int)pixel[2];
-    fog = (int)(world_y / 80U);
+    int red = (int)pixel[0];
+    int green = (int)pixel[1];
+    int blue = (int)pixel[2];
+    int fog = (int)(world_y / 80U);
+    int moon_x = 28 + (int)(seed % (VOX_WORLD_WIDTH - 56U));
+    int moon_y = 50 + (int)((seed >> 16) % 20U);
+    int moon_radius = 5 + (int)((seed >> 8) & 3U);
+    int delta_x = (int)world_x - (int)app->camera_world_x / 8 - moon_x;
+    int delta_y = (int)world_y - (int)app->camera_world_y / 16 - moon_y;
+    int layer;
+    int cloud;
+    int a;
+    int b;
+    int cx = (int)(screen_x / DEMO_CLOUD_STEP);
+    int cy = (int)(screen_y / DEMO_CLOUD_STEP);
+    int fx = (int)(screen_x % DEMO_CLOUD_STEP);
+    int fy = (int)(screen_y % DEMO_CLOUD_STEP);
     red += fog;
     green += fog;
     blue += fog * 2;
-    moon_x = 28 + (int)(seed % (VOX_WORLD_WIDTH - 56U));
-    moon_y = 18 + (int)((seed >> 16) % 28U);
-    moon_radius = 5 + (int)((seed >> 8) & 3U);
-    delta_x = (int)world_x - moon_x;
-    delta_y = (int)world_y - moon_y;
+    a = demo_cloud_field[cy][cx] +
+        ((int)demo_cloud_field[cy][cx + 1] - demo_cloud_field[cy][cx]) * fx / 4;
+    b = demo_cloud_field[cy + 1][cx] +
+        ((int)demo_cloud_field[cy + 1][cx + 1] -
+         demo_cloud_field[cy + 1][cx]) * fx / 4;
+    cloud = a + (b - a) * fy / 4;
+    red += cloud / 12;
+    green += cloud / 10;
+    blue += cloud / 8;
+    for (layer = 0; layer < 3; ++layer) {
+        int depth = (int)world_y - demo_parallax_ridge[layer][screen_x];
+        if (depth > 0) {
+            int alpha = depth > 12 ? 12 : depth;
+            /* Soft twelve-voxel edges and narrow contrast separate these
+             * onion layers from destructible terrain and loose debris. */
+            red += (39 + layer * 5 - red) * alpha / 48;
+            green += (43 + layer * 5 - green) * alpha / 48;
+            blue += (58 + layer * 5 - blue) * alpha / 48;
+        }
+    }
     if (world_y < 72U &&
         delta_x * delta_x + delta_y * delta_y <= moon_radius * moon_radius) {
-        red = 236;
-        green = 240;
-        blue = 244;
-        pixel[0] = (vox_u8)red;
-        pixel[1] = (vox_u8)green;
-        pixel[2] = (vox_u8)blue;
+        pixel[0] = 236U; pixel[1] = 240U; pixel[2] = 244U;
         demo_atmosphere_quantize(&pixel[0], &pixel[1], &pixel[2]);
         return;
     }
-    if (red > 255) red = 255;
-    if (green > 255) green = 255;
-    if (blue > 255) blue = 255;
-    pixel[0] = (vox_u8)red;
-    pixel[1] = (vox_u8)green;
-    pixel[2] = (vox_u8)blue;
+    pixel[0] = (vox_u8)(red > 255 ? 255 : red);
+    pixel[1] = (vox_u8)(green > 255 ? 255 : green);
+    pixel[2] = (vox_u8)(blue > 255 ? 255 : blue);
 }
 
 static void demo_apply_atmosphere(const demo_app *app,
@@ -4536,6 +4647,7 @@ static void demo_apply_atmosphere(const demo_app *app,
     vox_u32 error_y = 0U;
     vox_u32 pixel_y;
     if (app == 0 || view == 0) return;
+    demo_prepare_atmosphere(app, view);
     step_x_q16 = view->width_q16 / (vox_i32)DEMO_WIDTH;
     step_y_q16 = view->height_q16 / (vox_i32)DEMO_HEIGHT;
     remainder_x = (vox_u32)(view->width_q16 % (vox_i32)DEMO_WIDTH);
@@ -4553,7 +4665,8 @@ static void demo_apply_atmosphere(const demo_app *app,
                                           VOX_SOFTWARE_RGB_BYTES];
             if (world_x >= VOX_WORLD_WIDTH) world_x = VOX_WORLD_WIDTH - 1U;
             if (demo_render_pixel_is_air(pixel, world_y)) {
-                demo_atmosphere_pixel(app, world_x, world_y, pixel);
+                demo_atmosphere_pixel(app, world_x, world_y,
+                                      pixel_x, pixel_y, pixel);
             }
             demo_view_advance(&world_x_q16, &error_x, step_x_q16,
                               remainder_x, DEMO_WIDTH);
@@ -5922,6 +6035,7 @@ static int demo_start_match(demo_app *app, int foundry)
     memset(app->killfeed, 0, sizeof(app->killfeed));
     memset(app->bubbles, 0, sizeof(app->bubbles));
     memset(app->miner_hit_ttl, 0, sizeof(app->miner_hit_ttl));
+    memset(app->weapon_flash_ttl, 0, sizeof(app->weapon_flash_ttl));
     memset(app->victory_bark_ttl, 0, sizeof(app->victory_bark_ttl));
     memset(app->crosshair_pulse_ttl, 0,
            sizeof(app->crosshair_pulse_ttl));
@@ -6864,6 +6978,14 @@ static void demo_process_events(demo_app *app)
             }
             demo_audio_emit(app, VOX_AUDIO_PRESET_HIT,
                             event->variant, pan);
+            if (event->magnitude >= 8U &&
+                event->target < demo_match.rules.player_count &&
+                app->miner_hit_ttl[event->target] == 0U &&
+                demo_match.alive[event->target]) {
+                demo_audio_emit(app, VOX_AUDIO_PRESET_GRUNT,
+                    vox_digs_memory_identity(&demo_match, event->target),
+                    pan);
+            }
             if (event->magnitude > 0U &&
                 event->target < VOX_DIGS_MAX_SLOTS) {
                 app->miner_hit_ttl[event->target] = DEMO_MINER_HIT_TICKS;
@@ -6903,6 +7025,11 @@ static void demo_process_events(demo_app *app)
         } else if (event->type == VOX_DIGS_EVENT_KILL) {
             demo_audio_emit(app, VOX_AUDIO_PRESET_KILL,
                             event->variant, pan);
+            if (event->target < demo_match.rules.player_count) {
+                demo_audio_emit(app, VOX_AUDIO_PRESET_DEATH_MOAN,
+                    vox_digs_memory_identity(&demo_match, event->target),
+                    pan);
+            }
             if (demo_event_is_local(app, event)) {
                 app->camera_trauma += 0.9;
                 app->flash_kind = 1;
@@ -7052,6 +7179,7 @@ static void demo_process_events(demo_app *app)
         } else if (event->type == VOX_DIGS_EVENT_WEAPON_FIRE) {
             demo_audio_weapon_fire(app, event, pan);
             if (event->source < VOX_DIGS_MAX_SLOTS) {
+                app->weapon_flash_ttl[event->source] = 4U;
                 app->rail_origin_x_q16[event->source] =
                     event->position_x_q16;
                 app->rail_origin_y_q16[event->source] =
@@ -7137,6 +7265,9 @@ static void demo_tick_presentation(demo_app *app)
     for (slot = 0; slot < (int)VOX_DIGS_MAX_SLOTS; ++slot) {
         if (app->bot_health_ttl[slot] > 0U) {
             --app->bot_health_ttl[slot];
+        }
+        if (app->weapon_flash_ttl[slot] > 0U) {
+            --app->weapon_flash_ttl[slot];
         }
         if (app->miner_hit_ttl[slot] > 0U) {
             --app->miner_hit_ttl[slot];
@@ -8617,7 +8748,8 @@ static int demo_compare_u32(const void *left, const void *right)
     return 0;
 }
 
-static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
+static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench,
+                                      int destruction_stress)
 {
     static const vox_u16 explosive_tools[3] = {
         VOX_DIGS_TOOL_FIRECRACKER,
@@ -8628,10 +8760,15 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
     vox_u32 *samples = 0;
     Uint64 frequency = 0U;
     Uint64 total_us = 0U;
+    Uint64 service_debt_us = 0U;
+    Uint64 maximum_debt_us = 0U;
+    vox_u32 late_ticks = 0U;
     vox_u32 tick;
     vox_u32 p95_index;
+    vox_u32 p99_index;
     vox_u32 average_us;
     vox_u32 p95_us;
+    vox_u32 p99_us;
     vox_u32 maximum_us;
     vox_u32 fired = 0U;
     vox_u32 explosions = 0U;
@@ -8691,8 +8828,20 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
         return 4;
     }
     for (tick = 0U; tick < ticks; ++tick) {
+        Uint64 started = qualify_named_bench ?
+            SDL_GetPerformanceCounter() : 0U;
         vox_u16 player;
-        if ((tick % 90U) == 0U) {
+        if (destruction_stress && (tick % 45U) == 0U) {
+            vox_u16 source = (vox_u16)((tick / 45U) % 2U);
+            vox_u32 blast_x = VOX_WORLD_WIDTH / 5U +
+                (tick / 45U * 67U) % (VOX_WORLD_WIDTH * 3U / 5U);
+            vox_u32 blast_y = VOX_WORLD_HEIGHT * 3U / 5U;
+            if (demo_match.alive[source]) {
+                (void)vox_digs_use_tool(&demo_match, source,
+                                        VOX_DIGS_TOOL_FIRECRACKER,
+                                        blast_x, blast_y, 0U);
+            }
+        } else if ((tick % 90U) == 0U) {
             vox_u32 blast_x = VOX_WORLD_WIDTH / 5U +
                 (tick / 90U * 67U) % (VOX_WORLD_WIDTH * 3U / 5U);
             vox_u32 blast_y = VOX_WORLD_HEIGHT * 3U / 5U;
@@ -8747,7 +8896,6 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
             (void)vox_digs_submit_input(&demo_match, &input);
         }
         if (qualify_named_bench) {
-            Uint64 started = SDL_GetPerformanceCounter();
             Uint64 stopped;
             Uint64 elapsed;
             if (vox_digs_match_step(&demo_match) != VOX_OK) {
@@ -8762,6 +8910,17 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
             samples[tick] = (vox_u32)((elapsed * 1000000U + frequency - 1U) /
                                       frequency);
             total_us += samples[tick];
+            /* A virtual 60 Hz service queue measures whether the complete
+             * authoritative workload (including tool/input submission)
+             * recovers its budget. This is not a presented-frame benchmark.
+             * Keep clocks and debt entirely in this host-only probe. */
+            if (samples[tick] > 16667U) ++late_ticks;
+            service_debt_us += samples[tick];
+            if (service_debt_us > 16667U) service_debt_us -= 16667U;
+            else service_debt_us = 0U;
+            if (service_debt_us > maximum_debt_us) {
+                maximum_debt_us = service_debt_us;
+            }
         } else if (vox_digs_match_step(&demo_match) != VOX_OK) {
             fprintf(stderr,
                     "load self-test: match step failed at %lu\n",
@@ -8798,20 +8957,42 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
             p95_index = (ticks * 95U + 99U) / 100U;
             if (p95_index > 0U) --p95_index;
             if (p95_index >= ticks) p95_index = ticks - 1U;
+            p99_index = (ticks * 99U + 99U) / 100U;
+            if (p99_index > 0U) --p99_index;
+            if (p99_index >= ticks) p99_index = ticks - 1U;
             average_us = (vox_u32)((total_us + ticks / 2U) / ticks);
             p95_us = samples[p95_index];
+            p99_us = samples[p99_index];
             maximum_us = samples[ticks - 1U];
-            printf("DIGS named-bench performance qualification ticks=%lu "
-                   "slots=4 local=2 bots=2 avg=%.3fms p95=%.3fms "
-                   "max=%.3fms fired=%lu explosions=%lu crushes=%lu "
-                   "effects=%u awake=%lu hash=%08lx\n",
-                   (unsigned long)ticks, (double)average_us / 1000.0,
-                   (double)p95_us / 1000.0,
-                   (double)maximum_us / 1000.0,
-                   (unsigned long)fired, (unsigned long)explosions,
-                   (unsigned long)crushes, (unsigned int)max_effects,
-                   (unsigned long)max_awake,
-                   (unsigned long)demo_match.state_hash);
+            if (destruction_stress) {
+                printf("DIGS named destruction stress ticks=%lu slots=4 "
+                       "local=2 bots=2 p99=%.3fms max=%.3fms "
+                       "service_debt=%.3fms max_service_debt=%.3fms "
+                       "late_ticks=%lu "
+                       "fired=%lu explosions=%lu crushes=%lu effects=%u "
+                       "awake=%lu hash=%08lx\n",
+                       (unsigned long)ticks, (double)p99_us / 1000.0,
+                       (double)maximum_us / 1000.0,
+                       (double)service_debt_us / 1000.0,
+                       (double)maximum_debt_us / 1000.0,
+                       (unsigned long)late_ticks,
+                       (unsigned long)fired, (unsigned long)explosions,
+                       (unsigned long)crushes, (unsigned int)max_effects,
+                       (unsigned long)max_awake,
+                       (unsigned long)demo_match.state_hash);
+            } else {
+                printf("DIGS named-bench performance qualification ticks=%lu "
+                       "slots=4 local=2 bots=2 avg=%.3fms p95=%.3fms "
+                       "max=%.3fms fired=%lu explosions=%lu crushes=%lu "
+                       "effects=%u awake=%lu hash=%08lx\n",
+                       (unsigned long)ticks, (double)average_us / 1000.0,
+                       (double)p95_us / 1000.0,
+                       (double)maximum_us / 1000.0,
+                       (unsigned long)fired, (unsigned long)explosions,
+                       (unsigned long)crushes, (unsigned int)max_effects,
+                       (unsigned long)max_awake,
+                       (unsigned long)demo_match.state_hash);
+            }
         } else {
             printf("DIGS deterministic load self-test ticks=%lu slots=4 "
                    "local=2 bots=2 fired=%lu explosions=%lu crushes=%lu "
@@ -8826,20 +9007,25 @@ static int demo_performance_self_test(vox_u32 ticks, int qualify_named_bench)
             fprintf(stderr,
                     "load self-test: explosive/collapse load missing\n");
             status = 6;
-        /* The current increment adds authoritative fluid, rigid, structural, replay, and
-         * dropship state.  The workload explicitly begins the interactive
-         * dropship sequence.  Recaptured at -O0 and -O2 from the same
-         * 600-tick input stream; these activity counters are a determinism
+        /* The current increment adds authoritative fluid, rigid, structural,
+         * replay, and dropship state. The workload begins the interactive
+         * dropship sequence. These activity counters are a deterministic
          * baseline, not a wall-clock performance claim. */
         } else if (ticks == 600U &&
-                   (fired != 18U || explosions != 16U || crushes != 0U ||
-                    max_effects != 796U || max_awake != 4294U ||
-                    demo_match.state_hash != (vox_u32)0x3B60903AUL)) {
+                   (fired != 22U || explosions != 16U || crushes != 0U ||
+                    max_effects != 1100U || max_awake != 4522U ||
+                    demo_match.state_hash != (vox_u32)0x0B1D3DD2UL)) {
             fprintf(stderr,
                     "load self-test: canonical 600-tick activity/hash "
                     "mismatch\n");
             status = 8;
-        } else if (qualify_named_bench &&
+        } else if (qualify_named_bench && destruction_stress &&
+                   (p99_us > 16667U || service_debt_us != 0U)) {
+            fprintf(stderr,
+                    "performance stress: named p99 exceeds 16.67ms or "
+                    "virtual 60Hz service debt remains\n");
+            status = 7;
+        } else if (qualify_named_bench && !destruction_stress &&
                    (average_us > 5000U || p95_us > 8000U ||
                     maximum_us > 16667U)) {
             fprintf(stderr,
@@ -10687,6 +10873,93 @@ static int demo_screenshot(const char *screen_name, const char *path)
     return 0;
 }
 
+/* Render the title and an actual match without initializing SDL's windowing
+ * backends or writing files. Packagers run this from an otherwise empty
+ * directory, so it checks the software presentation path while remaining
+ * safe on headless Linux builders and fresh Windows hosts. */
+static int demo_presentation_frame_has_detail(const char *screen_name,
+                                              vox_u32 *frame_hash)
+{
+    vox_u8 seen[8];
+    vox_u32 pixel;
+    vox_u32 distinct = 0U;
+    memset(seen, 0, sizeof(seen));
+    for (pixel = 0U; pixel < DEMO_WIDTH * DEMO_HEIGHT; ++pixel) {
+        vox_u32 offset = pixel * VOX_SOFTWARE_RGB_BYTES;
+        vox_u8 bucket = (vox_u8)(demo_pixels[offset] >> 5);
+        if (!seen[bucket]) {
+            seen[bucket] = 1U;
+            distinct++;
+        }
+    }
+    *frame_hash = vox_software_hash(&demo_target);
+    if (distinct < 3U || *frame_hash == 0U) {
+        fprintf(stderr, "presentation self-test: %s frame looks blank\n",
+                screen_name);
+        return 0;
+    }
+    return 1;
+}
+
+static int demo_presentation_self_test(void)
+{
+    static demo_app app;
+    vox_u32 title_hash;
+    vox_u32 match_hash;
+    vox_u32 world_hash;
+    demo_prepare_targets();
+    memset(&app, 0, sizeof(app));
+    app.running = 1;
+    app.local_players = 1;
+    app.bots = 3;
+    app.map_style = VOX_DIGS_MAP_COAL_RIDGE;
+    app.arsenal = DEMO_ARSENAL_FULL;
+    app.seed = 0x564F5831U;
+    app.options.gi_quality = VOX_GI_BALANCED;
+    app.camera_zoom = DEMO_CAMERA_ZOOM_DEFAULT;
+    app.camera_scale = (double)DEMO_CAMERA_ZOOM_DEFAULT;
+    app.frame_seconds = 1.0 / 60.0;
+    app.screen = DEMO_TITLE;
+    demo_refresh_roster(&app);
+    digs_chronicle_reset(&demo_chronicle);
+    demo_build_title_world();
+    demo_render(&app);
+    if (!demo_presentation_frame_has_detail("title", &title_hash) ||
+        demo_menu_row_count != 7) {
+        fprintf(stderr, "presentation self-test: title menu did not render\n");
+        return 1;
+    }
+
+    demo_capture_setup_app(&app);
+    app.map_style = VOX_DIGS_MAP_COAL_RIDGE;
+    app.seed = 0x564F5831U;
+    if (!demo_start_match(&app, 0)) {
+        fprintf(stderr, "presentation self-test: could not start match\n");
+        return 2;
+    }
+    world_hash = vox_world_hash(&demo_match.world);
+    match_hash = vox_digs_hash(&demo_match);
+    demo_render(&app);
+    if (!app.scene_valid) {
+        fprintf(stderr, "presentation self-test: match scene is invalid\n");
+        return 3;
+    }
+    if (vox_world_hash(&demo_match.world) != world_hash ||
+        vox_digs_hash(&demo_match) != match_hash) {
+        fprintf(stderr,
+                "presentation self-test: rendering changed match state\n");
+        return 4;
+    }
+    if (!demo_presentation_frame_has_detail("match", &match_hash) ||
+        match_hash == title_hash) {
+        fprintf(stderr, "presentation self-test: match frame did not change\n");
+        return 5;
+    }
+    printf("DIGS presentation self-test passed title=%08lx match=%08lx\n",
+           (unsigned long)title_hash, (unsigned long)match_hash);
+    return 0;
+}
+
 /*
  * Every menu screen must draw something.  A screen that throws, or that
  * renders a flat panel because a helper returned early, looks exactly like a
@@ -10874,6 +11147,9 @@ int main(int argc, char **argv)
     if (argc >= 2 && strcmp(argv[1], "--camera-self-test") == 0) {
         return demo_camera_self_test();
     }
+    if (argc >= 2 && strcmp(argv[1], "--presentation-self-test") == 0) {
+        return demo_presentation_self_test();
+    }
     if (argc >= 2 && strcmp(argv[1], "--replay-self-test") == 0) {
         return demo_replay_presentation_self_test();
     }
@@ -10927,6 +11203,15 @@ int main(int argc, char **argv)
         return demo_benchmark(frames);
     }
     if (argc >= 2 &&
+        strcmp(argv[1], "--performance-stress-self-test") == 0) {
+        if (argc != 2) {
+            fprintf(stderr,
+                    "performance stress self-test is fixed at 18000 ticks\n");
+            return 1;
+        }
+        return demo_performance_self_test(18000U, 1, 1);
+    }
+    if (argc >= 2 &&
         (strcmp(argv[1], "--load-self-test") == 0 ||
          strcmp(argv[1], "--performance-self-test") == 0)) {
         int qualify_named_bench =
@@ -10944,7 +11229,7 @@ int main(int argc, char **argv)
             }
             ticks = (vox_u32)requested;
         }
-        return demo_performance_self_test(ticks, qualify_named_bench);
+        return demo_performance_self_test(ticks, qualify_named_bench, 0);
     }
     /*
      * The licence notice used to sit on the title screen.  The menu is meant

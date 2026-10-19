@@ -39,6 +39,8 @@ option(VOX_BUILD_LEGACY_PROFILE
        "Build the reduced-memory 400x240x4 VOX compatibility profile" OFF)
 option(VOX_BUILD_WIN32_LEGACY_DEMO
        "Build the native GDI/WinMM PE32 DIGS compatibility demo" OFF)
+option(VOX_WINDOWS_SINGLE_FILE
+       "Optimize the Windows x64 SDL2 demo for a self-contained single EXE" OFF)
 
 # The SDL2 host is deliberately not used by the historical Windows target:
 # SDL2 no longer supports the Windows 9x / NT4 baseline.  The legacy host has
@@ -473,6 +475,25 @@ if (VOX_BUILD_SDL2_DEMO)
     if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(digs_demo PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
+    if (VOX_WINDOWS_SINGLE_FILE)
+        if (NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+            message(FATAL_ERROR
+                "VOX_WINDOWS_SINGLE_FILE requires the native x64 MSVC toolchain")
+        endif()
+        if (NOT CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "^MultiThreaded")
+            message(FATAL_ERROR
+                "VOX_WINDOWS_SINGLE_FILE requires a statically linked MSVC runtime")
+        endif()
+        foreach(VOX_SMALL_EXE_TARGET
+                vox_audio vox_physics vox_kernel vox_fluid vox_rigid
+                vox_cluster digs_game vox_software digs_miner_art digs_demo)
+            target_compile_options(${VOX_SMALL_EXE_TARGET} PRIVATE /O1 /Gy)
+        endforeach()
+        target_link_options(digs_demo PRIVATE /OPT:REF /OPT:ICF /INCREMENTAL:NO)
+    endif()
+elseif (VOX_WINDOWS_SINGLE_FILE)
+    message(FATAL_ERROR
+        "VOX_WINDOWS_SINGLE_FILE requires VOX_BUILD_SDL2_DEMO=ON")
 endif()
 
 # SDL2's built-in controller database covers mainstream pads, so the 600 KB
@@ -623,6 +644,8 @@ if (VOX_BUILD_TESTS)
         endif()
         add_test(NAME digs_camera_bounds
             COMMAND digs_demo --camera-self-test)
+        add_test(NAME digs_presentation
+            COMMAND digs_demo --presentation-self-test)
         add_test(NAME digs_replay_presentation
             COMMAND digs_demo --replay-self-test)
         add_test(NAME digs_rigid_overlay

@@ -413,7 +413,9 @@ static int check_v3_contract(void)
         VOX_AUDIO_PRESET_ZOOM_CLICK != 15 ||
         VOX_AUDIO_PRESET_PULASKI != 21 ||
         VOX_AUDIO_PRESET_BORE_DRILL != 30 ||
-        VOX_AUDIO_PRESET_COUNT != 31 ||
+        VOX_AUDIO_PRESET_DEATH_MOAN != 31 ||
+        VOX_AUDIO_PRESET_GRUNT != 32 ||
+        VOX_AUDIO_PRESET_COUNT != 33 ||
         sizeof(engine) > VOX_AUDIO_ENGINE_BYTES_MAX) {
         fprintf(stderr, "audio v3 ABI constants changed\n");
         return 0;
@@ -945,6 +947,63 @@ static int check_state_hash_contract(void)
     return 1;
 }
 
+static int check_vocal_articulation(void)
+{
+    vox_audio_engine first;
+    vox_audio_engine second;
+    vox_audio_speech speech;
+    vox_audio_event event;
+    vox_i16 first_pcm[2048U * 2U];
+    vox_i16 second_pcm[2048U * 2U];
+    vox_u8 plosive = VOX_AUDIO_ALLOPHONE_P;
+    vox_u32 sample;
+    vox_u32 energy = 0U;
+    vox_u32 low_step;
+    vox_u32 high_step;
+    if (vox_audio_init(&first, TEST_RATE, 0xA115U) != VOX_OK ||
+        vox_audio_init(&second, TEST_RATE, 0xA115U) != VOX_OK) return 0;
+    vox_audio_speech_init(&speech, &plosive, 1U);
+    if (vox_audio_speak(&first, &speech) != VOX_OK ||
+        vox_audio_speak(&second, &speech) != VOX_OK ||
+        vox_audio_render(&first, first_pcm, 2048U) != VOX_OK ||
+        vox_audio_render(&second, second_pcm, 17U) != VOX_OK ||
+        vox_audio_render(&second, second_pcm + 34U, 2031U) != VOX_OK ||
+        memcmp(first_pcm, second_pcm, sizeof(first_pcm)) != 0 ||
+        vox_audio_state_hash(&first) != vox_audio_state_hash(&second)) {
+        fprintf(stderr, "articulated speech depends on render block size\n");
+        return 0;
+    }
+    for (sample = 0U; sample < 256U * 2U; ++sample) {
+        if (first_pcm[sample] != 0) {
+            fprintf(stderr, "plosive omitted consonant closure\n");
+            return 0;
+        }
+    }
+    for (sample = 512U * 2U; sample < 1024U * 2U; ++sample) {
+        vox_i32 value = first_pcm[sample];
+        energy += (vox_u32)(value < 0L ? -value : value);
+    }
+    if (energy == 0U) {
+        fprintf(stderr, "plosive omitted release burst\n");
+        return 0;
+    }
+    vox_audio_event_init(&event, VOX_AUDIO_PRESET_DEATH_MOAN);
+    event.event_id = 9U;
+    event.variant = 2U;
+    (void)vox_audio_init(&first, TEST_RATE, 0xA115U);
+    if (vox_audio_emit(&first, &event) != VOX_OK) return 0;
+    low_step = first.voices[0].step;
+    event.variant = 3U;
+    (void)vox_audio_init(&second, TEST_RATE, 0xA115U);
+    if (vox_audio_emit(&second, &event) != VOX_OK) return 0;
+    high_step = second.voices[0].step;
+    if (high_step <= low_step * 2U) {
+        fprintf(stderr, "CINDER and FLAMEY death voices lack pitch identity\n");
+        return 0;
+    }
+    return 1;
+}
+
 int main(void)
 {
     if (!check_invalid_contract() ||
@@ -964,6 +1023,7 @@ int main(void)
         !check_speech_rate_boundaries() ||
         !check_named_voices_differ() ||
         !check_custom_voice_is_tunable() ||
+        !check_vocal_articulation() ||
         !check_ambience() ||
         !check_state_hash_contract()) {
         return 1;

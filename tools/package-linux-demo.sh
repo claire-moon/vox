@@ -262,16 +262,22 @@ capture_evidence digs-haptic-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --haptic-self-test
 capture_evidence digs-load-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --load-self-test 600
+capture_evidence digs-destruction-stress "$EVIDENCE_DIR" \
+    "$ROOT/tools/vox-destruction-stress.sh" "$BUILD_DIR"
 if [[ "$NAMED_BENCH_QUALIFY" == 1 ]]; then
     capture_evidence digs-named-bench-performance-qualification \
         "$EVIDENCE_DIR" \
         "$BUILD_DIR/digs_demo" --performance-self-test 600
+    capture_evidence digs-named-destruction-performance "$EVIDENCE_DIR" \
+        "$BUILD_DIR/digs_demo" --performance-stress-self-test
 fi
 capture_evidence digs-settings-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --settings-self-test \
         "$EVIDENCE_DIR/digs-settings-self-test.cfg"
 capture_evidence digs-camera-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --camera-self-test
+capture_evidence digs-presentation-self-test "$EVIDENCE_DIR" \
+    "$BUILD_DIR/digs_demo" --presentation-self-test
 capture_evidence digs-fixed-step-self-test "$EVIDENCE_DIR" \
     "$BUILD_DIR/digs_demo" --fixed-step-self-test
 capture_evidence digs-killfeed-self-test "$EVIDENCE_DIR" \
@@ -501,25 +507,16 @@ python3 "$ROOT/tools/generate-spdx-sbom.py" \
 
 python3 -m json.tool "$SOURCE_STAGE/SBOM.spdx.json" >/dev/null
 
-# Archive metadata is normalized; file contents, executable modes, and the
-# source-controlled directory shape are preserved.
-find "$STAGE_DIR" "$SOURCE_STAGE" -exec \
-    touch -h -d "@$SOURCE_DATE_EPOCH" -- {} +
-rm -f -- "$BINARY_ARCHIVE" "$SOURCE_ARCHIVE" "$CHECKSUMS"
-make_archive "$WORK_DIR" "$ARCHIVE_STEM" "$BINARY_ARCHIVE"
-make_archive "$WORK_DIR" "$SOURCE_STEM" "$SOURCE_ARCHIVE"
-(
-    cd -- "$DIST_DIR"
-    sha256sum "$(basename -- "$BINARY_ARCHIVE")" \
-        "$(basename -- "$SOURCE_ARCHIVE")" >"$(basename -- "$CHECKSUMS")"
-)
-
 # Exercise the exact archive layout that a tester receives.  This catches a
 # missing launcher, data directory, or executable-relative share path before
-# a public release uploads the tarball.
+# a public release uploads the tarball. Build a provisional archive so the
+# extracted-tree evidence is recorded before the final SBOM and archive are
+# frozen; previously those streams were lost when the staging tree was removed.
+PROVISIONAL_ARCHIVE="$WORK_DIR/package-layout.tar.gz"
+make_archive "$WORK_DIR" "$ARCHIVE_STEM" "$PROVISIONAL_ARCHIVE"
 PACKAGED_CHECK_DIR="$WORK_DIR/packaged-check"
 mkdir -p -- "$PACKAGED_CHECK_DIR"
-tar -xzf "$BINARY_ARCHIVE" -C "$PACKAGED_CHECK_DIR"
+tar -xzf "$PROVISIONAL_ARCHIVE" -C "$PACKAGED_CHECK_DIR"
 PACKAGED_ROOT="$PACKAGED_CHECK_DIR/$ARCHIVE_STEM"
 [[ -x "$PACKAGED_ROOT/run-digs.sh" ]] || \
     die 'the packaged Linux launcher is missing or not executable'
@@ -545,6 +542,30 @@ capture_evidence packaged-digs-input-self-test "$EVIDENCE_DIR" \
     "$PACKAGED_ROOT/run-digs.sh" --input-self-test
 capture_evidence packaged-digs-load-self-test "$EVIDENCE_DIR" \
     "$PACKAGED_ROOT/run-digs.sh" --load-self-test 600
+capture_evidence packaged-digs-smoke "$EVIDENCE_DIR" \
+    "$PACKAGED_ROOT/smoke-test.sh" "$EVIDENCE_DIR/packaged-smoke.ppm"
+cmp "$PACKAGED_ROOT/bin/digs_demo" "$STAGE_DIR/bin/digs_demo" || \
+    die 'the tested executable differs from the final staged executable'
+
+# Include every extracted-package stream in the SBOM before making the final
+# archives. Metadata is normalized while evidence contents remain unmodified.
+python3 "$ROOT/tools/generate-spdx-sbom.py" \
+    --root "$STAGE_DIR" --output "$STAGE_DIR/SBOM.spdx.json" \
+    --version "$VERSION" --commit "$(git -C "$ROOT" rev-parse HEAD)" \
+    --epoch "$SOURCE_DATE_EPOCH" \
+    --document-name "VOX + DIGS $VERSION Linux x86_64 binary bundle" \
+    --purpose APPLICATION --namespace-label linux-x86_64-binary
+python3 -m json.tool "$STAGE_DIR/SBOM.spdx.json" >/dev/null
+find "$STAGE_DIR" "$SOURCE_STAGE" -exec \
+    touch -h -d "@$SOURCE_DATE_EPOCH" -- {} +
+rm -f -- "$BINARY_ARCHIVE" "$SOURCE_ARCHIVE" "$CHECKSUMS"
+make_archive "$WORK_DIR" "$ARCHIVE_STEM" "$BINARY_ARCHIVE"
+make_archive "$WORK_DIR" "$SOURCE_STEM" "$SOURCE_ARCHIVE"
+(
+    cd -- "$DIST_DIR"
+    sha256sum "$(basename -- "$BINARY_ARCHIVE")" \
+        "$(basename -- "$SOURCE_ARCHIVE")" >"$(basename -- "$CHECKSUMS")"
+)
 
 printf '\nCreated tester artifacts:\n'
 printf '  %s\n' "$BINARY_ARCHIVE" "$SOURCE_ARCHIVE" "$CHECKSUMS"

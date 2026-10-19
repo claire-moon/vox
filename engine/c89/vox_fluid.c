@@ -46,6 +46,30 @@ static void fluid_lookup_insert(vox_fluid_world *world, vox_u16 index)
     }
 }
 
+static void fluid_lookup_remove(vox_fluid_world *world, vox_u16 index)
+{
+    vox_u16 slot = fluid_lookup_slot(fluid_coordinate_key(
+        world->cells[index].x, world->cells[index].y,
+        world->cells[index].z));
+    vox_u16 probe;
+    for (probe = 0U; probe < VOX_FLUID_LOOKUP_CAPACITY; ++probe) {
+        if (world->lookup[slot] == (vox_u16)(index + 1U)) break;
+        if (world->lookup[slot] == 0U) return;
+        slot = (vox_u16)((slot + 1U) % VOX_FLUID_LOOKUP_CAPACITY);
+    }
+    if (probe == VOX_FLUID_LOOKUP_CAPACITY) return;
+    world->lookup[slot] = 0U;
+    slot = (vox_u16)((slot + 1U) % VOX_FLUID_LOOKUP_CAPACITY);
+    /* Restore each displaced probe chain before changing the coordinate.
+     * No tombstones or unbounded allocation are needed. */
+    while (world->lookup[slot] != 0U) {
+        vox_u16 displaced = (vox_u16)(world->lookup[slot] - 1U);
+        world->lookup[slot] = 0U;
+        fluid_lookup_insert(world, displaced);
+        slot = (vox_u16)((slot + 1U) % VOX_FLUID_LOOKUP_CAPACITY);
+    }
+}
+
 static void fluid_lookup_rebuild(vox_fluid_world *world)
 {
     vox_u16 i;
@@ -304,6 +328,9 @@ static vox_result fluid_add_at(vox_fluid_world *world, vox_u16 x, vox_u16 y,
         world->struct_size < (vox_u32)sizeof(*world) ||
         !fluid_valid(x, y, z) || material == VOX_FLUID_NONE ||
         material > VOX_FLUID_BLOOD || volume_q16 <= 0L) return VOX_ERR_INVALID;
+    /* Reject before reserving a sparse slot: failed deposits must leave the
+     * authoritative volume, active count and coordinate index unchanged. */
+    if (volume_q16 > VOX_FLUID_CELL_CAPACITY_Q16) return VOX_ERR_CAPACITY;
     index = fluid_find(world, x, y, z);
     if (index == (vox_u16)VOX_FLUID_MAX_CELLS) {
         index = fluid_free_slot(world);
@@ -386,6 +413,20 @@ static vox_result fluid_transfer(vox_fluid_world *world,
     available = amount < source->volume_q16 ? amount : source->volume_q16;
     index = fluid_find(world, x, y, z);
     if (index == (vox_u16)VOX_FLUID_MAX_CELLS) {
+        /* A whole-cell translation can reuse its own slot even when every
+         * sparse entry is occupied.  Reserving another entry first freezes
+         * a full pool in mid-air despite all destinations being empty. */
+        if (available == source->volume_q16) {
+            vox_u16 source_index = (vox_u16)(source - world->cells);
+            fluid_lookup_remove(world, source_index);
+            source->x = x;
+            source->y = y;
+            source->z = z;
+            source->flow_q16 += available;
+            world->sorted_cells = 0U;
+            fluid_lookup_insert(world, source_index);
+            return VOX_OK;
+        }
         index = fluid_free_slot(world);
         if (index == (vox_u16)VOX_FLUID_MAX_CELLS) return VOX_ERR_CAPACITY;
         world->cells[index].x = x;
@@ -466,7 +507,11 @@ static void fluid_equalize_neighbor(vox_fluid_world *world,
             return;
         }
     }
-    amount = cell->volume_q16 / VOX_FLUID_LATERAL_DIVISOR;
+    amount = cell->volume_q16;
+    if (neighbor != (vox_u16)VOX_FLUID_MAX_CELLS) {
+        amount -= world->cells[neighbor].volume_q16;
+    }
+    amount /= VOX_FLUID_LATERAL_DIVISOR;
     (void)fluid_transfer(world, cell, x, y, z, amount, terrain);
 }
 
@@ -479,6 +524,7 @@ vox_result vox_fluid_step_terrain(vox_fluid_world *world,
     vox_u16 active_count;
     vox_u16 start;
     vox_u16 processed = 0U;
+    vox_u32 resume_key = 0U;
     if (world == 0 || world->abi_version != VOX_ABI_VERSION ||
         world->struct_size < (vox_u32)sizeof(*world) ||
         (terrain != 0 && terrain->abi_version != VOX_ABI_VERSION)) {
@@ -499,6 +545,7 @@ vox_result vox_fluid_step_terrain(vox_fluid_world *world,
         vox_i32 down;
         i = (vox_u16)((start + offset) % active_count);
         cell = &world->cells[i];
+        resume_key = fluid_key(&world->cells[(i + 1U) % active_count]);
         if (cell->active == 0U || cell->volume_q16 <= 0L) continue;
         ++processed;
         cell->flow_q16 = 0L;
@@ -513,6 +560,7 @@ vox_result vox_fluid_step_terrain(vox_fluid_world *world,
         if (cell->y + 1U < VOX_FLUID_GRID_HEIGHT &&
             !fluid_blocked(terrain, cell->x,
                            (vox_u16)(cell->y + 1U), cell->z)) {
+            vox_u16 source_y = cell->y;
             vox_u16 below = fluid_find(world, cell->x,
                                        (vox_u16)(cell->y + 1U), cell->z);
             if (below == (vox_u16)VOX_FLUID_MAX_CELLS ||
@@ -523,6 +571,7 @@ vox_result vox_fluid_step_terrain(vox_fluid_world *world,
                 (void)fluid_transfer(world, cell, cell->x,
                                      (vox_u16)(cell->y + 1U), cell->z,
                                      down, terrain);
+                if (cell->y != source_y) continue;
             }
         }
         /* Water/lava contact consumes an explicit, accounted reaction volume.
@@ -570,8 +619,13 @@ vox_result vox_fluid_step_terrain(vox_fluid_world *world,
     fluid_refresh(world);
     fluid_sort(world);
     if (processed < active_count && world->active_cells != 0U) {
-        world->frontier_cursor = (vox_u16)((start + processed) %
-                                           world->active_cells);
+        /* Transfers can move an entire cell to a different sorted rank.
+         * Resume by the next original coordinate, so a bounded pass cannot
+         * repeatedly skip the sources shifted into the vacated ranks. */
+        for (i = 0U; i < world->active_cells; ++i) {
+            if (fluid_key(&world->cells[i]) >= resume_key) break;
+        }
+        world->frontier_cursor = i < world->active_cells ? i : 0U;
     } else {
         world->frontier_cursor = 0U;
     }

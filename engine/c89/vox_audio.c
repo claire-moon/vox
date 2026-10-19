@@ -275,7 +275,25 @@ static const vox_audio_patch vox_audio_patches[] = {
      23400U, 11400U, -2200},
     {VOX_AUDIO_PRESET_BORE_DRILL, VOX_AUDIO_WAVE_TONE, 184U,
      132U, 198U, 14U, 2U, 34U, 102U, 160U,
-     15700U, 8900U, 2400}
+     15700U, 8900U, 2400},
+
+    /* Falling vocal/formant pair with quiet chip crackle: a long comic
+     * death moan has a different contour from the short wounded grunt. */
+    {VOX_AUDIO_PRESET_DEATH_MOAN, VOX_AUDIO_WAVE_TONE, 232U,
+     290U, 61U, 28U, 9U, 110U, 210U, 410U,
+     24500U, 16700U, -1200},
+    {VOX_AUDIO_PRESET_DEATH_MOAN, VOX_AUDIO_WAVE_TONE, 231U,
+     940U, 250U, 75U, 8U, 125U, 180U, 345U,
+     14300U, 7200U, 1500},
+    {VOX_AUDIO_PRESET_DEATH_MOAN, VOX_AUDIO_WAVE_POLY9, 230U,
+     315U, 54U, 60U, 0U, 40U, 110U, 225U,
+     8100U, 3100U, 0},
+    {VOX_AUDIO_PRESET_GRUNT, VOX_AUDIO_WAVE_TONE, 180U,
+     215U, 87U, 24U, 3U, 15U, 22U, 62U,
+     17300U, 7500U, -800},
+    {VOX_AUDIO_PRESET_GRUNT, VOX_AUDIO_WAVE_POLY4, 179U,
+     620U, 180U, 42U, 0U, 8U, 18U, 43U,
+     7100U, 2500U, 900}
 };
 
 static vox_u32 vox_audio_hash_mix(vox_u32 hash, vox_u32 value)
@@ -645,6 +663,15 @@ static void vox_audio_start_patch(vox_audio_engine *engine,
                                                 event->pitch_percent);
     end_frequency = vox_audio_pitch_frequency(end_frequency,
                                               event->pitch_percent);
+    if (event->preset == VOX_AUDIO_PRESET_DEATH_MOAN ||
+        event->preset == VOX_AUDIO_PRESET_GRUNT) {
+        static const vox_u16 miner_pitch[4] = {120U, 108U, 76U, 236U};
+        vox_u16 identity = (vox_u16)(event->variant & 3U);
+        vox_u32 pitch = identity == 0U && engine->custom_pitch_hz != 0U ?
+                        engine->custom_pitch_hz : miner_pitch[identity];
+        start_frequency = start_frequency * pitch / 120U;
+        end_frequency = end_frequency * pitch / 120U;
+    }
     peak = vox_audio_scaled_gain(patch->peak_q15, event->gain_q15);
     sustain = vox_audio_scaled_gain(patch->sustain_q15, event->gain_q15);
 
@@ -1417,6 +1444,10 @@ static vox_i32 vox_audio_speech_sample(vox_audio_engine *engine,
     vox_i32 sample;
     vox_i32 component;
     vox_i32 noise;
+    vox_u32 progress_q8;
+    vox_u32 envelope_q8;
+    vox_u32 edge_samples;
+    int plosive;
 
     if (!vox_audio_prepare_speech_token(engine)) {
         *pan_q15 = VOX_AUDIO_PAN_CENTER;
@@ -1425,6 +1456,14 @@ static vox_i32 vox_audio_speech_sample(vox_audio_engine *engine,
     phrase = &engine->phrases[engine->active_phrase];
     token = phrase->allophones[engine->speech_token_index];
     definition = &vox_audio_allophones[token];
+    progress_q8 = (engine->speech_token_sample * 256U) /
+                   engine->speech_token_samples;
+    plosive = token == VOX_AUDIO_ALLOPHONE_B ||
+              token == VOX_AUDIO_ALLOPHONE_D ||
+              token == VOX_AUDIO_ALLOPHONE_G ||
+              token == VOX_AUDIO_ALLOPHONE_K ||
+              token == VOX_AUDIO_ALLOPHONE_P ||
+              token == VOX_AUDIO_ALLOPHONE_T;
     *pan_q15 = phrase->pan_q15;
     engine->speech_pitch_phase += engine->speech_pitch_step;
 
@@ -1452,7 +1491,39 @@ static vox_i32 vox_audio_speech_sample(vox_audio_engine *engine,
     noise = (engine->speech_lfsr & 1U) != 0U ?
             (vox_i32)definition->noise_q8 * 20L :
             -(vox_i32)definition->noise_q8 * 20L;
+    /* Stop consonants need closure followed by release; steady noise across
+     * the whole token makes P/T/K sound like S. Keep the burst bounded and
+     * leave voiced B/D/G a short low tail. Fricatives keep their continuous
+     * hiss, while vowels keep their original formant identity. */
+    if (plosive) {
+        if (progress_q8 < 72U) {
+            sample = 0L;
+            noise = 0L;
+        } else if (progress_q8 < 120U) {
+            sample /= 3L;
+            noise *= 2L;
+        } else {
+            sample = definition->voiced ? sample / 2L : sample / 8L;
+            noise /= 8L;
+        }
+    } else if (!definition->voiced) {
+        sample /= 3L;
+    }
     sample += noise;
+    /* A 4 ms attack/release prevents token-boundary clicks from masking
+     * consonants. The envelope uses sample position only, so fragmented
+     * rendering and every supported device rate produce the same stream. */
+    edge_samples = engine->sample_rate / 250U;
+    if (edge_samples == 0U) edge_samples = 1U;
+    envelope_q8 = 256U;
+    if (engine->speech_token_sample < edge_samples) {
+        envelope_q8 = (engine->speech_token_sample * 256U) / edge_samples;
+    } else if (engine->speech_token_samples - engine->speech_token_sample <
+               edge_samples) {
+        envelope_q8 = ((engine->speech_token_samples -
+                        engine->speech_token_sample) * 256U) / edge_samples;
+    }
+    sample = sample * (vox_i32)envelope_q8 / 256L;
     sample = vox_audio_scale_signed(sample, phrase->gain_q15);
 
     engine->speech_token_sample++;

@@ -30,6 +30,18 @@ Keep `bin/`, `bin/share`, `share/`, and `libexec/` in the extracted folder.
 If the launcher says SDL2 is missing, install the SDL2 runtime from your Linux
 distribution and run `./run-digs.sh` again.
 
+The Linux tester bundle uses the system SDL2 runtime. On Windows 11 x64, the
+internal single-file demo is built and checked with:
+
+```powershell
+.\tools\package-windows-demo.ps1 -SingleFile
+```
+
+That target statically links SDL2 and the MSVC runtime, needs no runtime-data
+folder, stores saves in the Windows user profile, and enforces a 16 MiB EXE
+limit. The normal Windows release ZIP path remains reserved for the full
+release checklist.
+
 ## Documentation
 
 | Document | What it covers |

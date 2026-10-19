@@ -350,9 +350,12 @@ other personal file. The cockpit is local-only and performs no upload.
   the untagged core. The SDL2 host paces the bounded best-kill ledger and
   frames its killer/victim exchange, while the full interactive dropship and
   replay experience remains acceptance-gated.
-- The SDL2 host is a Linux-first acceptance path. The only NASM code is an
-  optional Linux x86-64 FNV-1a contract probe; it does not accelerate gameplay
-  or rendering. Windows, macOS, historical APIs, production SIMD/assembly, and
-  GPU renderers remain evidence-gated work.
+- Linux is the primary interactive acceptance path. The SDL2 demo also has an
+  internal Windows 11 x64 single-EXE build path with static SDL2 and MSVC
+  runtime linkage; until its Windows-hosted build and fresh-environment checks
+  pass, that target remains build-gated. The only NASM code is an optional
+  Linux x86-64 FNV-1a contract probe; it does not accelerate gameplay or
+  rendering. macOS, historical APIs, production SIMD/assembly, and GPU
+  renderers remain evidence-gated work.
 - There is no network multiplayer, replay save-file format, asset pack, mod
   loader, or editor, and no compatibility promise across ABI changes.

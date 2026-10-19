@@ -358,6 +358,7 @@ vox_result vox_cluster_spawn_debris(const vox_structure_cluster *cluster,
 void vox_structure_init(vox_structure_state *state)
 {
     vox_u16 i;
+    vox_u32 byte;
     if (state == 0) return;
     state->abi_version = VOX_ABI_VERSION;
     state->struct_size = (vox_u32)sizeof(*state);
@@ -371,10 +372,37 @@ void vox_structure_init(vox_structure_state *state)
     state->collapse_head = 0U;
     state->collapse_count = 0U;
     state->reserved = 0U;
+    state->audit_cells = 0U;
+    state->audit_load = 0U;
+    state->audit_support = 0U;
+    state->audit_anchors = 0U;
+    state->audit_seen_hash = 0U;
+    state->audit_pending_hash = 0U;
+    state->audit_restarts = 0U;
+    state->audit_active = 0U;
+    state->audit_complete = 0U;
+    state->audit_head = 0U;
+    state->audit_count = 0U;
+    state->audit_seed.x = 0U;
+    state->audit_seed.y = 0U;
+    state->audit_seed.z = 0U;
+    state->audit_seed.chunk_index = 0U;
+    state->audit_seed.source = VOX_STRUCTURE_NO_SOURCE;
+    state->audit_seed.weapon = 0U;
+    state->audit_seed.risk_q8 = 0U;
+    state->audit_seed.reserved = 0U;
+    for (byte = 0U; byte < VOX_STRUCTURE_AUDIT_BYTES; ++byte) {
+        state->audit_seen[byte] = 0U;
+        state->audit_pending[byte] = 0U;
+    }
     for (i = 0U; i < VOX_STRUCTURE_FRONTIER_CAPACITY; ++i) {
         state->frontier[i] = i;
     }
     for (i = 0U; i < VOX_WORLD_CHUNK_COUNT; ++i) {
+        state->audit_frontier[i] = 0U;
+        state->audit_dirty[i] = 0U;
+        state->audit_touched[i] = 0U;
+        state->audit_generations[i] = 0U;
         state->chunks[i].support_q8 = 255U;
         state->chunks[i].load_q8 = 0U;
         state->chunks[i].dirty = 1U;
@@ -553,6 +581,318 @@ vox_result vox_structure_pop_collapse(vox_structure_state *state,
     return VOX_OK;
 }
 
+static vox_u32 structure_audit_index(vox_u32 x, vox_u32 y, vox_u32 z)
+{
+    return (z * VOX_WORLD_HEIGHT + y) * VOX_WORLD_WIDTH + x;
+}
+
+static vox_u32 structure_audit_bit_hash(vox_u32 index)
+{
+    index ^= index >> 16;
+    index *= 2246822519U;
+    index ^= index >> 13;
+    index *= 3266489917U;
+    return index ^ (index >> 16);
+}
+
+static int structure_audit_has(const vox_u8 *bits, vox_u32 index)
+{
+    return (bits[index / 8U] & (vox_u8)(1U << (index % 8U))) != 0U;
+}
+
+static void structure_audit_touch(vox_structure_state *state,
+                                  const vox_world *world, vox_u16 chunk)
+{
+    if (state->audit_touched[chunk] == 0U) {
+        state->audit_touched[chunk] = 1U;
+        state->audit_generations[chunk] = world->chunks[chunk].generation;
+    }
+}
+
+static void structure_audit_enqueue(vox_structure_state *state,
+                                    const vox_world *world, vox_u32 x,
+                                    vox_u32 y, vox_u32 z)
+{
+    vox_u32 index = structure_audit_index(x, y, z);
+    vox_u16 chunk = structure_chunk_index(x / VOX_CHUNK_WIDTH,
+                                           y / VOX_CHUNK_HEIGHT);
+    vox_u8 mask = (vox_u8)(1U << (index % 8U));
+    if (structure_audit_has(state->audit_seen, index)) return;
+    state->audit_seen[index / 8U] |= mask;
+    state->audit_pending[index / 8U] |= mask;
+    state->audit_seen_hash ^= structure_audit_bit_hash(index);
+    state->audit_pending_hash ^= structure_audit_bit_hash(index);
+    structure_audit_touch(state, world, chunk);
+    if (state->audit_dirty[chunk] == 0U) {
+        state->audit_frontier[(state->audit_head + state->audit_count) %
+                             VOX_WORLD_CHUNK_COUNT] = chunk;
+        state->audit_count++;
+        state->audit_dirty[chunk] = 1U;
+    }
+}
+
+vox_result vox_structure_audit_begin(vox_structure_state *state,
+                                     const vox_world *world,
+                                     const vox_structure_collapse *seed)
+{
+    vox_u16 i;
+    vox_u32 byte;
+    const vox_cell *cell;
+    if (state == 0 || world == 0 || seed == 0 ||
+        state->abi_version != VOX_ABI_VERSION ||
+        state->struct_size < (vox_u32)sizeof(*state) ||
+        world->abi_version != VOX_ABI_VERSION ||
+        !cluster_in_bounds(seed->x, seed->y, seed->z)) {
+        return VOX_ERR_INVALID;
+    }
+    state->audit_seed = *seed;
+    state->audit_cells = 0U;
+    state->audit_load = 0U;
+    state->audit_support = 0U;
+    state->audit_anchors = 0U;
+    state->audit_seen_hash = 0U;
+    state->audit_pending_hash = 0U;
+    state->audit_active = 1U;
+    state->audit_complete = 0U;
+    state->audit_head = 0U;
+    state->audit_count = 0U;
+    /* Clearing fixed byte maps does not query or classify world cells.  All
+     * component discovery and material work obey the chunk-step budget. */
+    for (byte = 0U; byte < VOX_STRUCTURE_AUDIT_BYTES; ++byte) {
+        state->audit_seen[byte] = 0U;
+        state->audit_pending[byte] = 0U;
+    }
+    for (i = 0U; i < VOX_WORLD_CHUNK_COUNT; ++i) {
+        state->audit_frontier[i] = 0U;
+        state->audit_dirty[i] = 0U;
+        state->audit_touched[i] = 0U;
+        state->audit_generations[i] = 0U;
+    }
+    cell = vox_world_cell(world, seed->x, seed->y, seed->z);
+    if (cell != 0 && cluster_structural(cell->material) &&
+        (cell->flags & VOX_CELL_LOOSE) == 0U) {
+        structure_audit_enqueue(state, world, seed->x, seed->y, seed->z);
+    } else {
+        state->audit_complete = 1U;
+    }
+    return VOX_OK;
+}
+
+static vox_result structure_audit_restart(vox_structure_state *state,
+                                          const vox_world *world)
+{
+    vox_structure_collapse seed = state->audit_seed;
+    state->audit_restarts++;
+    if (vox_structure_audit_begin(state, world, &seed) != VOX_OK) {
+        return VOX_ERR_INVALID;
+    }
+    return VOX_ERR_CAPACITY;
+}
+
+vox_result vox_structure_audit_step(vox_structure_state *state,
+                                    const vox_world *world,
+                                    vox_u16 max_chunks)
+{
+    static const vox_i16 dx[6] = {-1, 1, 0, 0, 0, 0};
+    static const vox_i16 dy[6] = {0, 0, -1, 1, 0, 0};
+    static const vox_i16 dz[6] = {0, 0, 0, 0, -1, 1};
+    vox_u16 processed = 0U;
+    vox_u16 touched;
+    if (state == 0 || world == 0 || max_chunks == 0U ||
+        state->abi_version != VOX_ABI_VERSION ||
+        state->struct_size < (vox_u32)sizeof(*state) ||
+        world->abi_version != VOX_ABI_VERSION ||
+        state->audit_active == 0U) return VOX_ERR_INVALID;
+    if (state->audit_complete != 0U) goto validate;
+    while (processed < max_chunks && state->audit_count != 0U) {
+        vox_u16 chunk = state->audit_frontier[state->audit_head];
+        vox_u32 min_x = (chunk % VOX_WORLD_CHUNKS_X) * VOX_CHUNK_WIDTH;
+        vox_u32 min_y = (chunk / VOX_WORLD_CHUNKS_X) * VOX_CHUNK_HEIGHT;
+        vox_u32 x;
+        vox_u32 y;
+        vox_u32 z;
+        if (world->chunks[chunk].generation !=
+            state->audit_generations[chunk]) {
+            return structure_audit_restart(state, world);
+        }
+        state->audit_frontier[state->audit_head] = 0U;
+        state->audit_head = (vox_u16)((state->audit_head + 1U) %
+                                      VOX_WORLD_CHUNK_COUNT);
+        state->audit_count--;
+        state->audit_dirty[chunk] = 0U;
+        for (y = min_y; y < min_y + VOX_CHUNK_HEIGHT; ++y) {
+            for (x = min_x; x < min_x + VOX_CHUNK_WIDTH; ++x) {
+                for (z = 0U; z < VOX_WORLD_DEPTH; ++z) {
+                    vox_u32 index = structure_audit_index(x, y, z);
+                    const vox_cell *cell;
+                    const vox_material_properties *properties;
+                    vox_u16 direction;
+                    vox_u16 anchored = y + 1U == VOX_WORLD_HEIGHT ? 1U : 0U;
+                    if (!structure_audit_has(state->audit_pending, index)) {
+                        continue;
+                    }
+                    state->audit_pending[index / 8U] &=
+                        (vox_u8)~(1U << (index % 8U));
+                    state->audit_pending_hash ^=
+                        structure_audit_bit_hash(index);
+                    cell = vox_world_cell(world, x, y, z);
+                    if (cell == 0 || !cluster_structural(cell->material) ||
+                        (cell->flags & VOX_CELL_LOOSE) != 0U) {
+                        return structure_audit_restart(state, world);
+                    }
+                    properties = vox_material_get(cell->material);
+                    state->audit_cells++;
+                    state->audit_load +=
+                        ((vox_u32)properties->density + 99U) / 100U;
+                    for (direction = 0U; direction < 6U; ++direction) {
+                        vox_i32 nx = (vox_i32)x + dx[direction];
+                        vox_i32 ny = (vox_i32)y + dy[direction];
+                        vox_i32 nz = (vox_i32)z + dz[direction];
+                        const vox_cell *neighbor;
+                        if (nx < 0L || ny < 0L || nz < 0L ||
+                            nx >= (vox_i32)VOX_WORLD_WIDTH ||
+                            ny >= (vox_i32)VOX_WORLD_HEIGHT ||
+                            nz >= (vox_i32)VOX_WORLD_DEPTH) continue;
+                        neighbor = vox_world_cell(world, (vox_u32)nx,
+                                                   (vox_u32)ny,
+                                                   (vox_u32)nz);
+                        if (neighbor->material == VOX_MAT_BEDROCK) {
+                            vox_u16 anchor_chunk = structure_chunk_index(
+                                (vox_u32)nx / VOX_CHUNK_WIDTH,
+                                (vox_u32)ny / VOX_CHUNK_HEIGHT);
+                            anchored = 1U;
+                            structure_audit_touch(state, world, anchor_chunk);
+                        } else if (cluster_structural(neighbor->material) &&
+                                   (neighbor->flags & VOX_CELL_LOOSE) == 0U) {
+                            structure_audit_enqueue(state, world,
+                                (vox_u32)nx, (vox_u32)ny, (vox_u32)nz);
+                        }
+                    }
+                    if (anchored != 0U) {
+                        vox_u32 factor = cell->material == VOX_MAT_METAL ?
+                                         128U : 32U;
+                        state->audit_anchors++;
+                        state->audit_support +=
+                            (vox_u32)properties->strength * factor;
+                    }
+                }
+            }
+        }
+        processed++;
+    }
+    if (state->audit_count != 0U) return VOX_ERR_CAPACITY;
+    /* Recheck even previously completed chunks: a far anchor may disappear
+     * while the frontier is crossing a large component.  An empty frontier
+     * alone is never enough to authorize a stale collapse result. */
+validate:
+    for (touched = 0U; touched < VOX_WORLD_CHUNK_COUNT; ++touched) {
+        if (state->audit_touched[touched] != 0U &&
+            world->chunks[touched].generation !=
+            state->audit_generations[touched]) {
+            return structure_audit_restart(state, world);
+        }
+    }
+    state->audit_complete = 1U;
+    return VOX_OK;
+}
+
+static vox_result structure_extract_floating(vox_world *world,
+                                             vox_u32 x, vox_u32 y,
+                                             vox_u32 z,
+                                             vox_structure_cluster *cluster)
+{
+    vox_u16 cursor = 0U;
+    vox_u16 overflow = 0U;
+    static const vox_i16 dx[6] = {-1, 1, 0, 0, 0, 0};
+    static const vox_i16 dy[6] = {0, 0, -1, 1, 0, 0};
+    static const vox_i16 dz[6] = {0, 0, 0, 0, -1, 1};
+    vox_cluster_init(cluster);
+    cluster->cells[0].x = (vox_u16)x;
+    cluster->cells[0].y = (vox_u16)y;
+    cluster->cells[0].z = (vox_u16)z;
+    cluster->cells[0].material = vox_world_cell(world, x, y, z)->material;
+    cluster->count = 1U;
+    while (cursor < cluster->count) {
+        vox_structure_cell current = cluster->cells[cursor++];
+        vox_u16 direction;
+        if (current.x < cluster->min_x) cluster->min_x = current.x;
+        if (current.x > cluster->max_x) cluster->max_x = current.x;
+        if (current.y < cluster->min_y) cluster->min_y = current.y;
+        if (current.y > cluster->max_y) cluster->max_y = current.y;
+        if (current.z < cluster->min_z) cluster->min_z = current.z;
+        if (current.z > cluster->max_z) cluster->max_z = current.z;
+        cluster->load_q8++;
+        for (direction = 0U; direction < 6U; ++direction) {
+            vox_i32 nx = (vox_i32)current.x + dx[direction];
+            vox_i32 ny = (vox_i32)current.y + dy[direction];
+            vox_i32 nz = (vox_i32)current.z + dz[direction];
+            const vox_cell *neighbor;
+            if (nx < 0L || ny < 0L || nz < 0L ||
+                nx >= (vox_i32)VOX_WORLD_WIDTH ||
+                ny >= (vox_i32)VOX_WORLD_HEIGHT ||
+                nz >= (vox_i32)VOX_WORLD_DEPTH ||
+                cluster_contains(cluster, (vox_u16)nx, (vox_u16)ny,
+                                 (vox_u16)nz)) continue;
+            neighbor = vox_world_cell(world, (vox_u32)nx, (vox_u32)ny,
+                                       (vox_u32)nz);
+            if (!cluster_structural(neighbor->material) ||
+                (neighbor->flags & VOX_CELL_LOOSE) != 0U) continue;
+            if (cluster->count == VOX_CLUSTER_MAX_CELLS) {
+                overflow = 1U;
+                continue;
+            }
+            cluster->cells[cluster->count].x = (vox_u16)nx;
+            cluster->cells[cluster->count].y = (vox_u16)ny;
+            cluster->cells[cluster->count].z = (vox_u16)nz;
+            cluster->cells[cluster->count].material = neighbor->material;
+            cluster->count++;
+        }
+    }
+    cluster->complete = overflow == 0U ? 1U : 0U;
+    for (cursor = 0U; cursor < cluster->count; ++cursor) {
+        (void)vox_world_set(world, cluster->cells[cursor].x,
+                             cluster->cells[cursor].y,
+                             cluster->cells[cursor].z, VOX_MAT_AIR, 0L);
+    }
+    return VOX_OK;
+}
+
+vox_result vox_structure_extract_collapse(vox_structure_state *state,
+                                          vox_world *world,
+                                          vox_u16 max_audit_chunks,
+                                          vox_structure_collapse *collapse,
+                                          vox_structure_cluster *cluster)
+{
+    vox_result result;
+    if (state == 0 || world == 0 || collapse == 0 || cluster == 0 ||
+        max_audit_chunks == 0U) return VOX_ERR_INVALID;
+    if (state->audit_active == 0U) {
+        result = vox_structure_pop_collapse(state, collapse);
+        if (result != VOX_OK) return result;
+        result = vox_structure_audit_begin(state, world, collapse);
+        if (result != VOX_OK) return result;
+    }
+    result = vox_structure_audit_step(state, world, max_audit_chunks);
+    if (result != VOX_OK) return result;
+    *collapse = state->audit_seed;
+    state->audit_active = 0U;
+    vox_cluster_init(cluster);
+    if (state->audit_cells == 0U) return VOX_OK;
+    if (state->audit_anchors != 0U) {
+        if (state->audit_load <= state->audit_support) {
+            cluster->anchored = 1U;
+            cluster->complete = 1U;
+            return VOX_ERR_COLLISION;
+        }
+        /* Rooted but overloaded structures fracture along the existing
+         * cohesion boundary; grounded cells themselves stay in place. */
+        return vox_cluster_extract_unsupported(world, collapse->x,
+            collapse->y, collapse->z, cluster);
+    }
+    return structure_extract_floating(world, collapse->x, collapse->y,
+                                       collapse->z, cluster);
+}
+
 vox_u32 vox_structure_hash(const vox_structure_state *state)
 {
     vox_u32 hash = 2166136261U;
@@ -567,6 +907,24 @@ vox_u32 vox_structure_hash(const vox_structure_state *state)
     hash = structure_hash_mix(hash, state->frontier_cursor);
     hash = structure_hash_mix(hash, state->collapse_head);
     hash = structure_hash_mix(hash, state->collapse_count);
+    hash = structure_hash_mix(hash, state->audit_cells);
+    hash = structure_hash_mix(hash, state->audit_load);
+    hash = structure_hash_mix(hash, state->audit_support);
+    hash = structure_hash_mix(hash, state->audit_anchors);
+    hash = structure_hash_mix(hash, state->audit_seen_hash);
+    hash = structure_hash_mix(hash, state->audit_pending_hash);
+    hash = structure_hash_mix(hash, state->audit_restarts);
+    hash = structure_hash_mix(hash, state->audit_active);
+    hash = structure_hash_mix(hash, state->audit_complete);
+    hash = structure_hash_mix(hash, state->audit_head);
+    hash = structure_hash_mix(hash, state->audit_count);
+    hash = structure_hash_mix(hash, state->audit_seed.x);
+    hash = structure_hash_mix(hash, state->audit_seed.y);
+    hash = structure_hash_mix(hash, state->audit_seed.z);
+    hash = structure_hash_mix(hash, state->audit_seed.chunk_index);
+    hash = structure_hash_mix(hash, state->audit_seed.source);
+    hash = structure_hash_mix(hash, state->audit_seed.weapon);
+    hash = structure_hash_mix(hash, state->audit_seed.risk_q8);
     for (i = 0U; i < VOX_STRUCTURE_FRONTIER_CAPACITY; ++i) {
         hash = structure_hash_mix(hash, state->frontier[i]);
     }
@@ -581,6 +939,10 @@ vox_u32 vox_structure_hash(const vox_structure_state *state)
         hash = structure_hash_mix(hash, collapse->risk_q8);
     }
     for (i = 0U; i < VOX_WORLD_CHUNK_COUNT; ++i) {
+        hash = structure_hash_mix(hash, state->audit_frontier[i]);
+        hash = structure_hash_mix(hash, state->audit_dirty[i]);
+        hash = structure_hash_mix(hash, state->audit_touched[i]);
+        hash = structure_hash_mix(hash, state->audit_generations[i]);
         hash = structure_hash_mix(hash, state->chunks[i].support_q8);
         hash = structure_hash_mix(hash, state->chunks[i].load_q8);
         hash = structure_hash_mix(hash, state->chunks[i].dirty);

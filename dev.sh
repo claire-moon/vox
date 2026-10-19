@@ -93,6 +93,8 @@ run_gates() {
         fi
         return "$status"
     fi
+    say "Destruction stress"
+    "$ROOT/tools/vox-destruction-stress.sh" "$BUILD_DIR" || return $?
     say "Optimisation invariance"
     "$ROOT/tools/vox-optimisation-invariance.sh"
 }
@@ -129,7 +131,8 @@ case "$command" in
     rebase)
         build "$BUILD_DIR"
         "$ROOT/tools/vox-bench.sh" --update "$BUILD_DIR"
-        printf '\nBaseline updated.  Commit benchmarks/baseline.txt WITH the\n'
+        "$ROOT/tools/vox-destruction-stress.sh" --update "$BUILD_DIR"
+        printf '\nBaselines updated. Commit both benchmarks/*baseline.txt WITH the\n'
         printf 'change that caused it, so the two never drift apart.\n'
         ;;
     debug)

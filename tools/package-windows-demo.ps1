@@ -4,13 +4,22 @@ param(
     [string]$Version,
     [string]$DistDir,
     [string]$Triplet = 'x64-windows-static',
-    [Int64]$PayloadCeilingBytes = 10485760,
-    [switch]$AllowDirty
+    [Int64]$PayloadCeilingBytes,
+    [switch]$AllowDirty,
+    [switch]$SingleFile
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# The regular Windows ZIP follows Linux's 10 MiB playable-payload budget.
+# The internal one-EXE target has its own documented 16 MiB executable cap.
 $GlobalPayloadCeilingBytes = [Int64]10485760
+if ($SingleFile) {
+    $GlobalPayloadCeilingBytes = [Int64]16777216
+}
+if (-not $PSBoundParameters.ContainsKey('PayloadCeilingBytes')) {
+    $PayloadCeilingBytes = $GlobalPayloadCeilingBytes
+}
 
 function Stop-Package {
     param([string]$Message)
@@ -109,7 +118,9 @@ if (-not (Test-Path -LiteralPath $vcpkgExe -PathType Leaf) -or
 if ($Triplet -notmatch '^[A-Za-z0-9_-]+$') {
     Stop-Package 'Vcpkg triplet may contain only letters, digits, underscore, and hyphen'
 }
-
+if ($SingleFile -and $Triplet -ne 'x64-windows-static') {
+    Stop-Package 'the single-file target requires the x64-windows-static triplet'
+}
 $manifest = Join-Path $Root 'vcpkg.json'
 $configuration = Join-Path $Root 'vcpkg-configuration.json'
 if (-not (Test-Path -LiteralPath $manifest -PathType Leaf) -or
@@ -128,6 +139,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $stem = "vox-digs-$Version-windows-x86_64"
 $archive = Join-Path $DistDir "$stem.zip"
+$singleFileOption = if ($SingleFile) { 'ON' } else { 'OFF' }
 $work = Join-Path ([System.IO.Path]::GetTempPath()) (
     "vox-windows-package-" + [System.Guid]::NewGuid().ToString('N'))
 $build = Join-Path $work 'build'
@@ -155,6 +167,7 @@ try {
         '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>' `
         '-DVOX_BUILD_TESTS=ON' `
         '-DVOX_BUILD_SDL2_DEMO=ON' `
+        "-DVOX_WINDOWS_SINGLE_FILE=$singleFileOption" `
         '-DVOX_BUILD_NASM_ACCEL=OFF'
     if ($LASTEXITCODE -ne 0) {
         Stop-Package 'CMake configure failed'
@@ -181,10 +194,8 @@ try {
     if (-not (Get-ChildItem -LiteralPath (Join-Path $share 'digs') -Recurse -File)) {
         Stop-Package 'the staged DIGS runtime data tree is empty'
     }
-    # Keep the distributable Windows payload on the same global budget as the
-    # Linux package: only the executable and the runtime share tree are
-    # needed to boot. Notices, source evidence, and the duplicate archive
-    # layout copy are deliberately outside this playable-payload measure.
+    # Measure only files needed to boot and play. Notices, source evidence,
+    # and the duplicate archive layout copy are outside this playable payload.
     [Int64]$payloadBytes = (Get-Item -LiteralPath $demo).Length
     Get-ChildItem -LiteralPath $share -Recurse -File | ForEach-Object {
         $payloadBytes += [Int64]$_.Length
@@ -206,6 +217,101 @@ try {
         }
     } finally {
         Pop-Location
+    }
+
+    if ($SingleFile) {
+        $singleStage = Join-Path $work 'single-file'
+        $singleExe = Join-Path $singleStage "$stem.exe"
+        $singleDist = Join-Path $DistDir $stem
+        if (Test-Path -LiteralPath $singleDist) {
+            Stop-Package "single-file output directory already exists: $singleDist"
+        }
+        New-Item -ItemType Directory -Force -Path $singleStage | Out-Null
+        Copy-RequiredFile $demo $singleExe
+        Copy-RequiredFile `
+            (Join-Path $Root 'packaging\windows\ONE-EXE-START-HERE.txt') `
+            (Join-Path $singleStage 'START-HERE.txt')
+        Copy-RequiredFile (Join-Path $Root 'LICENSE') `
+            (Join-Path $singleStage 'LICENSE')
+        Copy-RequiredFile (Join-Path $Root 'THIRD_PARTY.md') `
+            (Join-Path $singleStage 'THIRD_PARTY.md')
+        Copy-RequiredTree (Join-Path $Root 'LICENSES') `
+            (Join-Path $singleStage 'LICENSES')
+
+        & python (Join-Path $Root 'tools\check-windows-single-exe.py') `
+            $singleExe --max-bytes $PayloadCeilingBytes
+        if ($LASTEXITCODE -ne 0) {
+            Stop-Package 'single-file PE, dependency, architecture, or size check failed'
+        }
+
+        # Run the actual artifact with an otherwise empty working directory.
+        # The only files present are human-facing legal/build records; no DLL,
+        # controller database, launcher, or runtime-data tree can satisfy it.
+        Push-Location $singleStage
+        try {
+            & $singleExe --input-self-test
+            if ($LASTEXITCODE -ne 0) {
+                Stop-Package 'single-file input self-test failed'
+            }
+            & $singleExe --load-self-test 600
+            if ($LASTEXITCODE -ne 0) {
+                Stop-Package 'single-file deterministic load self-test failed'
+            }
+            & $singleExe --camera-self-test
+            if ($LASTEXITCODE -ne 0) {
+                Stop-Package 'single-file camera self-test failed'
+            }
+            & $singleExe --presentation-self-test
+            if ($LASTEXITCODE -ne 0) {
+                Stop-Package 'single-file presentation self-test failed'
+            }
+            & $singleExe --fixed-step-self-test
+            if ($LASTEXITCODE -ne 0) {
+                Stop-Package 'single-file fixed-step self-test failed'
+            }
+            & $singleExe --settings-self-test `
+                (Join-Path $work 'settings-self-test.cfg')
+            if ($LASTEXITCODE -ne 0) {
+                Stop-Package 'single-file settings self-test failed'
+            }
+            & $singleExe --chronicle-self-test `
+                (Join-Path $work 'chronicle-self-test.dat')
+            if ($LASTEXITCODE -ne 0) {
+                Stop-Package 'single-file chronicle self-test failed'
+            }
+            & $singleExe --menu-self-test `
+                (Join-Path $work 'menu-self-test.ppm')
+            if ($LASTEXITCODE -ne 0) {
+                Stop-Package 'single-file menu self-test failed'
+            }
+        } finally {
+            Pop-Location
+        }
+
+        & python (Join-Path $Root 'tools\generate-spdx-sbom.py') `
+            --root $singleStage `
+            --output (Join-Path $singleStage 'SBOM.spdx.json') `
+            --version $Version `
+            --commit $commit `
+            --epoch $stamp `
+            --document-name "VOX + DIGS $Version Windows x86_64 single EXE" `
+            --purpose APPLICATION `
+            --namespace-label windows-x86_64-single-exe `
+            --bundled-sdl2
+        if ($LASTEXITCODE -ne 0) {
+            Stop-Package 'single-file SPDX SBOM generation failed'
+        }
+
+        New-Item -ItemType Directory -Force -Path $singleDist | Out-Null
+        Copy-RequiredTree $singleStage $singleDist
+        $publishedExe = Join-Path $singleDist "$stem.exe"
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $publishedExe).Hash.ToLowerInvariant()
+        Set-Content -Encoding ASCII -LiteralPath "$publishedExe.sha256" `
+            -Value "$hash  $(Split-Path -Leaf $publishedExe)" -NoNewline
+        Write-Host "Created single-file executable $publishedExe"
+        Write-Host "Executable size $((Get-Item -LiteralPath $publishedExe).Length) bytes"
+        Write-Host "SHA256 $hash"
+        return
     }
 
     New-Item -ItemType Directory -Force -Path (Join-Path $stage 'bin') | Out-Null
