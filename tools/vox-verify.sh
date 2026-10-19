@@ -70,6 +70,7 @@ fi
 # per tick; a changed state hash is reported separately and loudly.
 if [ "${VOX_BENCH_COMPARE:-1}" = 1 ]; then
     "$ROOT/tools/vox-bench.sh" "$BUILD_DIR"
+    "$ROOT/tools/vox-destruction-stress.sh" "$BUILD_DIR"
 fi
 "$BUILD_DIR/vox_headless"
 "$BUILD_DIR/digs_headless"
@@ -81,10 +82,12 @@ fi
 "$BUILD_DIR/digs_demo" --load-self-test 600
 if [ "$NAMED_BENCH_QUALIFY" = 1 ]; then
     "$BUILD_DIR/digs_demo" --performance-self-test 600
+    "$BUILD_DIR/digs_demo" --performance-stress-self-test
 fi
 "$BUILD_DIR/digs_demo" --settings-self-test \
     "$BUILD_DIR/digs-settings-self-test.cfg"
 "$BUILD_DIR/digs_demo" --camera-self-test
+"$BUILD_DIR/digs_demo" --presentation-self-test
 "$BUILD_DIR/digs_demo" --fixed-step-self-test
 # v0.0.4: the save layer round-trips and refuses a damaged file, and no screen
 # draws outside its frame.  Neither is covered by ctest -- both need the port.

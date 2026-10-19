@@ -911,6 +911,9 @@ void vox_digs_rules_classic(vox_digs_rules *rules);
 int vox_digs_player_is_active(const vox_digs_match *match, vox_u16 player);
 int vox_digs_player_is_bot(const vox_digs_match *match, vox_u16 player);
 vox_u16 vox_digs_map_landform(vox_u16 map_style, vox_u32 seed);
+/* Read-only presentation queries share the canonical terrain/noise source. */
+vox_u32 vox_digs_noise(vox_u32 seed, vox_u32 x, vox_u32 y, vox_u32 salt);
+vox_u32 vox_digs_map_surface(vox_u16 map_style, vox_u32 seed, vox_u32 x);
 vox_result vox_digs_generate_map(vox_world *world, vox_u16 map_style,
                                  vox_u32 seed);
 /* Fill a snapshot with the canonical starting state: no history at all. */

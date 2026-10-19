@@ -1,0 +1,13 @@
+DIGS DEMO - Windows 11 x64 single executable
+=============================================
+
+Run the .exe in this folder directly. No installer, SDL DLL, controller
+database, or companion runtime-data folder is required.
+
+The executable is for 64-bit Intel/AMD Windows 11. Settings and the miner
+chronicle are stored in your Windows user profile, so they stay with your
+account rather than the executable or a USB drive.
+
+This demo is free software under GPL-3.0-or-later. The matching source is at
+https://github.com/claire-moon/vox. The license, third-party notices, SPDX
+SBOM, and SHA-256 record accompany the download artifact.

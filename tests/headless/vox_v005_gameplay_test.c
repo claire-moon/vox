@@ -91,6 +91,127 @@ static vox_result clear_test_cell(vox_world *world, vox_u32 x, vox_u32 y,
     return vox_world_set(world, x, y, z, VOX_MAT_AIR, 0L);
 }
 
+static int check_death_classes(void)
+{
+    static vox_digs_match scene;
+    static const vox_u16 weapons[] = {
+        VOX_DIGS_TOOL_PULASKI, VOX_DIGS_TOOL_POPPER,
+        VOX_DIGS_TOOL_BOLT_ACTION, VOX_DIGS_TOOL_SCATTERBRAIN,
+        VOX_DIGS_TOOL_FIRECRACKER, VOX_DIGS_TOOL_BORE_DRILL,
+        VOX_DIGS_TOOL_HOT_RAIL, VOX_DIGS_TOOL_HYDROSHOT,
+        VOX_DIGS_TOOL_HOT_RAIL, VOX_DIGS_TOOL_PICK
+    };
+    static const vox_u16 flags[] = {
+        VOX_DIGS_DAMAGE_BLUNT, VOX_DIGS_DAMAGE_EXPLOSIVE,
+        VOX_DIGS_DAMAGE_BALLISTIC, VOX_DIGS_DAMAGE_BALLISTIC,
+        VOX_DIGS_DAMAGE_EXPLOSIVE, VOX_DIGS_DAMAGE_EXPLOSIVE,
+        VOX_DIGS_DAMAGE_HEAT, VOX_DIGS_DAMAGE_DROWNING,
+        VOX_DIGS_DAMAGE_BALLISTIC, VOX_DIGS_DAMAGE_HEAT
+    };
+    vox_digs_rules rules;
+    vox_u16 scenario;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 0U;
+    rules.score_limit = 0U;
+    for (scenario = 0U; scenario < 10U; ++scenario) {
+        vox_u16 part;
+        vox_u16 severed = 0U;
+        vox_u16 blood = 0U;
+        int heat = flags[scenario] == VOX_DIGS_DAMAGE_HEAT;
+        int water = flags[scenario] == VOX_DIGS_DAMAGE_DROWNING;
+        if (vox_digs_match_init(&scene, &rules) != VOX_OK) return 0;
+        scene.spawn_shield_ticks[1] = 0U;
+        if (vox_digs_apply_hit(&scene, 0U, 1U, weapons[scenario],
+                               VOX_DIGS_PART_TORSO, 100U,
+                               flags[scenario]) != VOX_OK ||
+            scene.alive[1] || scene.scores[0] != 1U) return 0;
+        for (part = 0U; part < VOX_DIGS_ANATOMY_PART_COUNT; ++part) {
+            if ((scene.anatomy[1][part].flags & VOX_DIGS_PART_SEVERED) !=
+                0U) severed++;
+            if (heat && ((scene.anatomy[1][part].flags &
+                          VOX_DIGS_PART_CAUTERIZED) == 0U ||
+                         scene.anatomy[1][part].bleed_rate_q8 != 0U)) {
+                return 0;
+            }
+        }
+        for (part = 0U; part < scene.rules.fx_budget; ++part) {
+            if (scene.effects[part].active &&
+                scene.effects[part].material == VOX_MAT_BLOOD) blood++;
+        }
+        if (heat) {
+            if (scene.ragdolls.body_count != 1U ||
+                scene.ragdolls.joint_count != 0U || severed != 0U ||
+                blood != 0U) return 0;
+        } else if (water) {
+            if (scene.ragdolls.body_count != VOX_DIGS_ANATOMY_PART_COUNT ||
+                scene.ragdolls.joint_count !=
+                VOX_DIGS_ANATOMY_PART_COUNT - 1U ||
+                severed != 0U || blood != 0U) return 0;
+        } else if (scenario == 4U || scenario == 5U) {
+            if (severed != VOX_DIGS_ANATOMY_PART_COUNT ||
+                scene.ragdolls.joint_count != 0U) return 0;
+        } else if (scenario != 3U) {
+            if (severed != 1U || scene.ragdolls.joint_count == 0U ||
+                blood == 0U) return 0;
+        }
+        if (scene.state_hash != vox_digs_hash(&scene)) return 0;
+    }
+    /* Environmental lava shares the heat policy and reports its actual
+     * weapon. The public direct-kill helper remains valid for tools/tests. */
+    if (vox_digs_match_init(&scene, &rules) != VOX_OK) return 0;
+    scene.spawn_shield_ticks[1] = 0U;
+    if (vox_digs_apply_hit(&scene, VOX_DIGS_NO_PLAYER, 1U,
+                           VOX_DIGS_TOOL_HOT_RAIL, VOX_DIGS_PART_TORSO,
+                           100U, VOX_DIGS_DAMAGE_HEAT) != VOX_OK ||
+        scene.ragdolls.body_count != 1U ||
+        scene.events[(scene.event_head + scene.event_count - 1U) %
+                     VOX_DIGS_MAX_EVENTS].weapon != VOX_DIGS_TOOL_HOT_RAIL) {
+        return 0;
+    }
+    return 1;
+}
+
+static int check_fluid_survival_reflex(void)
+{
+    static vox_digs_match scene;
+    vox_digs_rules rules;
+    vox_digs_hurtbox head;
+    vox_u16 x;
+    vox_u16 feet;
+    vox_u16 head_y;
+    vox_u16 scenario;
+    vox_digs_rules_classic(&rules);
+    rules.player_count = 2U;
+    rules.bot_mask = 2U;
+    rules.score_limit = 0U;
+    for (scenario = 0U; scenario < 2U; ++scenario) {
+        if (vox_digs_match_init(&scene, &rules) != VOX_OK ||
+            vox_digs_anatomy_hurtbox(VOX_DIGS_PART_HEAD, &head) != VOX_OK) {
+            return 0;
+        }
+        x = (vox_u16)(scene.players[1].position_x.value_q16 >> 16);
+        feet = (vox_u16)((scene.players[1].position_y.value_q16 +
+                          scene.players[1].half_height_q16) >> 16);
+        head_y = (vox_u16)((scene.players[1].position_y.value_q16 +
+                            head.offset_y_q16) >> 16);
+        scene.bots[1].decision_ticks = 90U;
+        scene.player_actions[1] = VOX_DIGS_ACTION_FIRE;
+        if (vox_fluid_add_at(&scene.fluids, x,
+                             scenario == 0U ? feet : head_y, 0U,
+                             scenario == 0U ? VOX_FLUID_LAVA :
+                                              VOX_FLUID_WATER,
+                             VOX_FLUID_CELL_CAPACITY_Q16,
+                             20L << 16) != VOX_OK ||
+            vox_digs_bot_think(&scene, 1U) != VOX_OK ||
+            (scene.player_actions[1] & VOX_DIGS_ACTION_JUMP) == 0U ||
+            (scene.player_actions[1] & VOX_DIGS_ACTION_FIRE) != 0U ||
+            scene.bots[1].tunnel_safety_q8 != 0U ||
+            scene.bots[1].decision_ticks != 89U) return 0;
+    }
+    return 1;
+}
+
 int main(void)
 {
     static vox_digs_match match;
@@ -152,6 +273,15 @@ int main(void)
     vox_u32 generated_fixture_x;
     vox_u32 generated_fixture_y;
     vox_u32 generated_fixture_z;
+    int saw_v004_gore_lifetime = 0;
+    if (!check_death_classes()) {
+        fprintf(stderr, "weapon/heat/drowning death policy failed\n");
+        return 92;
+    }
+    if (!check_fluid_survival_reflex()) {
+        fprintf(stderr, "persistent fluid bot survival reflex failed\n");
+        return 93;
+    }
     vox_digs_rules_classic(&rules);
     rules.player_count = 2U;
     rules.bot_mask = 0U;
@@ -187,8 +317,16 @@ int main(void)
         match.ragdolls.joint_count < 10U ||
         vox_fluid_cell_get_at(&match.fluids,
             (vox_u16)(match.players[1].position_x.value_q16 >> 16),
-            (vox_u16)(match.players[1].position_y.value_q16 >> 16), 0U) != 0 ||
+            (vox_u16)(match.players[1].position_y.value_q16 >> 16), 0U) == 0 ||
         !saw_event(&match, VOX_DIGS_EVENT_HEADSHOT)) return 3;
+    for (i = 0U; i < match.rules.fx_budget; ++i) {
+        const vox_digs_effect *effect = &match.effects[i];
+        if (effect->active && effect->material == VOX_MAT_BLOOD &&
+            effect->ttl_ticks >= 90U) {
+            saw_v004_gore_lifetime = 1;
+        }
+    }
+    if (!saw_v004_gore_lifetime) return 90;
     if (vox_world_set(&match.world, 100U, 100U, 0U, VOX_MAT_METAL,
                       20L << 16) != VOX_OK ||
         vox_world_set_fixture(&match.world, 100U, 100U, 0U, 1U) != VOX_OK)
@@ -639,9 +777,32 @@ int main(void)
                          (vox_u16)source_y, 0U, VOX_FLUID_WATER,
                          VOX_FLUID_CELL_CAPACITY_Q16, 20L << 16) != VOX_OK ||
         vox_digs_match_step(&water_match) != VOX_OK ||
-        !saw_event(&water_match, VOX_DIGS_EVENT_DROWN) ||
-        water_match.health[0] != (vox_u16)(VOX_DIGS_MAX_HEALTH - 3U)) {
+        saw_event(&water_match, VOX_DIGS_EVENT_DROWN) ||
+        water_match.health[0] != VOX_DIGS_MAX_HEALTH) {
         return 34;
+    }
+    /* A puddle underfoot must not suffocate a miner. A sealed water cell at
+     * the head is genuine immersion and follows the normal damage funnel. */
+    {
+        vox_digs_hurtbox head;
+        if (vox_digs_anatomy_hurtbox(VOX_DIGS_PART_HEAD, &head) != VOX_OK) {
+            return 94;
+        }
+        source_y = (water_match.players[0].position_y.value_q16 +
+                    head.offset_y_q16) >> 16;
+        for (x = source_x - 1L; x <= source_x + 1L; ++x) {
+            for (y = source_y; y <= source_y + 2L; ++y) {
+                if (vox_world_set(&water_match.world, (vox_u32)x,
+                                  (vox_u32)y, 0U,
+                                  VOX_MAT_STONE, 0L) != VOX_OK) return 94;
+            }
+        }
+        if (vox_fluid_add_at(&water_match.fluids, (vox_u16)source_x,
+                             (vox_u16)source_y, 0U, VOX_FLUID_WATER,
+                             VOX_FLUID_CELL_CAPACITY_Q16,
+                             20L << 16) != VOX_OK ||
+            vox_digs_match_step(&water_match) != VOX_OK ||
+            water_match.health[0] != VOX_DIGS_MAX_HEALTH - 3U) return 94;
     }
     /* A support-frontier invalidation must become a physical debris fragment,
      * not merely a diagnostic risk counter. */
@@ -791,7 +952,15 @@ int main(void)
             remaining_roof_cells++;
         }
     }
-    if (cave_in_events < 2U || remaining_roof_cells != 0U) return 79;
+    if (cave_in_events < 2U || remaining_roof_cells != 0U) {
+        fprintf(stderr, "wide roof: events=%u remaining=%u audit_cells=%lu "
+                "pending=%u restarts=%lu\n", (unsigned int)cave_in_events,
+                (unsigned int)remaining_roof_cells,
+                (unsigned long)wide_collapse_match.structure.audit_cells,
+                (unsigned int)wide_collapse_match.structure.audit_count,
+                (unsigned long)wide_collapse_match.structure.audit_restarts);
+        return 79;
+    }
     /* A physical cave-in body must use normal hit attribution rather than
      * becoming a harmless visual after terrain extraction. */
     vox_digs_rules_classic(&impact_rules);

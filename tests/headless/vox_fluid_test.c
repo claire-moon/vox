@@ -25,12 +25,15 @@ int main(void)
     static vox_fluid_world spill_flow;
     static vox_fluid_world lava_spill;
     static vox_fluid_world blood_pool;
+    static vox_fluid_world full_pool;
+    static vox_fluid_world reverse_pool;
     static vox_world terrain;
     static vox_world pressure_terrain;
     static vox_world basin_terrain;
     static vox_world spill_terrain;
     vox_i32 before;
     vox_i32 reaction_before;
+    vox_u32 before_hash;
     vox_u16 i;
     vox_u16 j;
     vox_fluid_init(&first);
@@ -265,6 +268,76 @@ int main(void)
     if (vox_fluid_conserved_volume(&blood_pool) != before ||
         (vox_fluid_cell_get_at(&blood_pool, 103U, 89U, 0U) == 0 &&
          vox_fluid_cell_get_at(&blood_pool, 107U, 89U, 0U) == 0)) return 36;
+    /* Rejected oversized deposits must be transactional even when their
+     * coordinate was previously empty. */
+    vox_fluid_init(&full_pool);
+    before_hash = vox_fluid_hash(&full_pool);
+    if (vox_fluid_add_at(&full_pool, 400U, 100U, 8U, VOX_FLUID_WATER,
+                         VOX_FLUID_CELL_CAPACITY_Q16 + 1L, 20L << 16) !=
+            VOX_ERR_CAPACITY ||
+        full_pool.active_cells != 0U ||
+        vox_fluid_hash(&full_pool) != before_hash ||
+        vox_fluid_cell_get_at(&full_pool, 400U, 100U, 8U) != 0) return 37;
+    /* Qualify every sparse slot across the full-width world and four depth
+     * slices.  With no spare entries, whole-cell falls must reuse their own
+     * slots, conserve mass, preserve coordinate lookup and obey the 64-cell
+     * per-tick work budget. Reversed insertion has identical work and state. */
+    vox_fluid_init(&reverse_pool);
+    for (i = 0U; i < VOX_FLUID_MAX_CELLS; ++i) {
+        vox_u16 reverse = (vox_u16)(VOX_FLUID_MAX_CELLS - 1U - i);
+        if (vox_fluid_add_at(&full_pool,
+                             (vox_u16)(i % VOX_FLUID_GRID_WIDTH), 120U,
+                             (vox_u16)(i / VOX_FLUID_GRID_WIDTH),
+                             VOX_FLUID_WATER, VOX_FLUID_CELL_CAPACITY_Q16,
+                             20L << 16) != VOX_OK ||
+            vox_fluid_add_at(&reverse_pool,
+                             (vox_u16)(reverse % VOX_FLUID_GRID_WIDTH),
+                             120U,
+                             (vox_u16)(reverse / VOX_FLUID_GRID_WIDTH),
+                             VOX_FLUID_WATER, VOX_FLUID_CELL_CAPACITY_Q16,
+                             20L << 16) != VOX_OK) return 38;
+    }
+    before = vox_fluid_conserved_volume(&full_pool);
+    before_hash = vox_fluid_hash(&full_pool);
+    if (vox_fluid_add_at(&full_pool, 500U, 50U, 8U, VOX_FLUID_BLOOD,
+                         1L, 20L << 16) != VOX_ERR_CAPACITY ||
+        vox_fluid_hash(&full_pool) != before_hash) return 39;
+    for (i = 0U; i < VOX_FLUID_MAX_CELLS / 64U; ++i) {
+        if (vox_fluid_step(&full_pool, 64U) != VOX_OK ||
+            vox_fluid_step(&reverse_pool, 64U) != VOX_OK ||
+            full_pool.active_cells != VOX_FLUID_MAX_CELLS ||
+            vox_fluid_conserved_volume(&full_pool) != before ||
+            vox_fluid_hash(&full_pool) != vox_fluid_hash(&reverse_pool)) {
+            return 40;
+        }
+        if (i == 0U) {
+            vox_u16 fallen = 0U;
+            for (j = 0U; j < VOX_FLUID_MAX_CELLS; ++j) {
+                if (full_pool.cells[j].y == 121U) fallen++;
+            }
+            if (fallen != 64U) return 41;
+        }
+    }
+    for (i = 0U; i < VOX_FLUID_MAX_CELLS; ++i) {
+        const vox_fluid_cell *cell = vox_fluid_cell_get_at(&full_pool,
+            (vox_u16)(i % VOX_FLUID_GRID_WIDTH), 121U,
+            (vox_u16)(i / VOX_FLUID_GRID_WIDTH));
+        if (cell == 0 || cell->volume_q16 !=
+            VOX_FLUID_CELL_CAPACITY_Q16) return 42;
+    }
+    /* Equalization is a fraction of the pressure difference; a nearly level
+     * lake must never invert its slope by sending a quarter of all its mass. */
+    vox_fluid_init(&pressure_flow);
+    if (vox_fluid_add_at(&pressure_flow, 1U, 10U, 0U, VOX_FLUID_WATER,
+                         40000L, 20L << 16) != VOX_OK ||
+        vox_fluid_add_at(&pressure_flow, 2U, 10U, 0U, VOX_FLUID_WATER,
+                         39996L, 20L << 16) != VOX_OK ||
+        vox_fluid_step_terrain(&pressure_flow, &pressure_terrain, 1U) !=
+            VOX_OK ||
+        vox_fluid_cell_get_at(&pressure_flow, 1U, 10U, 0U)->volume_q16 !=
+            39999L ||
+        vox_fluid_cell_get_at(&pressure_flow, 2U, 10U, 0U)->volume_q16 !=
+            39997L) return 43;
     printf("fluid conservation and deterministic flow passed\n");
     return 0;
 }

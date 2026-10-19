@@ -2,6 +2,31 @@
 #include <stdio.h>
 #include "vox/vox_cluster.h"
 
+static void audit_seed(vox_structure_collapse *seed, vox_u16 x,
+                       vox_u16 y, vox_u16 z)
+{
+    seed->x = x;
+    seed->y = y;
+    seed->z = z;
+    seed->chunk_index = (vox_u16)((y / VOX_CHUNK_HEIGHT) *
+                                  VOX_WORLD_CHUNKS_X + x / VOX_CHUNK_WIDTH);
+    seed->source = 7U;
+    seed->weapon = 9U;
+    seed->risk_q8 = 255U;
+    seed->reserved = 0U;
+}
+
+static int finish_audit(vox_structure_state *state, const vox_world *world)
+{
+    vox_u16 tick;
+    for (tick = 0U; tick < 1024U; ++tick) {
+        vox_result result = vox_structure_audit_step(state, world, 1U);
+        if (result == VOX_OK) return 1;
+        if (result != VOX_ERR_CAPACITY) return 0;
+    }
+    return 0;
+}
+
 int main(void)
 {
     static vox_world world;
@@ -11,6 +36,8 @@ int main(void)
     vox_structure_collapse collapse;
     vox_u16 body_index;
     vox_u16 i;
+    vox_u16 row;
+    vox_u32 audit_hash;
 
     vox_world_init(&world);
     vox_rigid_init(&rigid);
@@ -87,6 +114,91 @@ int main(void)
                                         VOX_WORLD_HEIGHT - 2U, 0U,
                                         &cluster) != VOX_ERR_COLLISION ||
         cluster.anchored == 0U) return 15;
+    /* A floating 17x17 slab exceeds the debris capacity and contains vertical
+     * cells that the local one-row support test mistakes for grounded load.
+     * Complete connectivity discovers all 289 cells over bounded ticks and
+     * extracts a 128-cell volume including its upper rows. */
+    vox_world_init(&world);
+    vox_structure_init(&structure);
+    for (i = 300U; i < 317U; ++i) {
+        for (row = 50U; row < 67U; ++row) {
+            if (vox_world_set(&world, i, row, 2U, VOX_MAT_STONE,
+                              0L) != VOX_OK) return 16;
+        }
+    }
+    audit_seed(&collapse, 300U, 50U, 2U);
+    if (vox_structure_audit_begin(&structure, &world, &collapse) != VOX_OK ||
+        vox_structure_audit_step(&structure, &world, 1U) !=
+            VOX_ERR_CAPACITY || structure.audit_complete != 0U ||
+        structure.audit_cells == 0U || structure.audit_cells >= 289U ||
+        !finish_audit(&structure, &world) ||
+        structure.audit_cells != 289U || structure.audit_anchors != 0U ||
+        structure.audit_load != 289U * 24U ||
+        structure.audit_support != 0U || structure.audit_pending_hash != 0U) {
+        return 17;
+    }
+    audit_hash = vox_structure_hash(&structure);
+    if (vox_structure_extract_collapse(&structure, &world, 1U, &collapse,
+                                       &cluster) != VOX_OK ||
+        cluster.count != VOX_CLUSTER_MAX_CELLS || cluster.complete != 0U ||
+        cluster.min_y != 50U || cluster.max_y == 50U ||
+        structure.audit_cells != 289U ||
+        vox_structure_hash(&structure) == audit_hash ||
+        vox_world_cell(&world, 300U, 50U, 2U)->material != VOX_MAT_AIR) {
+        return 18;
+    }
+    /* An anchor beyond a 128-cell fragment is real support.  Its finite
+     * capacity and the entire component's load are measured before any cell
+     * is removed, preventing a distant bedrock root from being missed. */
+    vox_world_init(&world);
+    vox_structure_init(&structure);
+    for (i = 100U; i <= 300U; ++i) {
+        if (vox_world_set(&world, i, 20U, 0U, VOX_MAT_STONE,
+                          0L) != VOX_OK) return 19;
+    }
+    if (vox_world_set(&world, 301U, 20U, 0U, VOX_MAT_BEDROCK,
+                      0L) != VOX_OK) return 20;
+    audit_seed(&collapse, 100U, 20U, 0U);
+    if (vox_structure_audit_begin(&structure, &world, &collapse) != VOX_OK ||
+        !finish_audit(&structure, &world) ||
+        structure.audit_cells != 201U || structure.audit_anchors != 1U ||
+        structure.audit_load != 201U * 24U ||
+        structure.audit_support != 16000U ||
+        vox_structure_extract_collapse(&structure, &world, 1U, &collapse,
+                                       &cluster) != VOX_ERR_COLLISION ||
+        cluster.anchored == 0U ||
+        vox_world_cell(&world, 100U, 20U, 0U)->material != VOX_MAT_STONE) {
+        return 21;
+    }
+    /* Even a completed frontier is revalidated at extraction.  Removing the
+     * root after the audit cannot reuse its earlier safe result. */
+    if (vox_structure_audit_begin(&structure, &world, &collapse) != VOX_OK ||
+        !finish_audit(&structure, &world) ||
+        vox_world_set(&world, 301U, 20U, 0U, VOX_MAT_AIR, 0L) != VOX_OK ||
+        vox_structure_extract_collapse(&structure, &world, 1U, &collapse,
+                                       &cluster) != VOX_ERR_CAPACITY ||
+        structure.audit_restarts != 1U ||
+        !finish_audit(&structure, &world) ||
+        structure.audit_cells != 201U || structure.audit_anchors != 0U ||
+        vox_structure_extract_collapse(&structure, &world, 1U, &collapse,
+                                       &cluster) != VOX_OK ||
+        cluster.count != VOX_CLUSTER_MAX_CELLS) return 22;
+    /* Loose debris never bridges otherwise separate rooted components. */
+    vox_world_init(&world);
+    vox_structure_init(&structure);
+    for (i = 100U; i <= 300U; ++i) {
+        if (vox_world_set(&world, i, 20U, 0U, VOX_MAT_STONE,
+                          0L) != VOX_OK) return 23;
+    }
+    if (vox_world_set_loose(&world, 250U, 20U, 0U, 1U) != VOX_OK ||
+        vox_world_set(&world, 301U, 20U, 0U, VOX_MAT_BEDROCK,
+                      0L) != VOX_OK) return 24;
+    audit_seed(&collapse, 100U, 20U, 0U);
+    if (vox_structure_audit_begin(&structure, &world, &collapse) != VOX_OK ||
+        !finish_audit(&structure, &world) ||
+        structure.audit_cells != 150U || structure.audit_anchors != 0U) {
+        return 25;
+    }
     printf("cluster extraction and debris passed\n");
     return 0;
 }

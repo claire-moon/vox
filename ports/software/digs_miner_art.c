@@ -77,6 +77,248 @@ void digs_miner_pose_default(digs_miner_pose *pose)
     pose->animation = DIGS_MINER_ANIMATION_IDLE;
     pose->animation_phase = 0U;
     pose->reserved = 0U;
+    pose->aim_x = -1;
+    pose->aim_y = 0;
+}
+
+static int digs_miner_pose_valid(const digs_miner_pose *pose)
+{
+    return pose != 0 && pose->coat_material != VOX_MAT_AIR &&
+           pose->coat_material < VOX_MAT_COUNT &&
+           pose->helmet_material != VOX_MAT_AIR &&
+           pose->helmet_material < VOX_MAT_COUNT &&
+           pose->animation < DIGS_MINER_ANIMATION_COUNT &&
+           pose->reserved == 0U;
+}
+
+vox_result digs_miner_skeleton_build(const digs_miner_pose *pose,
+                                     digs_miner_skeleton *skeleton)
+{
+    static const int cycle[16] = {
+        0, 1, 2, 3, 3, 3, 2, 1, 0, -1, -2, -3, -3, -3, -2, -1
+    };
+    int swing;
+    int bob = 0;
+    int lean = 0;
+    int knee_l = 0;
+    int knee_r = 0;
+    int lift_l = 0;
+    int lift_r = 0;
+    int arm_l = 0;
+    int arm_r = 0;
+    int direction;
+    int phase;
+    int aim_x;
+    int aim_y;
+    int magnitude;
+    int joint;
+    if (!digs_miner_pose_valid(pose) || skeleton == 0) {
+        return VOX_ERR_INVALID;
+    }
+    direction = pose->facing_right != 0U ? 1 : -1;
+    phase = (int)(pose->animation_phase & 15U);
+    swing = cycle[phase];
+    if (pose->animation == DIGS_MINER_ANIMATION_WALK) {
+        bob = ((phase & 7) == 3 || (phase & 7) == 4) ? -1 : 0;
+        lean = direction;
+        knee_l = swing / 2;
+        knee_r = -swing / 2;
+        lift_l = swing < 0 ? -1 : 0;
+        lift_r = swing > 0 ? -1 : 0;
+        arm_l = -swing;
+        arm_r = swing;
+    } else if (pose->animation == DIGS_MINER_ANIMATION_JUMP ||
+               pose->animation == DIGS_MINER_ANIMATION_STEAM) {
+        lean = direction;
+        knee_l = -direction * 2;
+        knee_r = direction;
+        lift_l = -2;
+        lift_r = -1;
+        arm_l = -1;
+        arm_r = 1;
+    } else if (pose->animation == DIGS_MINER_ANIMATION_PAIN) {
+        lean = -direction * 2;
+        bob = 1;
+        arm_l = -2;
+        arm_r = 2;
+    } else if (pose->animation == DIGS_MINER_ANIMATION_FIRE) {
+        lean = -direction * ((phase & 3) == 0 ? 1 : 0);
+    } else if (pose->animation == DIGS_MINER_ANIMATION_DEATH) {
+        lean = direction * 2;
+        bob = 2;
+        lift_l = 1;
+        lift_r = 1;
+        arm_l = -2;
+        arm_r = 2;
+    }
+    for (joint = 0; joint < (int)DIGS_MINER_JOINT_COUNT; ++joint) {
+        skeleton->x[joint] = 0;
+        skeleton->y[joint] = bob;
+    }
+    skeleton->x[DIGS_MINER_JOINT_NECK] = lean;
+    skeleton->y[DIGS_MINER_JOINT_NECK] = bob - 5;
+    skeleton->x[DIGS_MINER_JOINT_LEFT_SHOULDER] = lean - 3;
+    skeleton->y[DIGS_MINER_JOINT_LEFT_SHOULDER] = bob - 3;
+    skeleton->x[DIGS_MINER_JOINT_RIGHT_SHOULDER] = lean + 3;
+    skeleton->y[DIGS_MINER_JOINT_RIGHT_SHOULDER] = bob - 3;
+    skeleton->x[DIGS_MINER_JOINT_LEFT_ELBOW] = lean - 4 + arm_l / 2;
+    skeleton->y[DIGS_MINER_JOINT_LEFT_ELBOW] = bob - 1;
+    skeleton->x[DIGS_MINER_JOINT_RIGHT_ELBOW] = lean + 4 + arm_r / 2;
+    skeleton->y[DIGS_MINER_JOINT_RIGHT_ELBOW] = bob - 1;
+    skeleton->x[DIGS_MINER_JOINT_LEFT_HAND] = lean - 4 + arm_l;
+    skeleton->y[DIGS_MINER_JOINT_LEFT_HAND] = bob;
+    skeleton->x[DIGS_MINER_JOINT_RIGHT_HAND] = lean + 4 + arm_r;
+    skeleton->y[DIGS_MINER_JOINT_RIGHT_HAND] = bob;
+    skeleton->x[DIGS_MINER_JOINT_LEFT_KNEE] = -2 + knee_l;
+    skeleton->y[DIGS_MINER_JOINT_LEFT_KNEE] = bob + 2 + lift_l;
+    skeleton->x[DIGS_MINER_JOINT_RIGHT_KNEE] = 2 + knee_r;
+    skeleton->y[DIGS_MINER_JOINT_RIGHT_KNEE] = bob + 2 + lift_r;
+    skeleton->x[DIGS_MINER_JOINT_LEFT_FOOT] = -2 + knee_l * 2;
+    skeleton->y[DIGS_MINER_JOINT_LEFT_FOOT] = bob + 4 + lift_l;
+    skeleton->x[DIGS_MINER_JOINT_RIGHT_FOOT] = 2 + knee_r * 2;
+    skeleton->y[DIGS_MINER_JOINT_RIGHT_FOOT] = bob + 4 + lift_r;
+    skeleton->x[DIGS_MINER_JOINT_PACK] = lean - direction * 5;
+    skeleton->y[DIGS_MINER_JOINT_PACK] = bob - 2;
+    if (pose->animation == DIGS_MINER_ANIMATION_FIRE ||
+        pose->animation == DIGS_MINER_ANIMATION_IDLE) {
+        int shoulder = direction > 0 ? DIGS_MINER_JOINT_RIGHT_SHOULDER :
+                                      DIGS_MINER_JOINT_LEFT_SHOULDER;
+        int elbow = direction > 0 ? DIGS_MINER_JOINT_RIGHT_ELBOW :
+                                   DIGS_MINER_JOINT_LEFT_ELBOW;
+        int hand = direction > 0 ? DIGS_MINER_JOINT_RIGHT_HAND :
+                                  DIGS_MINER_JOINT_LEFT_HAND;
+        aim_x = pose->aim_x;
+        aim_y = pose->aim_y;
+        /* Clamp external port input before multiplying it by joint lengths. */
+        if (aim_x < -1024) aim_x = -1024;
+        if (aim_x > 1024) aim_x = 1024;
+        if (aim_y < -1024) aim_y = -1024;
+        if (aim_y > 1024) aim_y = 1024;
+        magnitude = aim_x < 0 ? -aim_x : aim_x;
+        if ((aim_y < 0 ? -aim_y : aim_y) > magnitude) {
+            magnitude = aim_y < 0 ? -aim_y : aim_y;
+        }
+        if (magnitude == 0) {
+            aim_x = direction;
+            magnitude = 1;
+        }
+        skeleton->x[elbow] = skeleton->x[shoulder] + aim_x * 2 / magnitude;
+        skeleton->y[elbow] = skeleton->y[shoulder] + aim_y * 2 / magnitude + 1;
+        skeleton->x[hand] = skeleton->x[elbow] + aim_x * 2 / magnitude;
+        skeleton->y[hand] = skeleton->y[elbow] + aim_y * 2 / magnitude;
+    }
+    return VOX_OK;
+}
+
+static void digs_miner_segment(digs_miner_plot_fn plot, void *context,
+                               int x0, int y0, int x1, int y1,
+                               vox_u16 material)
+{
+    int dx = x1 > x0 ? x1 - x0 : x0 - x1;
+    int dy = y1 > y0 ? y1 - y0 : y0 - y1;
+    int sx = x1 > x0 ? 1 : -1;
+    int sy = y1 > y0 ? 1 : -1;
+    int error = dx - dy;
+    for (;;) {
+        int twice;
+        digs_miner_set(plot, context, x0, y0, material);
+        if (x0 == x1 && y0 == y1) break;
+        twice = error * 2;
+        if (twice > -dy) { error -= dy; x0 += sx; }
+        if (twice < dx) { error += dx; y0 += sy; }
+    }
+}
+
+static void digs_miner_bone(int x, int y, const digs_miner_pose *pose,
+                            const digs_miner_skeleton *skeleton,
+                            int parent, int child, vox_u16 part,
+                            vox_u16 material, digs_miner_plot_fn plot,
+                            void *context)
+{
+    if (!digs_miner_part_present(pose, part)) return;
+    digs_miner_segment(plot, context, x + skeleton->x[parent],
+                       y + skeleton->y[parent], x + skeleton->x[child],
+                       y + skeleton->y[child], material);
+}
+
+static vox_result digs_miner_plot_skeleton(int x, int y,
+                                           const digs_miner_pose *pose,
+                                           digs_miner_plot_fn plot,
+                                           void *context)
+{
+    digs_miner_skeleton skeleton;
+    int direction = pose->facing_right != 0U ? 1 : -1;
+    int column;
+    int row;
+    if (digs_miner_skeleton_build(pose, &skeleton) != VOX_OK) {
+        return VOX_ERR_INVALID;
+    }
+    if (digs_miner_part_present(pose, VOX_DIGS_PART_HEAD)) {
+        int neck_x = x + skeleton.x[DIGS_MINER_JOINT_NECK];
+        int neck_y = y + skeleton.y[DIGS_MINER_JOINT_NECK];
+        for (column = -1; column <= 1; ++column) {
+            digs_miner_set(plot, context, neck_x + column * 2, neck_y - 3,
+                           pose->helmet_material);
+            digs_miner_set(plot, context, neck_x + column * 2, neck_y - 1,
+                           VOX_MAT_FLESH);
+        }
+        digs_miner_set(plot, context, neck_x + direction * 4, neck_y - 3,
+                       VOX_MAT_LAVA);
+    }
+    if (digs_miner_part_present(pose, VOX_DIGS_PART_TORSO)) {
+        for (row = 0; row < 3; ++row) {
+            int lean = skeleton.x[DIGS_MINER_JOINT_NECK] * (2 - row) / 2;
+            for (column = -1; column <= 1; ++column) {
+                digs_miner_set(plot, context, x + lean + column * 2,
+                               y + skeleton.y[0] - 4 + row * 2,
+                               pose->coat_material);
+            }
+        }
+    }
+    digs_miner_bone(x, y, pose, &skeleton, 2, 3,
+        VOX_DIGS_PART_LEFT_UPPER_ARM, pose->coat_material, plot, context);
+    digs_miner_bone(x, y, pose, &skeleton, 3, 4,
+        VOX_DIGS_PART_LEFT_FOREARM, pose->coat_material, plot, context);
+    digs_miner_bone(x, y, pose, &skeleton, 5, 6,
+        VOX_DIGS_PART_RIGHT_UPPER_ARM, pose->coat_material, plot, context);
+    digs_miner_bone(x, y, pose, &skeleton, 6, 7,
+        VOX_DIGS_PART_RIGHT_FOREARM, pose->coat_material, plot, context);
+    digs_miner_bone(x, y, pose, &skeleton, 0, 8,
+        VOX_DIGS_PART_LEFT_THIGH, VOX_MAT_METAL, plot, context);
+    digs_miner_bone(x, y, pose, &skeleton, 8, 9,
+        VOX_DIGS_PART_LEFT_SHIN, VOX_MAT_METAL, plot, context);
+    digs_miner_bone(x, y, pose, &skeleton, 0, 10,
+        VOX_DIGS_PART_RIGHT_THIGH, VOX_MAT_METAL, plot, context);
+    digs_miner_bone(x, y, pose, &skeleton, 10, 11,
+        VOX_DIGS_PART_RIGHT_SHIN, VOX_MAT_METAL, plot, context);
+    if (digs_miner_part_present(pose, VOX_DIGS_PART_LEFT_HAND)) {
+        digs_miner_set(plot, context, x + skeleton.x[4], y + skeleton.y[4],
+                       VOX_MAT_FLESH);
+    }
+    if (digs_miner_part_present(pose, VOX_DIGS_PART_RIGHT_HAND)) {
+        digs_miner_set(plot, context, x + skeleton.x[7], y + skeleton.y[7],
+                       VOX_MAT_FLESH);
+    }
+    if (digs_miner_part_present(pose, VOX_DIGS_PART_LEFT_FOOT)) {
+        digs_miner_set(plot, context, x + skeleton.x[9], y + skeleton.y[9],
+                       VOX_MAT_COAL);
+    }
+    if (digs_miner_part_present(pose, VOX_DIGS_PART_RIGHT_FOOT)) {
+        digs_miner_set(plot, context, x + skeleton.x[11], y + skeleton.y[11],
+                       VOX_MAT_COAL);
+    }
+    if (pose->steam_pack != 0U) {
+        int pack_x = x + skeleton.x[DIGS_MINER_JOINT_PACK];
+        int pack_y = y + skeleton.y[DIGS_MINER_JOINT_PACK];
+        digs_miner_set(plot, context, pack_x, pack_y, VOX_MAT_METAL);
+        if (pose->steam_thrusting != 0U) {
+            int drift = (int)(pose->steam_variant % 3U) - 1;
+            plot(context, pack_x, pack_y + 3, VOX_MAT_LAVA);
+            plot(context, pack_x + drift, pack_y + 4, VOX_MAT_LAVA);
+            plot(context, pack_x - drift, pack_y + 5, VOX_MAT_SMOKE);
+        }
+    }
+    return VOX_OK;
 }
 
 vox_result digs_miner_plot(int x, int y, const digs_miner_pose *pose,
@@ -100,14 +342,14 @@ vox_result digs_miner_plot(int x, int y, const digs_miner_pose *pose,
     int right_foot_y;
     int direction;
     int phase;
-    if (plot == 0 || pose == 0 ||
-        pose->coat_material == VOX_MAT_AIR ||
-        pose->coat_material >= VOX_MAT_COUNT ||
-        pose->helmet_material == VOX_MAT_AIR ||
-        pose->helmet_material >= VOX_MAT_COUNT ||
-        pose->animation >= DIGS_MINER_ANIMATION_COUNT ||
-        pose->reserved != 0U) {
+    if (plot == 0 || !digs_miner_pose_valid(pose)) {
         return VOX_ERR_INVALID;
+    }
+    /* Preserve the authored launcher icon's stationary pose.  Gameplay uses
+     * the articulated hierarchy for every moving and firing state. */
+    if (pose->animation != DIGS_MINER_ANIMATION_IDLE ||
+        (pose->animation_phase & DIGS_MINER_ARTICULATED) != 0U) {
+        return digs_miner_plot_skeleton(x, y, pose, plot, context);
     }
     lamp_x = pose->facing_right != 0U ? x + 4 : x - 4;
     pack_x = pose->facing_right != 0U ? x - 5 : x + 5;
@@ -223,6 +465,149 @@ vox_result digs_miner_voxelize(vox_world *world, int x, int y,
         return VOX_ERR_INVALID;
     }
     return digs_miner_plot(x, y, pose, digs_miner_world_plot, world);
+}
+
+typedef struct digs_tool_model {
+    const char *rows[7];
+    int tip_x;
+    int tip_y;
+} digs_tool_model;
+
+/* Authored here, with the grip at (0,3).  These are deliberately silhouettes
+ * with a small material vocabulary so they survive native one-voxel detail.
+ * The long rail, twin shotgun barrels, tapered drill, broad hammer, axe head,
+ * tanks and sidearms remain distinguishable after rotating around the grip. */
+static const digs_tool_model digs_tool_models[VOX_DIGS_TOOL_COUNT] = {
+    {{"       MMM", "      MMMM", "      MM  ", "CCCCCCMM  ",
+      "      MM  ", "       MMM", "        MM"}, 8, 3},
+    {{"", "", " MMMM", "CCMMMM", " C", " C", ""}, 5, 3},
+    {{"", "   CC", "  MSSM", "CCMSSM", "  MMMM", "", ""}, 5, 3},
+    {{"", "  HHH", " MMHMHMM", "CCMMMMMHH", "  CCCC", "", ""}, 8, 3},
+    {{"", "  WW", " MWWMMM", "CCMMMMMMW", " MWWM", "  CC", ""}, 8, 3},
+    {{"       MMMM", "       MMMM", "       MMMM", "CCCCCCCMMMM",
+      "       MMMM", "       MMMM", ""}, 10, 3},
+    {{"", "   M", "  MMM", "CCMMMMMMMH", "  MMM", " CC", ""}, 9, 3},
+    {{"", "", "CCCCMMMMMM", "CCMMMMMMMM", " CCCC", "", ""}, 9, 3},
+    {{"", "    H", "  HHH", "CCHHHH", "  HH", "", ""}, 5, 3},
+    {{"", " MMMMM", " MMMM MM", "CCMMMMMMM", " MMMM MM", " MMMMM", ""}, 8, 3},
+    {{"    HHH", "  MMMM", "  MHHMMMMMMM", "CCMMMMMMMMMH", "  MHH", "   CC", ""}, 11, 3}
+};
+
+static int digs_tool_sqrt(int square)
+{
+    int result = 0;
+    int bit = 1 << 28;
+    while (bit > square) bit >>= 2;
+    while (bit != 0) {
+        if (square >= result + bit) {
+            square -= result + bit;
+            result = (result >> 1) + bit;
+        } else {
+            result >>= 1;
+        }
+        bit >>= 2;
+    }
+    return result;
+}
+
+static int digs_tool_round(int numerator, int denominator)
+{
+    return numerator >= 0 ? (numerator + denominator / 2) / denominator :
+                           -((-numerator + denominator / 2) / denominator);
+}
+
+static void digs_tool_transform(int grip_x, int grip_y, int local_x,
+                                int local_y, int aim_x, int aim_y,
+                                int magnitude, int *x, int *y)
+{
+    *x = grip_x + digs_tool_round(local_x * aim_x - local_y * aim_y,
+                                 magnitude);
+    *y = grip_y + digs_tool_round(local_x * aim_y + local_y * aim_x,
+                                 magnitude);
+}
+
+vox_result digs_weapon_plot(int grip_x, int grip_y,
+                            const digs_weapon_pose *pose,
+                            digs_miner_plot_fn plot, void *context,
+                            int *muzzle_x, int *muzzle_y)
+{
+    const digs_tool_model *model;
+    int aim_x;
+    int aim_y;
+    int magnitude;
+    int row;
+    int column;
+    int tip_x;
+    int tip_y;
+    if (pose == 0 || plot == 0 || pose->weapon >= VOX_DIGS_TOOL_COUNT ||
+        pose->reserved != 0U || muzzle_x == 0 || muzzle_y == 0) {
+        return VOX_ERR_INVALID;
+    }
+    model = &digs_tool_models[pose->weapon];
+    aim_x = pose->aim_x;
+    aim_y = pose->aim_y;
+    if (aim_x < -1024) aim_x = -1024;
+    if (aim_x > 1024) aim_x = 1024;
+    if (aim_y < -1024) aim_y = -1024;
+    if (aim_y > 1024) aim_y = 1024;
+    if (aim_x == 0 && aim_y == 0) aim_x = 1;
+    /* Melee swing is rotation of the entire model, including its endpoint. */
+    if (pose->firing != 0U &&
+        (pose->weapon == VOX_DIGS_TOOL_PULASKI ||
+         pose->weapon == VOX_DIGS_TOOL_GIANT_HAMMER)) {
+        int turn = (int)(pose->phase & 7U) - 3;
+        int previous_x = aim_x;
+        aim_x = aim_x * 4 - aim_y * turn;
+        aim_y = aim_y * 4 + previous_x * turn;
+    }
+    magnitude = digs_tool_sqrt(aim_x * aim_x + aim_y * aim_y);
+    if (magnitude < 1) magnitude = 1;
+    if (pose->firing != 0U && pose->weapon != VOX_DIGS_TOOL_PULASKI &&
+        pose->weapon != VOX_DIGS_TOOL_GIANT_HAMMER) {
+        grip_x -= digs_tool_round(aim_x, magnitude);
+        grip_y -= digs_tool_round(aim_y, magnitude);
+    }
+    for (row = 0; row < 7; ++row) {
+        const char *cells = model->rows[row];
+        for (column = 0; cells[column] != '\0'; ++column) {
+            vox_u16 material;
+            int x;
+            int y;
+            if (cells[column] == ' ') continue;
+            material = cells[column] == 'C' ? VOX_MAT_COAL :
+                       cells[column] == 'H' ? VOX_MAT_LAVA :
+                       cells[column] == 'W' ? VOX_MAT_WATER :
+                       cells[column] == 'S' ? VOX_MAT_SMOKE : VOX_MAT_METAL;
+            digs_tool_transform(grip_x, grip_y, column, row - 3,
+                                 aim_x, aim_y, magnitude, &x, &y);
+            plot(context, x, y, material);
+        }
+    }
+    digs_tool_transform(grip_x, grip_y, model->tip_x, model->tip_y - 3,
+                         aim_x, aim_y, magnitude, &tip_x, &tip_y);
+    *muzzle_x = tip_x;
+    *muzzle_y = tip_y;
+    if (pose->firing != 0U && pose->weapon != VOX_DIGS_TOOL_PULASKI &&
+        pose->weapon != VOX_DIGS_TOOL_GIANT_HAMMER &&
+        pose->weapon != VOX_DIGS_TOOL_BORE_DRILL) {
+        int ray;
+        for (ray = 1; ray <= 3; ++ray) {
+            int x;
+            int y;
+            digs_tool_transform(tip_x, tip_y, ray, 0, aim_x, aim_y,
+                                 magnitude, &x, &y);
+            plot(context, x, y, VOX_MAT_LAVA);
+            if (ray == 1) {
+                digs_tool_transform(tip_x, tip_y, ray, 1, aim_x, aim_y,
+                                     magnitude, &x, &y);
+                plot(context, x, y, VOX_MAT_LAVA);
+                digs_tool_transform(tip_x, tip_y, ray, -1, aim_x, aim_y,
+                                     magnitude, &x, &y);
+                plot(context, x, y, VOX_MAT_SMOKE);
+            }
+        }
+    }
+    return VOX_OK;
 }
 
 static int digs_icon_occupied(const vox_world *world, vox_u32 x, vox_u32 y)

@@ -8,6 +8,7 @@
 #define VOX_STRUCTURE_FRONTIER_CAPACITY VOX_WORLD_CHUNK_COUNT
 #define VOX_STRUCTURE_COLLAPSE_CAPACITY 128U
 #define VOX_STRUCTURE_NO_SOURCE 65535U
+#define VOX_STRUCTURE_AUDIT_BYTES ((VOX_WORLD_CELLS + 7U) / 8U)
 
 typedef struct vox_structure_cell {
     vox_u16 x;
@@ -79,6 +80,30 @@ typedef struct vox_structure_state {
     vox_u16 frontier[VOX_STRUCTURE_FRONTIER_CAPACITY];
     vox_structure_collapse collapses[VOX_STRUCTURE_COLLAPSE_CAPACITY];
     vox_structure_chunk_state chunks[VOX_WORLD_CHUNK_COUNT];
+    /* A complete connected component is audited over fixed ticks before a
+     * game-facing collapse is extracted.  The two exact cell bitmaps avoid
+     * treating a 128-cell fragment boundary as an anchor.  Each chunk enters
+     * the fixed FIFO at most once at a time, so its capacity cannot overflow.
+     * Digest changes are recorded as bits change; hashing never scans the
+     * whole 1.6-million-cell world. */
+    vox_u32 audit_cells;
+    vox_u32 audit_load;
+    vox_u32 audit_support;
+    vox_u32 audit_anchors;
+    vox_u32 audit_seen_hash;
+    vox_u32 audit_pending_hash;
+    vox_u32 audit_restarts;
+    vox_u16 audit_active;
+    vox_u16 audit_complete;
+    vox_u16 audit_head;
+    vox_u16 audit_count;
+    vox_structure_collapse audit_seed;
+    vox_u16 audit_frontier[VOX_WORLD_CHUNK_COUNT];
+    vox_u16 audit_dirty[VOX_WORLD_CHUNK_COUNT];
+    vox_u16 audit_touched[VOX_WORLD_CHUNK_COUNT];
+    vox_u32 audit_generations[VOX_WORLD_CHUNK_COUNT];
+    vox_u8 audit_seen[VOX_STRUCTURE_AUDIT_BYTES];
+    vox_u8 audit_pending[VOX_STRUCTURE_AUDIT_BYTES];
 } vox_structure_state;
 
 void vox_cluster_init(vox_structure_cluster *cluster);
@@ -117,6 +142,25 @@ vox_result vox_structure_step(vox_structure_state *state,
  * VOX_ERR_CAPACITY when the queue is empty. */
 vox_result vox_structure_pop_collapse(vox_structure_state *state,
                                       vox_structure_collapse *collapse);
+/* Begin/advance a complete six-neighbour structural component audit.  Load
+ * and finite material-bearing anchor capacity are summed without saturation
+ * at the debris fragment size.  A changed touched chunk restarts the audit
+ * conservatively; callers must invalidate all structural terrain edits. */
+vox_result vox_structure_audit_begin(vox_structure_state *state,
+                                     const vox_world *world,
+                                     const vox_structure_collapse *seed);
+vox_result vox_structure_audit_step(vox_structure_state *state,
+                                    const vox_world *world,
+                                    vox_u16 max_chunks);
+/* Consume one queued seed, run at most max_audit_chunks component scans, and
+ * detach at most VOX_CLUSTER_MAX_CELLS. VOX_ERR_CAPACITY means no seed or an
+ * incomplete audit; VOX_ERR_COLLISION means its rooted load is safe.  The
+ * audited whole-component load/support remain available in state. */
+vox_result vox_structure_extract_collapse(vox_structure_state *state,
+                                          vox_world *world,
+                                          vox_u16 max_audit_chunks,
+                                          vox_structure_collapse *collapse,
+                                          vox_structure_cluster *cluster);
 vox_u32 vox_structure_hash(const vox_structure_state *state);
 
 #endif

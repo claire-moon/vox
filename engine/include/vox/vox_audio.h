@@ -76,7 +76,11 @@ typedef enum vox_audio_preset {
     VOX_AUDIO_PRESET_SCATTERBRAIN = 28,
     VOX_AUDIO_PRESET_FIRECRACKER = 29,
     VOX_AUDIO_PRESET_BORE_DRILL = 30,
-    VOX_AUDIO_PRESET_COUNT = 31
+    /* For moan/grunt, variant low two bits select HUMAN/RIVET/CINDER/FLAMEY;
+     * HUMAN follows the custom pitch. Event ID still varies each utterance. */
+    VOX_AUDIO_PRESET_DEATH_MOAN = 31,
+    VOX_AUDIO_PRESET_GRUNT = 32,
+    VOX_AUDIO_PRESET_COUNT = 33
 } vox_audio_preset;
 
 typedef enum vox_audio_bus {
